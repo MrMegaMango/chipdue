@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
 	assertCredentialFreeCheckout,
+	isPrivateUserHome,
 	verifyVercelOutput
 } from '../../../scripts/verify-vercel-output.mjs';
 
@@ -12,10 +13,12 @@ describe.sequential('Vercel output privacy verification', () => {
 	let checkout: string;
 	let previousMasterKey: string | undefined;
 	let previousVercelToken: string | undefined;
+	let previousHome: string | undefined;
 
 	beforeEach(() => {
 		previousMasterKey = process.env.CARDDUE_MASTER_KEY;
 		previousVercelToken = process.env.VERCEL_TOKEN;
+		previousHome = process.env.HOME;
 		delete process.env.CARDDUE_MASTER_KEY;
 		delete process.env.VERCEL_TOKEN;
 		output = mkdtempSync(join(tmpdir(), 'carddue-vercel-output-test-'));
@@ -34,12 +37,32 @@ describe.sequential('Vercel output privacy verification', () => {
 		else process.env.CARDDUE_MASTER_KEY = previousMasterKey;
 		if (previousVercelToken === undefined) delete process.env.VERCEL_TOKEN;
 		else process.env.VERCEL_TOKEN = previousVercelToken;
+		if (previousHome === undefined) delete process.env.HOME;
+		else process.env.HOME = previousHome;
 		rmSync(output, { recursive: true, force: true });
 		rmSync(checkout, { recursive: true, force: true });
 	});
 
 	it('accepts a minimal clean function bundle', () => {
 		expect(() => verifyVercelOutput(output)).not.toThrow();
+	});
+
+	it('skips Vercel workspace HOME while blocking actual private user homes', () => {
+		const linuxPrivateHome = ['', 'home', 'private'].join('/');
+		expect(isPrivateUserHome('/vercel')).toBe(false);
+		expect(isPrivateUserHome(linuxPrivateHome)).toBe(true);
+		expect(isPrivateUserHome('C:\\Users\\Private')).toBe(true);
+
+		process.env.HOME = '/vercel';
+		writeFileSync(join(output, 'static', 'app.js'), 'const source = "/vercel/path0";');
+		expect(() => verifyVercelOutput(output)).not.toThrow();
+
+		process.env.HOME = linuxPrivateHome;
+		writeFileSync(
+			join(output, 'static', 'app.js'),
+			`const source = "${linuxPrivateHome}/project";`
+		);
+		expect(() => verifyVercelOutput(output)).toThrow(/private home path/);
 	});
 
 	it('blocks private files and traced home directories', () => {

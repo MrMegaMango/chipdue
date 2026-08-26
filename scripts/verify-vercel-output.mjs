@@ -34,6 +34,17 @@ const COMPACT_JWT =
 	/(?:^|[^A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:$|[^A-Za-z0-9_-])/;
 const CHECKOUT_SCAN_IGNORES = new Set(['.git', '.svelte-kit', '.vercel', 'build', 'node_modules']);
 
+/** @param {string | undefined} value */
+export function isPrivateUserHome(value) {
+	if (!value) return false;
+	return (
+		/^\/root\/?$/.test(value) ||
+		/^\/(?:home|Users)\/[^/]+\/?$/.test(value) ||
+		/^[A-Za-z]:[\\/]Users[\\/][^\\/]+[\\/]?$/i.test(value) ||
+		/^\\\\[^\\/]+[\\/]Users[\\/][^\\/]+[\\/]?$/i.test(value)
+	);
+}
+
 /**
  * @param {string} root
  * @param {string} candidate
@@ -121,9 +132,11 @@ function forbiddenValues() {
 		if (value && Buffer.byteLength(value) >= 8)
 			values.push({ label: name, value: Buffer.from(value) });
 	}
-	const home = process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME;
-	if (home && Buffer.byteLength(home) >= 4) {
-		values.push({ label: 'private home path', value: Buffer.from(home) });
+	const homes = new Set([process.env.HOME, process.env.USERPROFILE]);
+	for (const home of homes) {
+		if (home && isPrivateUserHome(home)) {
+			values.push({ label: 'private home path', value: Buffer.from(home) });
+		}
 	}
 	return values;
 }
