@@ -1,0 +1,19 @@
+import type { RequestHandler } from './$types';
+import { listCards } from '$lib/server/cards';
+import { apiError, privateResponseHeaders } from '$lib/server/http';
+import { createCalendar } from '$lib/server/ics';
+
+export const GET: RequestHandler = ({ url }) => {
+	try {
+		const includeAmounts = url.searchParams.get('amounts') === '1';
+		return new Response(createCalendar(listCards(), new Date(), includeAmounts), {
+			headers: {
+				...privateResponseHeaders,
+				'content-type': 'text/calendar; charset=utf-8',
+				'content-disposition': 'attachment; filename="carddue-payments.ics"'
+			}
+		});
+	} catch (error) {
+		return apiError(error);
+	}
+};

@@ -1,0 +1,15 @@
+title = "CardDue secret scanning"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "plaid-token"
+description = "Plaid access, public, or Link token"
+regex = '''\b(?:access|link|public)-(?:development|production|sandbox)-[A-Za-z0-9_-]{8,}\b'''
+keywords = ["access-", "link-", "public-"]
+
+[[rules]]
+id = "private-home-path"
+description = "Absolute user home path"
+regex = '''(?:/home/[A-Za-z0-9._-]+/|[A-Za-z]:[\\/]Users[\\/][^\\/\r\n]+[\\/])'''

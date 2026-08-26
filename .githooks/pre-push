@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+set -eu
+
+npm run privacy:check
+
+if command -v gitleaks >/dev/null 2>&1; then
+	GITLEAKS_BIN="$(command -v gitleaks)"
+elif [ -x "${HOME}/.local/bin/gitleaks" ]; then
+	GITLEAKS_BIN="${HOME}/.local/bin/gitleaks"
+else
+	echo "Push blocked: install gitleaks so the complete history can be scanned." >&2
+	exit 1
+fi
+
+"${GITLEAKS_BIN}" git . --redact

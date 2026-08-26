@@ -1,0 +1,56 @@
+node_modules
+
+# Output
+.output
+.vercel
+.netlify
+.wrangler
+/.svelte-kit
+/build
+/coverage
+/.nyc_output
+/playwright-report
+/test-results
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors and local tooling
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Private runtime data (CardDue stores outside the checkout by default)
+/data/
+/runtime/
+/exports/
+/backups/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.ics
+!src/routes/api/export/calendar.ics/
+!src/routes/api/export/calendar.ics/+server.ts
+*.log
+*.har
+*.trace.zip
+*.map
+*.pem
+*.key
+*.p12
+*.pfx
+.privacy-denylist
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
