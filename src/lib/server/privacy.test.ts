@@ -49,9 +49,9 @@ describe.sequential('private local persistence', () => {
 		expect(() => decryptSecret(encrypted, 'plaid-access-token:other')).toThrow();
 	});
 
-	it('never writes plaintext card details to SQLite', () => {
+	it('never writes plaintext card details to SQLite', async () => {
 		const privateNickname = 'Private test card 7f061bd7';
-		const card = createManualCard(
+		const card = await createManualCard(
 			createManualCardSchema.parse({
 				nickname: privateNickname,
 				issuer: 'Private test issuer',
@@ -78,6 +78,23 @@ describe.sequential('private local persistence', () => {
 		mkdirSync(join(otherCheckout, '.git'), { recursive: true });
 		process.env.CARDDUE_DATA_DIR = join(otherCheckout, 'private-data-must-not-be-created');
 		expect(() => getDataPaths()).toThrow(/outside a Git checkout/);
+	});
+
+	it('accepts an explicit safe data directory without home environment variables', () => {
+		const previousHome = process.env.HOME;
+		const previousUserProfile = process.env.USERPROFILE;
+		try {
+			delete process.env.HOME;
+			delete process.env.USERPROFILE;
+			process.env.CARDDUE_DATA_DIR = join(temporaryDirectory, 'explicit-data');
+
+			expect(getDataPaths().dataDirectory).toBe(join(temporaryDirectory, 'explicit-data'));
+		} finally {
+			if (previousHome === undefined) delete process.env.HOME;
+			else process.env.HOME = previousHome;
+			if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+			else process.env.USERPROFILE = previousUserProfile;
+		}
 	});
 
 	it('resolves symlinked parents before checking the checkout boundary', () => {

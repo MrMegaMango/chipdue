@@ -1,6 +1,8 @@
 import { json } from '@sveltejs/kit';
 import { z, type ZodType } from 'zod';
 import { AppError, asAppError } from './errors';
+import { expectedRequestOrigin } from './request-security';
+import { getRuntimeMode } from './runtime';
 import { idSchema } from './schemas';
 
 const JSON_BODY_LIMIT = 64 * 1024;
@@ -37,7 +39,9 @@ export function assertSameOrigin(request: Request, url: URL): void {
 		throw new AppError('CROSS_ORIGIN_REQUEST', 'Cross-origin changes are not allowed.', 403);
 	}
 	const origin = request.headers.get('origin');
-	if (origin && origin !== url.origin) {
+	const cloud = getRuntimeMode() === 'cloud';
+	const expectedOrigin = expectedRequestOrigin(request, url, cloud);
+	if ((cloud && !origin) || (origin && origin !== expectedOrigin)) {
 		throw new AppError('CROSS_ORIGIN_REQUEST', 'Cross-origin changes are not allowed.', 403);
 	}
 }

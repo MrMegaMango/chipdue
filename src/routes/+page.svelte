@@ -5,6 +5,9 @@
 	type CardSource = 'manual' | 'plaid';
 	type DialogMode = 'add' | 'edit' | null;
 	type NoticeKind = 'success' | 'error';
+	type AuthMode = 'local' | 'cloud';
+	type AuthSession = { mode: AuthMode; authenticated: boolean };
+	type RequestOptions = { handleUnauthorized?: boolean; privateEpoch?: number };
 
 	type CardView = {
 		id: string;
@@ -93,6 +96,15 @@
 		year: 'numeric'
 	});
 
+	let authMode = $state<AuthMode | null>(null);
+	let authenticated = $state(false);
+	let authChecking = $state(true);
+	let authBusy = $state<'login' | 'logout' | null>(null);
+	let authError = $state('');
+	let authNotice = $state('');
+	let password = $state('');
+	let showPassword = $state(false);
+	let passwordInput = $state<HTMLInputElement>();
 	let cards = $state<CardView[]>([]);
 	let plaid = $state<PlaidStatus>({ ...emptyPlaid });
 	let loading = $state(true);
@@ -119,6 +131,9 @@
 	let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 	let clockTimer: ReturnType<typeof setInterval> | undefined;
 	let plaidScriptPromise: Promise<void> | null = null;
+	let activePlaidHandler: PlaidHandler | null = null;
+	let sessionCheckInFlight = false;
+	let privateStateEpoch = 0;
 	let nowTick = $state(Date.now());
 
 	const totalStatementCents = $derived(
@@ -133,10 +148,9 @@
 			.filter((card) => card.dueDate && daysUntil(card.dueDate) >= 0)
 			.toSorted((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''))[0] ?? null
 	);
-
 	onMount(() => {
-		void refreshCards();
-		void refreshPlaidStatus();
+		void initializeAuth();
+		document.addEventListener('visibilitychange', handleVisibilityChange);
 		clockTimer = setInterval(() => {
 			nowTick = Date.now();
 		}, 60_000);
@@ -145,6 +159,7 @@
 			if (noticeTimer) clearTimeout(noticeTimer);
 			if (clockTimer) clearInterval(clockTimer);
 			if (dialogMode) document.body.style.overflow = previousBodyOverflow;
+			document.removeEventListener('visibilitychange', handleVisibilityChange);
 		};
 	});
 
@@ -162,7 +177,12 @@
 		};
 	}
 
-	async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
+	async function requestJson<T>(
+		url: string,
+		init: RequestInit = {},
+		options: RequestOptions = {}
+	): Promise<T> {
+		const requestEpoch = options.privateEpoch ?? privateStateEpoch;
 		const headers = new Headers(init.headers);
 		headers.set('Accept', 'application/json');
 		if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
@@ -175,6 +195,13 @@
 		});
 
 		const payload = await response.json().catch(() => null);
+		if (
+			response.status === 401 &&
+			options.handleUnauthorized !== false &&
+			isPrivateEpochCurrent(requestEpoch)
+		) {
+			lockCloudSession('Your session expired. Enter your password to continue.');
+		}
 		if (!response.ok) {
 			const detail =
 				typeof payload?.error === 'string'
@@ -190,30 +217,221 @@
 		return payload as T;
 	}
 
-	async function refreshCards(quiet = false): Promise<boolean> {
+	async function initializeAuth(): Promise<void> {
+		authChecking = true;
+		authError = '';
+
+		try {
+			const session = await requestJson<AuthSession>(
+				resolve('/api/auth/session'),
+				{},
+				{ handleUnauthorized: false }
+			);
+			authMode = session.mode;
+			authenticated = session.mode === 'local' || session.authenticated;
+			if (session.mode === 'cloud' && !session.authenticated) {
+				void tick().then(() => passwordInput?.focus());
+			} else {
+				loadDashboardData();
+			}
+		} catch (error) {
+			authMode = null;
+			authenticated = false;
+			authError = readableError(error, 'CardDue could not verify this private session.');
+		} finally {
+			authChecking = false;
+		}
+	}
+
+	async function revalidateCloudSession(): Promise<void> {
+		if (authMode !== 'cloud' || !authenticated || authBusy || sessionCheckInFlight) return;
+		const epoch = privateStateEpoch;
+		sessionCheckInFlight = true;
+		try {
+			const session = await requestJson<AuthSession>(
+				resolve('/api/auth/session'),
+				{},
+				{ privateEpoch: epoch }
+			);
+			if (!isPrivateEpochCurrent(epoch)) return;
+			if (session.mode === 'cloud' && !session.authenticated) {
+				lockCloudSession('Your session expired. Enter your password to continue.');
+			}
+		} catch {
+			// A 401 locks the UI in requestJson. Transient network errors leave the current view intact.
+		} finally {
+			sessionCheckInFlight = false;
+		}
+	}
+
+	function handleVisibilityChange(): void {
+		if (document.visibilityState === 'visible') void revalidateCloudSession();
+	}
+
+	function loadDashboardData(): void {
+		const epoch = privateStateEpoch;
+		if (!isPrivateEpochCurrent(epoch)) return;
+		loading = true;
+		plaidStatusLoading = true;
+		void Promise.all([refreshCards(false, epoch), refreshPlaidStatus(false, epoch)]);
+	}
+
+	async function login(event: SubmitEvent): Promise<void> {
+		event.preventDefault();
+		if (authMode !== 'cloud' || authBusy) return;
+		authError = '';
+		authNotice = '';
+		if (!password) {
+			authError = 'Enter your CardDue password.';
+			passwordInput?.focus();
+			return;
+		}
+
+		authBusy = 'login';
+		try {
+			await requestJson<null>(
+				resolve('/api/auth/login'),
+				{
+					method: 'POST',
+					body: JSON.stringify({ password })
+				},
+				{ handleUnauthorized: false }
+			);
+			password = '';
+			showPassword = false;
+			authenticated = true;
+			loadDashboardData();
+		} catch (error) {
+			authError = readableError(error, 'Sign-in failed. Check your password and try again.');
+			void tick().then(() => {
+				passwordInput?.focus();
+				passwordInput?.select();
+			});
+		} finally {
+			authBusy = null;
+		}
+	}
+
+	async function logout(): Promise<void> {
+		if (authMode !== 'cloud' || authBusy) return;
+		authBusy = 'logout';
+
+		try {
+			await requestJson<null>(resolve('/api/auth/logout'), { method: 'POST' });
+			lockCloudSession('You are safely logged out.');
+		} catch (error) {
+			if (authenticated) {
+				showNotice(readableError(error, 'CardDue could not log out. Try again.'), 'error');
+			}
+		} finally {
+			authBusy = null;
+		}
+	}
+
+	function lockCloudSession(message: string): void {
+		if (authMode !== 'cloud') return;
+		privateStateEpoch += 1;
+		authenticated = false;
+		authError = '';
+		authNotice = message;
+		password = '';
+		showPassword = false;
+		clearPrivateUiState();
+		void tick().then(() => passwordInput?.focus());
+	}
+
+	function clearPrivateUiState(): void {
+		cards = [];
+		hasLoadedCards = false;
+		plaid = { ...emptyPlaid };
+		plaidConnections = [];
+		loading = true;
+		loadError = '';
+		plaidStatusLoading = true;
+		plaidStatusError = '';
+		dialogMode = null;
+		editingId = null;
+		form = blankForm();
+		formError = '';
+		busyAction = null;
+		deletingId = null;
+		plaidItemActionId = null;
+		notice = '';
+		firstField = undefined;
+		dialogElement = undefined;
+		previouslyFocused = undefined;
+		if (noticeTimer) clearTimeout(noticeTimer);
+		if (activePlaidHandler) {
+			try {
+				activePlaidHandler.destroy();
+			} catch {
+				// Session locking continues even if a third-party handler cannot clean itself up.
+			}
+			activePlaidHandler = null;
+		}
+		if (typeof document !== 'undefined') {
+			document.body.style.overflow = previousBodyOverflow;
+			document
+				.querySelectorAll('script[data-carddue-plaid-link]')
+				.forEach((script) => script.remove());
+		}
+		if (typeof window !== 'undefined') {
+			try {
+				delete (window as Window & { Plaid?: PlaidFactory }).Plaid;
+			} catch {
+				// The signed-out API remains inaccessible even if a third-party global is non-configurable.
+			}
+		}
+		plaidScriptPromise = null;
+	}
+
+	function isPrivateEpochCurrent(epoch: number): boolean {
+		return (
+			epoch === privateStateEpoch &&
+			(authMode === 'local' || (authMode === 'cloud' && authenticated))
+		);
+	}
+
+	async function refreshCards(quiet = false, expectedEpoch = privateStateEpoch): Promise<boolean> {
+		if (!isPrivateEpochCurrent(expectedEpoch)) return false;
 		if (!quiet) loading = true;
 		loadError = '';
 
 		try {
-			const payload = await requestJson<CardsResponse | CardView[]>(resolve('/api/cards'));
+			const payload = await requestJson<CardsResponse | CardView[]>(
+				resolve('/api/cards'),
+				{},
+				{ privateEpoch: expectedEpoch }
+			);
+			if (!isPrivateEpochCurrent(expectedEpoch)) return false;
 			cards = Array.isArray(payload) ? payload : (payload.cards ?? []);
 			if (!Array.isArray(payload) && payload.plaid) plaid = payload.plaid;
 			hasLoadedCards = true;
 			return true;
 		} catch (error) {
-			loadError = readableError(error, 'CardDue could not read the local database.');
+			if (!isPrivateEpochCurrent(expectedEpoch)) return false;
+			loadError = readableError(error, 'CardDue could not read its private database.');
 			return false;
 		} finally {
-			loading = false;
+			if (isPrivateEpochCurrent(expectedEpoch)) loading = false;
 		}
 	}
 
-	async function refreshPlaidStatus(quiet = false): Promise<boolean> {
+	async function refreshPlaidStatus(
+		quiet = false,
+		expectedEpoch = privateStateEpoch
+	): Promise<boolean> {
+		if (!isPrivateEpochCurrent(expectedEpoch)) return false;
 		if (!quiet) plaidStatusLoading = true;
 		plaidStatusError = '';
 
 		try {
-			const payload = await requestJson<PlaidStatusResponse>(resolve('/api/plaid/status'));
+			const payload = await requestJson<PlaidStatusResponse>(
+				resolve('/api/plaid/status'),
+				{},
+				{ privateEpoch: expectedEpoch }
+			);
+			if (!isPrivateEpochCurrent(expectedEpoch)) return false;
 			plaidConnections = payload.connections ?? [];
 			const lastSyncedAt =
 				plaidConnections
@@ -228,10 +446,11 @@
 			};
 			return true;
 		} catch (error) {
+			if (!isPrivateEpochCurrent(expectedEpoch)) return false;
 			plaidStatusError = readableError(error, 'Connection details are unavailable.');
 			return false;
 		} finally {
-			plaidStatusLoading = false;
+			if (isPrivateEpochCurrent(expectedEpoch)) plaidStatusLoading = false;
 		}
 	}
 
@@ -240,6 +459,7 @@
 	}
 
 	function showNotice(message: string, kind: NoticeKind = 'success'): void {
+		if (authMode === 'cloud' && !authenticated) return;
 		notice = message;
 		noticeKind = kind;
 		if (noticeTimer) clearTimeout(noticeTimer);
@@ -430,6 +650,8 @@
 
 	async function saveCard(event: SubmitEvent): Promise<void> {
 		event.preventDefault();
+		const epoch = privateStateEpoch;
+		if (!isPrivateEpochCurrent(epoch)) return;
 		formError = validateForm() ?? '';
 		if (formError) return;
 
@@ -448,53 +670,75 @@
 		busyAction = 'save';
 		try {
 			if (dialogMode === 'edit' && editingId) {
-				await requestJson(resolve('/api/cards/[id]', { id: editingId }), {
-					method: 'PATCH',
-					body: JSON.stringify(payload)
-				});
+				await requestJson(
+					resolve('/api/cards/[id]', { id: editingId }),
+					{
+						method: 'PATCH',
+						body: JSON.stringify(payload)
+					},
+					{ privateEpoch: epoch }
+				);
 			} else {
-				await requestJson(resolve('/api/cards'), {
-					method: 'POST',
-					body: JSON.stringify(payload)
-				});
+				await requestJson(
+					resolve('/api/cards'),
+					{
+						method: 'POST',
+						body: JSON.stringify(payload)
+					},
+					{ privateEpoch: epoch }
+				);
 			}
+			if (!isPrivateEpochCurrent(epoch)) return;
 			const action = dialogMode === 'edit' ? 'updated' : 'added';
 			const focusTarget = previouslyFocused;
 			dialogMode = null;
 			editingId = null;
 			document.body.style.overflow = previousBodyOverflow;
 			previouslyFocused = undefined;
-			const refreshed = await refreshCards(true);
+			const refreshed = await refreshCards(true, epoch);
+			if (!isPrivateEpochCurrent(epoch)) return;
 			showNotice(
 				refreshed ? `Card ${action}.` : `Card ${action}, but the dashboard could not refresh.`,
 				refreshed ? 'success' : 'error'
 			);
 			focusTarget?.focus();
 		} catch (error) {
+			if (!isPrivateEpochCurrent(epoch)) return;
 			formError = readableError(error, 'The card could not be saved.');
 		} finally {
-			busyAction = null;
+			if (isPrivateEpochCurrent(epoch)) busyAction = null;
 		}
 	}
 
 	async function deleteCard(card: CardView): Promise<void> {
 		if (card.source !== 'manual' || busyAction) return;
+		const epoch = privateStateEpoch;
+		if (!isPrivateEpochCurrent(epoch)) return;
 		if (!window.confirm(`Delete “${card.nickname}”? This only removes it from CardDue.`)) return;
 
 		busyAction = 'delete';
 		deletingId = card.id;
 		try {
-			await requestJson(resolve('/api/cards/[id]', { id: card.id }), { method: 'DELETE' });
-			const refreshed = await refreshCards(true);
+			await requestJson(
+				resolve('/api/cards/[id]', { id: card.id }),
+				{ method: 'DELETE' },
+				{ privateEpoch: epoch }
+			);
+			if (!isPrivateEpochCurrent(epoch)) return;
+			const refreshed = await refreshCards(true, epoch);
+			if (!isPrivateEpochCurrent(epoch)) return;
 			showNotice(
 				refreshed ? 'Card deleted.' : 'Card deleted, but the dashboard could not refresh.',
 				refreshed ? 'success' : 'error'
 			);
 		} catch (error) {
+			if (!isPrivateEpochCurrent(epoch)) return;
 			showNotice(readableError(error, 'The card could not be deleted.'), 'error');
 		} finally {
-			busyAction = null;
-			deletingId = null;
+			if (isPrivateEpochCurrent(epoch)) {
+				busyAction = null;
+				deletingId = null;
+			}
 		}
 	}
 
@@ -502,7 +746,10 @@
 		return (window as Window & { Plaid?: PlaidFactory }).Plaid;
 	}
 
-	function loadPlaidLink(): Promise<void> {
+	function loadPlaidLink(expectedEpoch = privateStateEpoch): Promise<void> {
+		if (!isPrivateEpochCurrent(expectedEpoch)) {
+			return Promise.reject(new Error('The private session changed.'));
+		}
 		if (plaidFactory()) return Promise.resolve();
 		if (plaidScriptPromise) return plaidScriptPromise;
 
@@ -512,8 +759,24 @@
 			script.async = true;
 			script.referrerPolicy = 'no-referrer';
 			script.dataset.cardduePlaidLink = 'true';
-			script.onload = () =>
-				plaidFactory() ? resolvePromise() : reject(new Error('Plaid Link did not load.'));
+			script.onload = () => {
+				if (!isPrivateEpochCurrent(expectedEpoch)) {
+					script.remove();
+					const replacementIsLoading =
+						plaidScriptPromise !== null && plaidScriptPromise !== attempt;
+					if (!replacementIsLoading) {
+						try {
+							delete (window as Window & { Plaid?: PlaidFactory }).Plaid;
+						} catch {
+							// The signed-out API remains inaccessible if the global cannot be removed.
+						}
+					}
+					reject(new Error('The private session changed.'));
+					return;
+				}
+				if (plaidFactory()) resolvePromise();
+				else reject(new Error('Plaid Link did not load.'));
+			};
 			script.onerror = () =>
 				reject(new Error('Plaid Link could not be loaded. Check your connection.'));
 			document.head.append(script);
@@ -529,6 +792,8 @@
 
 	async function connectPlaid(): Promise<void> {
 		if (busyAction) return;
+		const epoch = privateStateEpoch;
+		if (!isPrivateEpochCurrent(epoch)) return;
 		if (!plaid.configured) {
 			showNotice('Plaid is not configured on this CardDue installation.', 'error');
 			return;
@@ -538,11 +803,14 @@
 		try {
 			// Plaid's script and the link token are requested only after this explicit action.
 			const [, tokenPayload] = await Promise.all([
-				loadPlaidLink(),
-				requestJson<{ linkToken?: string; link_token?: string }>(resolve('/api/plaid/link-token'), {
-					method: 'POST'
-				})
+				loadPlaidLink(epoch),
+				requestJson<{ linkToken?: string; link_token?: string }>(
+					resolve('/api/plaid/link-token'),
+					{ method: 'POST' },
+					{ privateEpoch: epoch }
+				)
 			]);
+			if (!isPrivateEpochCurrent(epoch)) return;
 			const linkToken = tokenPayload.linkToken ?? tokenPayload.link_token;
 			if (!linkToken) throw new Error('The server did not return a Plaid link token.');
 
@@ -553,37 +821,61 @@
 			handler = factory.create({
 				token: linkToken,
 				onSuccess: (publicToken, metadata) => {
+					if (!isPrivateEpochCurrent(epoch)) {
+						handler.destroy();
+						if (activePlaidHandler === handler) activePlaidHandler = null;
+						return;
+					}
 					const institutionName = metadata?.institution?.name?.trim().slice(0, 80) || null;
-					void finishPlaidConnection(publicToken, institutionName, handler);
+					void finishPlaidConnection(publicToken, institutionName, handler, epoch);
 				},
 				onExit: (error) => {
 					handler.destroy();
-					busyAction = null;
-					if (error) showNotice('Plaid connection was not completed.', 'error');
+					if (activePlaidHandler === handler) activePlaidHandler = null;
+					if (isPrivateEpochCurrent(epoch)) {
+						busyAction = null;
+						if (error) showNotice('Plaid connection was not completed.', 'error');
+					}
 				}
 			});
+			activePlaidHandler = handler;
 			handler.open();
 		} catch (error) {
-			busyAction = null;
-			showNotice(readableError(error, 'Plaid could not be opened.'), 'error');
+			if (isPrivateEpochCurrent(epoch)) {
+				busyAction = null;
+				showNotice(readableError(error, 'Plaid could not be opened.'), 'error');
+			}
 		}
 	}
 
 	async function finishPlaidConnection(
 		publicToken: string,
 		institutionName: string | null,
-		handler: PlaidHandler
+		handler: PlaidHandler,
+		epoch: number
 	): Promise<void> {
+		if (!isPrivateEpochCurrent(epoch)) {
+			handler.destroy();
+			if (activePlaidHandler === handler) activePlaidHandler = null;
+			return;
+		}
 		try {
-			await requestJson(resolve('/api/plaid/exchange'), {
-				method: 'POST',
-				body: JSON.stringify({ publicToken, institutionName })
-			});
-			await requestJson(resolve('/api/plaid/sync'), { method: 'POST' });
+			await requestJson(
+				resolve('/api/plaid/exchange'),
+				{
+					method: 'POST',
+					body: JSON.stringify({ publicToken, institutionName })
+				},
+				{ privateEpoch: epoch }
+			);
+			if (!isPrivateEpochCurrent(epoch)) return;
+			await requestJson(resolve('/api/plaid/sync'), { method: 'POST' }, { privateEpoch: epoch });
+			if (!isPrivateEpochCurrent(epoch)) return;
 			const [cardsRefreshed, statusRefreshed] = await Promise.all([
-				refreshCards(true),
-				refreshPlaidStatus(true)
+				refreshCards(true, epoch),
+				refreshPlaidStatus(true, epoch)
 			]);
+			if (!isPrivateEpochCurrent(epoch)) return;
 			const refreshed = cardsRefreshed && statusRefreshed;
 			showNotice(
 				refreshed
@@ -592,22 +884,29 @@
 				refreshed ? 'success' : 'error'
 			);
 		} catch (error) {
-			showNotice(readableError(error, 'Plaid connected, but the first sync failed.'), 'error');
+			if (isPrivateEpochCurrent(epoch)) {
+				showNotice(readableError(error, 'Plaid connected, but the first sync failed.'), 'error');
+			}
 		} finally {
 			handler.destroy();
-			busyAction = null;
+			if (activePlaidHandler === handler) activePlaidHandler = null;
+			if (isPrivateEpochCurrent(epoch)) busyAction = null;
 		}
 	}
 
 	async function syncPlaid(): Promise<void> {
 		if (busyAction) return;
+		const epoch = privateStateEpoch;
+		if (!isPrivateEpochCurrent(epoch)) return;
 		busyAction = 'sync';
 		try {
-			await requestJson(resolve('/api/plaid/sync'), { method: 'POST' });
+			await requestJson(resolve('/api/plaid/sync'), { method: 'POST' }, { privateEpoch: epoch });
+			if (!isPrivateEpochCurrent(epoch)) return;
 			const [cardsRefreshed, statusRefreshed] = await Promise.all([
-				refreshCards(true),
-				refreshPlaidStatus(true)
+				refreshCards(true, epoch),
+				refreshPlaidStatus(true, epoch)
 			]);
+			if (!isPrivateEpochCurrent(epoch)) return;
 			const refreshed = cardsRefreshed && statusRefreshed;
 			showNotice(
 				refreshed
@@ -616,9 +915,11 @@
 				refreshed ? 'success' : 'error'
 			);
 		} catch (error) {
-			showNotice(readableError(error, 'Plaid cards could not be synced.'), 'error');
+			if (isPrivateEpochCurrent(epoch)) {
+				showNotice(readableError(error, 'Plaid cards could not be synced.'), 'error');
+			}
 		} finally {
-			busyAction = null;
+			if (isPrivateEpochCurrent(epoch)) busyAction = null;
 		}
 	}
 
@@ -628,6 +929,8 @@
 
 	async function disconnectPlaid(connection: PlaidConnection): Promise<void> {
 		if (busyAction) return;
+		const epoch = privateStateEpoch;
+		if (!isPrivateEpochCurrent(epoch)) return;
 		const label = connectionLabel(connection);
 		const confirmed = window.confirm(
 			`Disconnect “${label}”?\n\nCardDue will ask Plaid to revoke access, then erase this connection and its locally synced cards. This cannot be undone.`
@@ -637,13 +940,17 @@
 		busyAction = 'disconnect';
 		plaidItemActionId = connection.id;
 		try {
-			await requestJson(resolve('/api/plaid/items/[id]', { id: connection.id }), {
-				method: 'DELETE'
-			});
+			await requestJson(
+				resolve('/api/plaid/items/[id]', { id: connection.id }),
+				{ method: 'DELETE' },
+				{ privateEpoch: epoch }
+			);
+			if (!isPrivateEpochCurrent(epoch)) return;
 			const [cardsRefreshed, statusRefreshed] = await Promise.all([
-				refreshCards(true),
-				refreshPlaidStatus(true)
+				refreshCards(true, epoch),
+				refreshPlaidStatus(true, epoch)
 			]);
+			if (!isPrivateEpochCurrent(epoch)) return;
 			const refreshed = cardsRefreshed && statusRefreshed;
 			showNotice(
 				refreshed
@@ -652,26 +959,37 @@
 				refreshed ? 'success' : 'error'
 			);
 		} catch (error) {
-			showNotice(readableError(error, 'The Plaid connection could not be disconnected.'), 'error');
+			if (isPrivateEpochCurrent(epoch)) {
+				showNotice(
+					readableError(error, 'The Plaid connection could not be disconnected.'),
+					'error'
+				);
+			}
 		} finally {
-			busyAction = null;
-			plaidItemActionId = null;
+			if (isPrivateEpochCurrent(epoch)) {
+				busyAction = null;
+				plaidItemActionId = null;
+			}
 		}
 	}
 
 	async function updatePlaid(connection: PlaidConnection): Promise<void> {
 		if (busyAction) return;
+		const epoch = privateStateEpoch;
+		if (!isPrivateEpochCurrent(epoch)) return;
 		busyAction = 'update';
 		plaidItemActionId = connection.id;
 
 		try {
 			const [, tokenPayload] = await Promise.all([
-				loadPlaidLink(),
+				loadPlaidLink(epoch),
 				requestJson<{ linkToken?: string; link_token?: string }>(
 					resolve('/api/plaid/items/[id]/update', { id: connection.id }),
-					{ method: 'POST' }
+					{ method: 'POST' },
+					{ privateEpoch: epoch }
 				)
 			]);
+			if (!isPrivateEpochCurrent(epoch)) return;
 			const linkToken = tokenPayload.linkToken ?? tokenPayload.link_token;
 			if (!linkToken) throw new Error('The server did not return a Plaid update token.');
 
@@ -682,36 +1000,57 @@
 			handler = factory.create({
 				token: linkToken,
 				onSuccess: () => {
-					void finishPlaidUpdate(connection, handler);
+					if (!isPrivateEpochCurrent(epoch)) {
+						handler.destroy();
+						if (activePlaidHandler === handler) activePlaidHandler = null;
+						return;
+					}
+					void finishPlaidUpdate(connection, handler, epoch);
 				},
 				onExit: (error) => {
 					handler.destroy();
-					busyAction = null;
-					plaidItemActionId = null;
-					if (error) showNotice('Plaid could not finish updating this connection.', 'error');
+					if (activePlaidHandler === handler) activePlaidHandler = null;
+					if (isPrivateEpochCurrent(epoch)) {
+						busyAction = null;
+						plaidItemActionId = null;
+						if (error) showNotice('Plaid could not finish updating this connection.', 'error');
+					}
 				}
 			});
+			activePlaidHandler = handler;
 			handler.open();
 		} catch (error) {
-			busyAction = null;
-			plaidItemActionId = null;
-			showNotice(readableError(error, 'Plaid update could not be opened.'), 'error');
+			if (isPrivateEpochCurrent(epoch)) {
+				busyAction = null;
+				plaidItemActionId = null;
+				showNotice(readableError(error, 'Plaid update could not be opened.'), 'error');
+			}
 		}
 	}
 
 	async function finishPlaidUpdate(
 		connection: PlaidConnection,
-		handler: PlaidHandler
+		handler: PlaidHandler,
+		epoch: number
 	): Promise<void> {
+		if (!isPrivateEpochCurrent(epoch)) {
+			handler.destroy();
+			if (activePlaidHandler === handler) activePlaidHandler = null;
+			return;
+		}
 		const label = connectionLabel(connection);
 		try {
-			await requestJson(resolve('/api/plaid/items/[id]/sync', { id: connection.id }), {
-				method: 'POST'
-			});
+			await requestJson(
+				resolve('/api/plaid/items/[id]/sync', { id: connection.id }),
+				{ method: 'POST' },
+				{ privateEpoch: epoch }
+			);
+			if (!isPrivateEpochCurrent(epoch)) return;
 			const [cardsRefreshed, statusRefreshed] = await Promise.all([
-				refreshCards(true),
-				refreshPlaidStatus(true)
+				refreshCards(true, epoch),
+				refreshPlaidStatus(true, epoch)
 			]);
+			if (!isPrivateEpochCurrent(epoch)) return;
 			const refreshed = cardsRefreshed && statusRefreshed;
 			showNotice(
 				refreshed
@@ -720,22 +1059,25 @@
 				refreshed ? 'success' : 'error'
 			);
 		} catch (error) {
-			showNotice(readableError(error, 'The connection updated, but its sync failed.'), 'error');
+			if (isPrivateEpochCurrent(epoch)) {
+				showNotice(readableError(error, 'The connection updated, but its sync failed.'), 'error');
+			}
 		} finally {
 			handler.destroy();
-			busyAction = null;
-			plaidItemActionId = null;
+			if (activePlaidHandler === handler) activePlaidHandler = null;
+			if (isPrivateEpochCurrent(epoch)) {
+				busyAction = null;
+				plaidItemActionId = null;
+			}
 		}
 	}
 </script>
 
-<svelte:window onkeydown={handleWindowKeydown} />
+<svelte:window onkeydown={handleWindowKeydown} onfocus={revalidateCloudSession} />
 
-<a class="skip-link" href="#main-content">Skip to dashboard</a>
-
-<div class="app-shell">
-	<header class="site-header">
-		<a class="brand" href={resolve('/')} aria-label="CardDue home">
+{#if authChecking}
+	<main class="auth-shell auth-loading" aria-busy="true">
+		<div class="auth-brand" aria-label="CardDue">
 			<span class="brand-mark" aria-hidden="true">
 				<svg viewBox="0 0 32 32">
 					<rect x="6" y="8" width="20" height="18" rx="4"></rect>
@@ -744,592 +1086,755 @@
 				</svg>
 			</span>
 			<span>CardDue</span>
-		</a>
-		<div class="header-status" title="CardDue does not store card data in your browser">
-			<span class="status-dot"></span>
-			<span>Private by default</span>
 		</div>
-	</header>
-
-	<main id="main-content">
-		<section class="hero" aria-labelledby="page-title">
-			<div class="hero-copy">
-				<p class="eyebrow">Your payment command center</p>
-				<h1 id="page-title">Never miss a card due date.</h1>
-				<p class="hero-description">
-					Balances and deadlines in one calm, private dashboard—stored on your machine.
-				</p>
+		<div class="auth-spinner" aria-hidden="true"></div>
+		<p role="status">Checking your private session…</p>
+	</main>
+{:else if authMode === null}
+	<main class="auth-shell">
+		<section class="auth-card auth-error-card" aria-labelledby="session-error-title">
+			<div class="auth-brand">
+				<span class="brand-mark" aria-hidden="true">
+					<svg viewBox="0 0 32 32">
+						<rect x="6" y="8" width="20" height="18" rx="4"></rect>
+						<path d="M6 13h20M11 5.5v5M21 5.5v5"></path>
+						<circle cx="21" cy="21" r="2.5"></circle>
+					</svg>
+				</span>
+				<span>CardDue</span>
 			</div>
-			<div class="hero-action-stack">
-				<div class="hero-actions">
-					<button
-						class="button button-secondary"
-						type="button"
-						onclick={openAddDialog}
-						disabled={busyAction !== null || loading}
-					>
-						<svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 4v12M4 10h12"></path></svg>
-						Add manually
-					</button>
-					<button
-						class="button button-primary"
-						type="button"
-						onclick={connectPlaid}
-						disabled={busyAction !== null || loading || !plaid.configured}
-						aria-busy={busyAction === 'connect'}
-						aria-describedby="plaid-consent-copy"
-						title={plaid.configured
-							? 'Open Plaid Link'
-							: 'Plaid is not configured on this installation'}
-					>
-						<svg aria-hidden="true" viewBox="0 0 20 20">
-							<path d="M3 8.5 10 5l7 3.5L10 12 3 8.5Z"></path>
-							<path d="M5 11v3.5M8.3 12.5V16m3.4-3.5V16m3.3-5v3.5M3 17h14"></path>
-						</svg>
-						{busyAction === 'connect'
-							? 'Connecting…'
-							: plaid.connectedItems > 0
-								? 'Connect another'
-								: 'Connect Plaid'}
-					</button>
-				</div>
-				<p id="plaid-consent-copy" class="plaid-consent">
-					Plaid’s CDN script runs in this page and can access data rendered here. It loads only
-					after you choose Connect Plaid.
-				</p>
-			</div>
-		</section>
-
-		{#if loadError}
-			<div class="load-error" role="alert">
-				<div>
-					<strong>Couldn’t load your cards</strong>
-					<span>{loadError}</span>
-				</div>
-				<button type="button" onclick={() => refreshCards()}>Try again</button>
-			</div>
-		{/if}
-
-		<section class="summary-grid" aria-label="Card summary">
-			<article class="summary-card summary-balance">
-				<div class="summary-icon" aria-hidden="true">
-					<svg viewBox="0 0 24 24"
-						><rect x="3" y="5" width="18" height="14" rx="3"></rect><path d="M3 10h18M7 15h4"
-						></path></svg
-					>
-				</div>
-				<div>
-					<p>Statement balances</p>
-					<strong>
-						{loading || !hasLoadedCards
-							? '—'
-							: cards.length > 0 && knownStatementCount === 0
-								? 'Not reported'
-								: formatMoney(totalStatementCents)}
-					</strong>
-					<span>
-						{#if !hasLoadedCards}
-							Awaiting local data
-						{:else if knownStatementCount < cards.length}
-							{knownStatementCount} of {cards.length} reported
-						{:else}
-							Across {cards.length} {cards.length === 1 ? 'card' : 'cards'}
-						{/if}
-					</span>
-				</div>
-			</article>
-
-			<article class="summary-card summary-due">
-				<div class="summary-icon" aria-hidden="true">
-					<svg viewBox="0 0 24 24"
-						><rect x="4" y="5" width="16" height="16" rx="3"></rect><path d="M8 3v4M16 3v4M4 10h16"
-						></path></svg
-					>
-				</div>
-				<div>
-					<p>Due within 7 days</p>
-					<strong>{loading || !hasLoadedCards ? '—' : dueSoonCount}</strong>
-					<span>
-						{!hasLoadedCards
-							? 'Awaiting local data'
-							: dueSoonCount === 0
-								? 'Nothing urgent'
-								: 'Worth a quick check'}
-					</span>
-				</div>
-			</article>
-
-			<article class="summary-card summary-next">
-				<div class="summary-icon" aria-hidden="true">
-					<svg viewBox="0 0 24 24"
-						><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg
-					>
-				</div>
-				<div>
-					<p>Next deadline</p>
-					<strong class="next-date">
-						{loading || !hasLoadedCards ? '—' : formatDate(nextCard?.dueDate ?? null)}
-					</strong>
-					<span
-						>{hasLoadedCards
-							? (nextCard?.nickname ?? 'No upcoming due date')
-							: 'Awaiting local data'}</span
-					>
-				</div>
-			</article>
-		</section>
-
-		<section class="cards-section" aria-labelledby="cards-heading">
-			<div class="section-heading">
-				<div>
-					<p class="section-kicker">Overview</p>
-					<h2 id="cards-heading">Your cards</h2>
-				</div>
-				{#if plaid.connectedItems > 0}
-					<button
-						class="button button-quiet"
-						type="button"
-						onclick={syncPlaid}
-						disabled={busyAction !== null}
-						aria-busy={busyAction === 'sync'}
-					>
-						<svg class:spinning={busyAction === 'sync'} aria-hidden="true" viewBox="0 0 20 20">
-							<path d="M16 7a6.5 6.5 0 1 0 .2 5.5M16 3v4h-4"></path>
-						</svg>
-						{busyAction === 'sync' ? 'Syncing…' : 'Sync Plaid'}
-					</button>
-				{/if}
-			</div>
-
-			{#if loading}
-				<div class="card-grid" aria-label="Loading cards" aria-busy="true">
-					{#each [0, 1, 2] as skeleton (skeleton)}
-						<div class="credit-card skeleton-card" aria-hidden="true">
-							<div class="skeleton skeleton-short"></div>
-							<div class="skeleton skeleton-title"></div>
-							<div class="skeleton skeleton-amount"></div>
-							<div class="skeleton skeleton-row"></div>
-						</div>
-					{/each}
-				</div>
-			{:else if !hasLoadedCards}
-				<div class="empty-state unavailable-state">
-					<h3>Dashboard data is unavailable</h3>
-					<p>
-						CardDue has not shown any balances or dates. Use “Try again” above after checking the
-						local server.
-					</p>
-				</div>
-			{:else if cards.length > 0}
-				<div class="card-grid">
-					{#each cards as card (card.id)}
-						{@const status = dueStatus(card)}
-						<article class:overdue={status.tone === 'danger'} class="credit-card">
-							<div class="card-accent"></div>
-							<header class="card-header">
-								<div class="card-identity">
-									<h3>{card.nickname}</h3>
-									<p>{cardSubtitle(card)}</p>
-								</div>
-								<span class:plaid-source={card.source === 'plaid'} class="source-pill">
-									{card.source === 'plaid' ? 'Plaid' : 'Manual'}
-								</span>
-							</header>
-
-							<div class="balance-block">
-								<span>Statement balance</span>
-								<strong class:unavailable={card.statementBalanceCents === null}>
-									{formatMoney(card.statementBalanceCents)}
-								</strong>
-								{#if card.currentBalanceCents !== null}
-									<small>Current {formatMoney(card.currentBalanceCents)}</small>
-								{/if}
-							</div>
-
-							<div class="payment-details">
-								<div>
-									<span>Minimum due</span>
-									<strong>{formatMoney(card.minimumPaymentCents)}</strong>
-								</div>
-								<div>
-									<span>Next due date</span>
-									<strong>{formatDate(card.dueDate)}</strong>
-								</div>
-							</div>
-
-							<div class="card-flags">
-								<span class="due-pill {status.tone}">{status.label}</span>
-								{#if card.autopayEnabled}
-									<span class="autopay-pill">
-										<svg aria-hidden="true" viewBox="0 0 16 16"
-											><path d="m4 8 2.4 2.4L12 5"></path></svg
-										>
-										Autopay
-									</span>
-								{/if}
-							</div>
-
-							<footer class="card-footer">
-								<span>
-									<span class="mini-dot"></span>
-									{ageLabel(
-										card.source === 'plaid'
-											? (card.lastSyncedAt ?? card.updatedAt)
-											: card.updatedAt,
-										card.source === 'plaid' ? 'Synced' : 'Updated'
-									)}
-								</span>
-								{#if card.source === 'manual'}
-									<div class="card-actions">
-										<button
-											type="button"
-											onclick={() => openEditDialog(card)}
-											disabled={busyAction !== null}>Edit</button
-										>
-										<button
-											class="delete-button"
-											type="button"
-											onclick={() => deleteCard(card)}
-											disabled={busyAction !== null}
-										>
-											{deletingId === card.id ? 'Deleting…' : 'Delete'}
-										</button>
-									</div>
-								{/if}
-							</footer>
-						</article>
-					{/each}
-				</div>
-			{:else}
-				<div class="empty-state">
-					<div class="empty-illustration" aria-hidden="true">
-						<svg viewBox="0 0 96 72">
-							<rect x="12" y="13" width="67" height="44" rx="8"></rect>
-							<path d="M12 25h67M21 43h21"></path>
-							<circle cx="75" cy="54" r="14"></circle>
-							<path d="M75 47v7l5 3"></path>
-						</svg>
-					</div>
-					<h3>Your dashboard is ready</h3>
-					<p>
-						Add a card manually for full local control, or choose Plaid when you want automatic
-						updates.
-					</p>
-					<button
-						class="button button-primary"
-						type="button"
-						onclick={openAddDialog}
-						disabled={busyAction !== null}>Add your first card</button
-					>
-				</div>
-			{/if}
-		</section>
-
-		<section class="info-grid" aria-label="Privacy and calendar tools">
-			<article class="info-panel privacy-panel">
-				<div class="panel-icon privacy-icon" aria-hidden="true">
-					<svg viewBox="0 0 24 24"
-						><path d="M12 3 5 6v5c0 4.6 2.8 8.2 7 10 4.2-1.8 7-5.4 7-10V6l-7-3Z"></path><path
-							d="m9 12 2 2 4-5"
-						></path></svg
-					>
-				</div>
-				<div class="panel-content">
-					<p class="section-kicker">Privacy status</p>
-					<h2>Local first. Always.</h2>
-					<p>
-						CardDue adds no analytics and stores no card details in your browser. The Plaid Link
-						script is requested only after you press Connect Plaid.
-					</p>
-					<p class="trust-note">
-						<strong>Before you connect:</strong> Plaid’s CDN script runs in this dashboard page and can
-						access data rendered here. Refresh the page after connecting to unload it.
-					</p>
-					<ul class="privacy-list">
-						<li>
-							<span class="check-mark">✓</span><span
-								>Card details are encrypted in local storage outside this source checkout</span
-							>
-						</li>
-						<li>
-							<span class="check-mark">✓</span><span>No tracking pixels or external fonts</span>
-						</li>
-						<li>
-							<span class="connection-mark" class:connected={plaid.connectedItems > 0}></span>
-							<span>
-								{plaid.connectedItems > 0
-									? `${plaid.connectedItems} Plaid ${plaid.connectedItems === 1 ? 'connection' : 'connections'} · ${ageLabel(plaid.lastSyncedAt, 'Synced')}`
-									: plaid.configured
-										? 'Plaid is ready but not connected'
-										: 'Plaid is not configured'}
-							</span>
-						</li>
-					</ul>
-
-					{#if plaidStatusLoading}
-						<div
-							class="connections-loading"
-							aria-label="Loading Plaid connections"
-							aria-busy="true"
-						>
-							<span></span><span></span>
-						</div>
-					{:else if plaidStatusError}
-						<div class="connection-error" role="alert">
-							<span>{plaidStatusError}</span>
-							<button
-								type="button"
-								onclick={() => refreshPlaidStatus()}
-								disabled={busyAction !== null}>Retry</button
-							>
-						</div>
-					{:else if plaidConnections.length > 0}
-						<section class="connection-manager" aria-labelledby="connections-heading">
-							<div class="connection-heading">
-								<h3 id="connections-heading">Connected institutions</h3>
-								<span>Revoke access any time</span>
-							</div>
-							<ul class="connection-list">
-								{#each plaidConnections as connection (connection.id)}
-									<li>
-										<div class="connection-details">
-											<span class="institution-icon" aria-hidden="true">
-												<svg viewBox="0 0 20 20">
-													<path d="m3 8 7-4 7 4M5 9.5v5M8.3 9.5v5m3.4-5v5m3.3-5v5M3 16.5h14"></path>
-												</svg>
-											</span>
-											<span>
-												<strong>{connectionLabel(connection)}</strong>
-												<small class:attention={connection.status === 'needs_update'}>
-													{connection.status === 'needs_update' ? 'Needs attention' : 'Connected'} ·
-													{ageLabel(connection.lastSyncedAt, 'Synced')}
-												</small>
-											</span>
-										</div>
-										<div class="connection-actions">
-											{#if connection.status === 'needs_update'}
-												<button
-													class="update-connection"
-													type="button"
-													onclick={() => updatePlaid(connection)}
-													disabled={busyAction !== null}
-													aria-busy={busyAction === 'update' && plaidItemActionId === connection.id}
-													aria-describedby="plaid-consent-copy"
-												>
-													{busyAction === 'update' && plaidItemActionId === connection.id
-														? 'Opening…'
-														: 'Update'}
-												</button>
-											{/if}
-											<button
-												class="disconnect-connection"
-												type="button"
-												onclick={() => disconnectPlaid(connection)}
-												disabled={busyAction !== null}
-												aria-busy={busyAction === 'disconnect' &&
-													plaidItemActionId === connection.id}
-												aria-label={`Disconnect ${connectionLabel(connection)}`}
-											>
-												{busyAction === 'disconnect' && plaidItemActionId === connection.id
-													? 'Disconnecting…'
-													: 'Disconnect'}
-											</button>
-										</div>
-									</li>
-								{/each}
-							</ul>
-						</section>
-					{/if}
-				</div>
-			</article>
-
-			<article class="info-panel calendar-panel">
-				<div class="panel-icon calendar-icon" aria-hidden="true">
-					<svg viewBox="0 0 24 24"
-						><rect x="3" y="5" width="18" height="16" rx="3"></rect><path
-							d="M8 3v4M16 3v4M3 10h18M8 14h.01M12 14h.01M16 14h.01M8 17h.01M12 17h.01"
-						></path></svg
-					>
-				</div>
-				<div class="panel-content">
-					<p class="section-kicker">Calendar export</p>
-					<h2>Take due dates with you.</h2>
-					<p>
-						Download a standard calendar file. Amounts are excluded by default for safer sharing.
-					</p>
-					<div class="calendar-actions">
-						<a
-							class="button button-secondary"
-							href={resolve('/api/export/calendar.ics?amounts=0')}
-							download
-						>
-							<svg aria-hidden="true" viewBox="0 0 20 20"
-								><path d="M10 3v10m0 0 4-4m-4 4L6 9M4 16h12"></path></svg
-							>
-							Export dates only
-						</a>
-						<a class="text-link" href={resolve('/api/export/calendar.ics?amounts=1')} download>
-							Include amounts
-							<svg aria-hidden="true" viewBox="0 0 16 16"><path d="m6 3 5 5-5 5"></path></svg>
-						</a>
-					</div>
-				</div>
-			</article>
+			<div class="auth-lock error-lock" aria-hidden="true">!</div>
+			<h1 id="session-error-title">Private session unavailable</h1>
+			<p>{authError || 'CardDue could not verify this session.'}</p>
+			<button class="button button-primary" type="button" onclick={initializeAuth}>Try again</button
+			>
 		</section>
 	</main>
+{:else if authMode === 'cloud' && !authenticated}
+	<main class="auth-shell">
+		<section class="auth-card" aria-labelledby="login-title">
+			<div class="auth-brand">
+				<span class="brand-mark" aria-hidden="true">
+					<svg viewBox="0 0 32 32">
+						<rect x="6" y="8" width="20" height="18" rx="4"></rect>
+						<path d="M6 13h20M11 5.5v5M21 5.5v5"></path>
+						<circle cx="21" cy="21" r="2.5"></circle>
+					</svg>
+				</span>
+				<span>CardDue</span>
+			</div>
 
-	<footer class="site-footer">
-		<span>CardDue</span>
-		<span>Open source · Local first · No analytics</span>
-	</footer>
-</div>
+			<div class="auth-lock" aria-hidden="true">
+				<svg viewBox="0 0 24 24">
+					<rect x="5" y="10" width="14" height="11" rx="3"></rect>
+					<path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"></path>
+				</svg>
+			</div>
+			<p class="section-kicker">Private cloud</p>
+			<h1 id="login-title">Unlock your dashboard</h1>
+			<p class="auth-intro">Enter the password for this CardDue server.</p>
 
-{#if dialogMode}
-	<div class="dialog-layer">
-		<div class="dialog-backdrop"></div>
-		<div
-			bind:this={dialogElement}
-			class="dialog"
-			role="dialog"
-			aria-modal="true"
-			aria-labelledby="card-dialog-title"
-			aria-describedby="card-dialog-description"
-		>
-			<header class="dialog-header">
-				<div>
-					<p class="section-kicker">{dialogMode === 'edit' ? 'Manual card' : 'Local entry'}</p>
-					<h2 id="card-dialog-title">{dialogMode === 'edit' ? 'Edit card' : 'Add a card'}</h2>
-					<p id="card-dialog-description">
-						Saved only to CardDue’s local database. Enter just what you need.
+			{#if authNotice}
+				<p class="auth-notice" role="status">{authNotice}</p>
+			{/if}
+
+			<form class="login-form" onsubmit={login}>
+				<label for="cloud-password">Password</label>
+				<div class="password-field">
+					<input
+						bind:this={passwordInput}
+						bind:value={password}
+						id="cloud-password"
+						name="password"
+						type={showPassword ? 'text' : 'password'}
+						autocomplete="current-password"
+						autocapitalize="none"
+						maxlength="1024"
+						spellcheck="false"
+						aria-invalid={authError ? 'true' : undefined}
+						aria-describedby={authError ? 'login-error cloud-privacy-copy' : 'cloud-privacy-copy'}
+						required
+					/>
+					<button
+						type="button"
+						onclick={() => (showPassword = !showPassword)}
+						aria-pressed={showPassword}
+						aria-label={showPassword ? 'Hide password' : 'Show password'}
+					>
+						{showPassword ? 'Hide' : 'Show'}
+					</button>
+				</div>
+				{#if authError}
+					<p id="login-error" class="login-error" role="alert">{authError}</p>
+				{/if}
+				<button
+					class="button button-primary login-button"
+					type="submit"
+					disabled={authBusy === 'login' || !password}
+					aria-busy={authBusy === 'login'}
+				>
+					{authBusy === 'login' ? 'Unlocking…' : 'Unlock CardDue'}
+				</button>
+			</form>
+
+			<div id="cloud-privacy-copy" class="cloud-privacy">
+				<svg aria-hidden="true" viewBox="0 0 20 20">
+					<path d="M10 2.5 4 5v4.3c0 3.8 2.4 6.8 6 8.2 3.6-1.4 6-4.4 6-8.2V5l-6-2.5Z"></path>
+					<path d="m7.5 10 1.7 1.7 3.5-4"></path>
+				</svg>
+				<p>
+					<strong>Know where your data lives.</strong> Cloud mode stores card data on the private CardDue
+					server you chose, not solely on this device. Use a deployment you trust over HTTPS. CardDue
+					keeps neither this password nor card data in browser storage; your server maintains the session
+					with an HttpOnly cookie.
+				</p>
+			</div>
+			<p class="auth-footer">No analytics · No external fonts · Open source</p>
+		</section>
+	</main>
+{:else}
+	<a class="skip-link" href="#main-content">Skip to dashboard</a>
+
+	<div class="app-shell" inert={authBusy === 'logout'} aria-busy={authBusy === 'logout'}>
+		<header class="site-header">
+			<a class="brand" href={resolve('/')} aria-label="CardDue home">
+				<span class="brand-mark" aria-hidden="true">
+					<svg viewBox="0 0 32 32">
+						<rect x="6" y="8" width="20" height="18" rx="4"></rect>
+						<path d="M6 13h20M11 5.5v5M21 5.5v5"></path>
+						<circle cx="21" cy="21" r="2.5"></circle>
+					</svg>
+				</span>
+				<span>CardDue</span>
+			</a>
+			<div class="header-controls">
+				<div
+					class="header-status"
+					title="CardDue does not keep card data in persistent browser storage"
+				>
+					<span class="status-dot"></span>
+					<span>{authMode === 'cloud' ? 'Private cloud' : 'Private by default'}</span>
+				</div>
+				{#if authMode === 'cloud'}
+					<button
+						class="logout-button"
+						type="button"
+						onclick={logout}
+						disabled={authBusy === 'logout'}
+						aria-busy={authBusy === 'logout'}
+					>
+						{authBusy === 'logout' ? 'Logging out…' : 'Log out'}
+					</button>
+				{/if}
+			</div>
+		</header>
+
+		<main id="main-content">
+			<section class="hero" aria-labelledby="page-title">
+				<div class="hero-copy">
+					<p class="eyebrow">Your payment command center</p>
+					<h1 id="page-title">Never miss a card due date.</h1>
+					<p class="hero-description">
+						Balances and deadlines in one calm, private dashboard—{authMode === 'cloud'
+							? 'served by your private CardDue cloud.'
+							: 'stored on your machine.'}
 					</p>
 				</div>
-				<button class="icon-button" type="button" onclick={closeDialog} aria-label="Close dialog">
-					<svg aria-hidden="true" viewBox="0 0 20 20"><path d="m5 5 10 10M15 5 5 15"></path></svg>
-				</button>
-			</header>
+				<div class="hero-action-stack">
+					<div class="hero-actions">
+						<button
+							class="button button-secondary"
+							type="button"
+							onclick={openAddDialog}
+							disabled={busyAction !== null || loading}
+						>
+							<svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 4v12M4 10h12"></path></svg>
+							Add manually
+						</button>
+						<button
+							class="button button-primary"
+							type="button"
+							onclick={connectPlaid}
+							disabled={busyAction !== null || loading || !plaid.configured}
+							aria-busy={busyAction === 'connect'}
+							aria-describedby="plaid-consent-copy"
+							title={plaid.configured
+								? 'Open Plaid Link'
+								: 'Plaid is not configured on this installation'}
+						>
+							<svg aria-hidden="true" viewBox="0 0 20 20">
+								<path d="M3 8.5 10 5l7 3.5L10 12 3 8.5Z"></path>
+								<path d="M5 11v3.5M8.3 12.5V16m3.4-3.5V16m3.3-5v3.5M3 17h14"></path>
+							</svg>
+							{busyAction === 'connect'
+								? 'Connecting…'
+								: plaid.connectedItems > 0
+									? 'Connect another'
+									: 'Connect Plaid'}
+						</button>
+					</div>
+					<p id="plaid-consent-copy" class="plaid-consent">
+						Plaid’s CDN script runs in this page and can access data rendered here. It loads only
+						after you choose Connect Plaid.
+					</p>
+				</div>
+			</section>
 
-			<form class="card-form" onsubmit={saveCard} autocomplete="off">
-				<div class="form-grid">
-					<label class="field field-wide">
-						<span>Card name <em>Required</em></span>
-						<input
-							bind:this={firstField}
-							bind:value={form.nickname}
-							name="nickname"
-							maxlength="80"
-							placeholder="Everyday card"
-							required
-						/>
-					</label>
+			{#if loadError}
+				<div class="load-error" role="alert">
+					<div>
+						<strong>Couldn’t load your cards</strong>
+						<span>{loadError}</span>
+					</div>
+					<button type="button" onclick={() => refreshCards()}>Try again</button>
+				</div>
+			{/if}
 
-					<label class="field">
-						<span>Issuer</span>
-						<input bind:value={form.issuer} name="issuer" maxlength="80" placeholder="Bank name" />
-					</label>
+			<section class="summary-grid" aria-label="Card summary">
+				<article class="summary-card summary-balance">
+					<div class="summary-icon" aria-hidden="true">
+						<svg viewBox="0 0 24 24"
+							><rect x="3" y="5" width="18" height="14" rx="3"></rect><path d="M3 10h18M7 15h4"
+							></path></svg
+						>
+					</div>
+					<div>
+						<p>Statement balances</p>
+						<strong>
+							{loading || !hasLoadedCards
+								? '—'
+								: cards.length > 0 && knownStatementCount === 0
+									? 'Not reported'
+									: formatMoney(totalStatementCents)}
+						</strong>
+						<span>
+							{#if !hasLoadedCards}
+								Awaiting local data
+							{:else if knownStatementCount < cards.length}
+								{knownStatementCount} of {cards.length} reported
+							{:else}
+								Across {cards.length} {cards.length === 1 ? 'card' : 'cards'}
+							{/if}
+						</span>
+					</div>
+				</article>
 
-					<label class="field">
-						<span>Last four digits</span>
-						<input
-							bind:value={form.last4}
-							name="last4"
-							inputmode="numeric"
-							maxlength="4"
-							pattern="[0-9]{4}"
-							placeholder="1234"
-						/>
-					</label>
+				<article class="summary-card summary-due">
+					<div class="summary-icon" aria-hidden="true">
+						<svg viewBox="0 0 24 24"
+							><rect x="4" y="5" width="16" height="16" rx="3"></rect><path
+								d="M8 3v4M16 3v4M4 10h16"
+							></path></svg
+						>
+					</div>
+					<div>
+						<p>Due within 7 days</p>
+						<strong>{loading || !hasLoadedCards ? '—' : dueSoonCount}</strong>
+						<span>
+							{!hasLoadedCards
+								? 'Awaiting local data'
+								: dueSoonCount === 0
+									? 'Nothing urgent'
+									: 'Worth a quick check'}
+						</span>
+					</div>
+				</article>
 
-					<label class="field">
-						<span>Statement balance</span>
-						<div class="money-input">
-							<span>$</span><input
-								bind:value={form.statementBalance}
-								name="statementBalance"
-								type="number"
-								min="0"
-								step="0.01"
-								inputmode="decimal"
-								placeholder="0.00"
-							/>
-						</div>
-					</label>
+				<article class="summary-card summary-next">
+					<div class="summary-icon" aria-hidden="true">
+						<svg viewBox="0 0 24 24"
+							><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg
+						>
+					</div>
+					<div>
+						<p>Next deadline</p>
+						<strong class="next-date">
+							{loading || !hasLoadedCards ? '—' : formatDate(nextCard?.dueDate ?? null)}
+						</strong>
+						<span
+							>{hasLoadedCards
+								? (nextCard?.nickname ?? 'No upcoming due date')
+								: 'Awaiting local data'}</span
+						>
+					</div>
+				</article>
+			</section>
 
-					<label class="field">
-						<span>Minimum payment</span>
-						<div class="money-input">
-							<span>$</span><input
-								bind:value={form.minimumPayment}
-								name="minimumPayment"
-								type="number"
-								min="0"
-								step="0.01"
-								inputmode="decimal"
-								placeholder="0.00"
-							/>
-						</div>
-					</label>
-
-					<label class="field">
-						<span>Current balance <small>Optional</small></span>
-						<div class="money-input">
-							<span>$</span><input
-								bind:value={form.currentBalance}
-								name="currentBalance"
-								type="number"
-								min="0"
-								step="0.01"
-								inputmode="decimal"
-								placeholder="0.00"
-							/>
-						</div>
-					</label>
-
-					<label class="field">
-						<span>Next due date</span>
-						<input bind:value={form.dueDate} name="dueDate" type="date" />
-					</label>
-
-					<label class="field">
-						<span>Statement date <small>Optional</small></span>
-						<input bind:value={form.statementDate} name="statementDate" type="date" />
-					</label>
+			<section class="cards-section" aria-labelledby="cards-heading">
+				<div class="section-heading">
+					<div>
+						<p class="section-kicker">Overview</p>
+						<h2 id="cards-heading">Your cards</h2>
+					</div>
+					{#if plaid.connectedItems > 0}
+						<button
+							class="button button-quiet"
+							type="button"
+							onclick={syncPlaid}
+							disabled={busyAction !== null}
+							aria-busy={busyAction === 'sync'}
+						>
+							<svg class:spinning={busyAction === 'sync'} aria-hidden="true" viewBox="0 0 20 20">
+								<path d="M16 7a6.5 6.5 0 1 0 .2 5.5M16 3v4h-4"></path>
+							</svg>
+							{busyAction === 'sync' ? 'Syncing…' : 'Sync Plaid'}
+						</button>
+					{/if}
 				</div>
 
-				<label class="checkbox-field">
-					<input bind:checked={form.autopayEnabled} name="autopayEnabled" type="checkbox" />
-					<span>
-						<strong>Autopay is enabled</strong>
-						<small>This is a reminder only—CardDue never initiates payments.</small>
-					</span>
-				</label>
+				{#if loading}
+					<div class="card-grid" aria-label="Loading cards" aria-busy="true">
+						{#each [0, 1, 2] as skeleton (skeleton)}
+							<div class="credit-card skeleton-card" aria-hidden="true">
+								<div class="skeleton skeleton-short"></div>
+								<div class="skeleton skeleton-title"></div>
+								<div class="skeleton skeleton-amount"></div>
+								<div class="skeleton skeleton-row"></div>
+							</div>
+						{/each}
+					</div>
+				{:else if !hasLoadedCards}
+					<div class="empty-state unavailable-state">
+						<h3>Dashboard data is unavailable</h3>
+						<p>
+							CardDue has not shown any balances or dates. Use “Try again” above after checking the
+							local server.
+						</p>
+					</div>
+				{:else if cards.length > 0}
+					<div class="card-grid">
+						{#each cards as card (card.id)}
+							{@const status = dueStatus(card)}
+							<article class:overdue={status.tone === 'danger'} class="credit-card">
+								<div class="card-accent"></div>
+								<header class="card-header">
+									<div class="card-identity">
+										<h3>{card.nickname}</h3>
+										<p>{cardSubtitle(card)}</p>
+									</div>
+									<span class:plaid-source={card.source === 'plaid'} class="source-pill">
+										{card.source === 'plaid' ? 'Plaid' : 'Manual'}
+									</span>
+								</header>
 
-				{#if formError}
-					<p class="form-error" role="alert">{formError}</p>
+								<div class="balance-block">
+									<span>Statement balance</span>
+									<strong class:unavailable={card.statementBalanceCents === null}>
+										{formatMoney(card.statementBalanceCents)}
+									</strong>
+									{#if card.currentBalanceCents !== null}
+										<small>Current {formatMoney(card.currentBalanceCents)}</small>
+									{/if}
+								</div>
+
+								<div class="payment-details">
+									<div>
+										<span>Minimum due</span>
+										<strong>{formatMoney(card.minimumPaymentCents)}</strong>
+									</div>
+									<div>
+										<span>Next due date</span>
+										<strong>{formatDate(card.dueDate)}</strong>
+									</div>
+								</div>
+
+								<div class="card-flags">
+									<span class="due-pill {status.tone}">{status.label}</span>
+									{#if card.autopayEnabled}
+										<span class="autopay-pill">
+											<svg aria-hidden="true" viewBox="0 0 16 16"
+												><path d="m4 8 2.4 2.4L12 5"></path></svg
+											>
+											Autopay
+										</span>
+									{/if}
+								</div>
+
+								<footer class="card-footer">
+									<span>
+										<span class="mini-dot"></span>
+										{ageLabel(
+											card.source === 'plaid'
+												? (card.lastSyncedAt ?? card.updatedAt)
+												: card.updatedAt,
+											card.source === 'plaid' ? 'Synced' : 'Updated'
+										)}
+									</span>
+									{#if card.source === 'manual'}
+										<div class="card-actions">
+											<button
+												type="button"
+												onclick={() => openEditDialog(card)}
+												disabled={busyAction !== null}>Edit</button
+											>
+											<button
+												class="delete-button"
+												type="button"
+												onclick={() => deleteCard(card)}
+												disabled={busyAction !== null}
+											>
+												{deletingId === card.id ? 'Deleting…' : 'Delete'}
+											</button>
+										</div>
+									{/if}
+								</footer>
+							</article>
+						{/each}
+					</div>
+				{:else}
+					<div class="empty-state">
+						<div class="empty-illustration" aria-hidden="true">
+							<svg viewBox="0 0 96 72">
+								<rect x="12" y="13" width="67" height="44" rx="8"></rect>
+								<path d="M12 25h67M21 43h21"></path>
+								<circle cx="75" cy="54" r="14"></circle>
+								<path d="M75 47v7l5 3"></path>
+							</svg>
+						</div>
+						<h3>Your dashboard is ready</h3>
+						<p>
+							Add a card manually without connecting a provider, or choose Plaid when you want
+							automatic updates.
+						</p>
+						<button
+							class="button button-primary"
+							type="button"
+							onclick={openAddDialog}
+							disabled={busyAction !== null}>Add your first card</button
+						>
+					</div>
 				{/if}
+			</section>
 
-				<footer class="dialog-actions">
-					<button
-						class="button button-quiet"
-						type="button"
-						onclick={closeDialog}
-						disabled={busyAction === 'save'}>Cancel</button
-					>
-					<button
-						class="button button-primary"
-						type="submit"
-						disabled={busyAction === 'save'}
-						aria-busy={busyAction === 'save'}
-					>
-						{busyAction === 'save'
-							? 'Saving…'
-							: dialogMode === 'edit'
-								? 'Save changes'
-								: 'Add card'}
-					</button>
-				</footer>
-			</form>
-		</div>
+			<section class="info-grid" aria-label="Privacy and calendar tools">
+				<article class="info-panel privacy-panel">
+					<div class="panel-icon privacy-icon" aria-hidden="true">
+						<svg viewBox="0 0 24 24"
+							><path d="M12 3 5 6v5c0 4.6 2.8 8.2 7 10 4.2-1.8 7-5.4 7-10V6l-7-3Z"></path><path
+								d="m9 12 2 2 4-5"
+							></path></svg
+						>
+					</div>
+					<div class="panel-content">
+						<p class="section-kicker">
+							{authMode === 'cloud' ? 'Cloud privacy' : 'Privacy status'}
+						</p>
+						<h2>
+							{authMode === 'cloud'
+								? 'Your server. No persistent browser copies.'
+								: 'Local first. Always.'}
+						</h2>
+						<p>
+							CardDue adds no analytics and stores no card details in persistent browser storage.
+							{authMode === 'cloud'
+								? ' Your private server holds the encrypted database and controls this session.'
+								: ''}
+							The Plaid Link script is requested only after you press Connect Plaid.
+						</p>
+						<p class="trust-note">
+							<strong>Before you connect:</strong> Plaid’s CDN script runs in this dashboard page and
+							can access data rendered here. Refresh the page after connecting to unload it.
+						</p>
+						<ul class="privacy-list">
+							<li>
+								<span class="check-mark">✓</span><span
+									>{authMode === 'cloud'
+										? 'Card details are encrypted on your private CardDue server'
+										: 'Card details are encrypted in a local database outside this source checkout'}</span
+								>
+							</li>
+							<li>
+								<span class="check-mark">✓</span><span>No tracking pixels or external fonts</span>
+							</li>
+							<li>
+								<span class="connection-mark" class:connected={plaid.connectedItems > 0}></span>
+								<span>
+									{plaid.connectedItems > 0
+										? `${plaid.connectedItems} Plaid ${plaid.connectedItems === 1 ? 'connection' : 'connections'} · ${ageLabel(plaid.lastSyncedAt, 'Synced')}`
+										: plaid.configured
+											? 'Plaid is ready but not connected'
+											: 'Plaid is not configured'}
+								</span>
+							</li>
+						</ul>
+
+						{#if plaidStatusLoading}
+							<div
+								class="connections-loading"
+								aria-label="Loading Plaid connections"
+								aria-busy="true"
+							>
+								<span></span><span></span>
+							</div>
+						{:else if plaidStatusError}
+							<div class="connection-error" role="alert">
+								<span>{plaidStatusError}</span>
+								<button
+									type="button"
+									onclick={() => refreshPlaidStatus()}
+									disabled={busyAction !== null}>Retry</button
+								>
+							</div>
+						{:else if plaidConnections.length > 0}
+							<section class="connection-manager" aria-labelledby="connections-heading">
+								<div class="connection-heading">
+									<h3 id="connections-heading">Connected institutions</h3>
+									<span>Revoke access any time</span>
+								</div>
+								<ul class="connection-list">
+									{#each plaidConnections as connection (connection.id)}
+										<li>
+											<div class="connection-details">
+												<span class="institution-icon" aria-hidden="true">
+													<svg viewBox="0 0 20 20">
+														<path d="m3 8 7-4 7 4M5 9.5v5M8.3 9.5v5m3.4-5v5m3.3-5v5M3 16.5h14"
+														></path>
+													</svg>
+												</span>
+												<span>
+													<strong>{connectionLabel(connection)}</strong>
+													<small class:attention={connection.status === 'needs_update'}>
+														{connection.status === 'needs_update' ? 'Needs attention' : 'Connected'} ·
+														{ageLabel(connection.lastSyncedAt, 'Synced')}
+													</small>
+												</span>
+											</div>
+											<div class="connection-actions">
+												{#if connection.status === 'needs_update'}
+													<button
+														class="update-connection"
+														type="button"
+														onclick={() => updatePlaid(connection)}
+														disabled={busyAction !== null}
+														aria-busy={busyAction === 'update' &&
+															plaidItemActionId === connection.id}
+														aria-describedby="plaid-consent-copy"
+													>
+														{busyAction === 'update' && plaidItemActionId === connection.id
+															? 'Opening…'
+															: 'Update'}
+													</button>
+												{/if}
+												<button
+													class="disconnect-connection"
+													type="button"
+													onclick={() => disconnectPlaid(connection)}
+													disabled={busyAction !== null}
+													aria-busy={busyAction === 'disconnect' &&
+														plaidItemActionId === connection.id}
+													aria-label={`Disconnect ${connectionLabel(connection)}`}
+												>
+													{busyAction === 'disconnect' && plaidItemActionId === connection.id
+														? 'Disconnecting…'
+														: 'Disconnect'}
+												</button>
+											</div>
+										</li>
+									{/each}
+								</ul>
+							</section>
+						{/if}
+					</div>
+				</article>
+
+				<article class="info-panel calendar-panel">
+					<div class="panel-icon calendar-icon" aria-hidden="true">
+						<svg viewBox="0 0 24 24"
+							><rect x="3" y="5" width="18" height="16" rx="3"></rect><path
+								d="M8 3v4M16 3v4M3 10h18M8 14h.01M12 14h.01M16 14h.01M8 17h.01M12 17h.01"
+							></path></svg
+						>
+					</div>
+					<div class="panel-content">
+						<p class="section-kicker">Calendar export</p>
+						<h2>Take due dates with you.</h2>
+						<p>
+							Download a standard calendar file. Amounts are excluded by default for safer sharing.
+						</p>
+						<div class="calendar-actions">
+							<a
+								class="button button-secondary"
+								href={resolve('/api/export/calendar.ics?amounts=0')}
+								download
+							>
+								<svg aria-hidden="true" viewBox="0 0 20 20"
+									><path d="M10 3v10m0 0 4-4m-4 4L6 9M4 16h12"></path></svg
+								>
+								Export dates only
+							</a>
+							<a class="text-link" href={resolve('/api/export/calendar.ics?amounts=1')} download>
+								Include amounts
+								<svg aria-hidden="true" viewBox="0 0 16 16"><path d="m6 3 5 5-5 5"></path></svg>
+							</a>
+						</div>
+					</div>
+				</article>
+			</section>
+		</main>
+
+		<footer class="site-footer">
+			<span>CardDue</span>
+			<span
+				>Open source · {authMode === 'cloud' ? 'Private cloud' : 'Local first'} · No analytics</span
+			>
+		</footer>
 	</div>
+
+	{#if dialogMode}
+		<div class="dialog-layer">
+			<div class="dialog-backdrop"></div>
+			<div
+				bind:this={dialogElement}
+				class="dialog"
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby="card-dialog-title"
+				aria-describedby="card-dialog-description"
+			>
+				<header class="dialog-header">
+					<div>
+						<p class="section-kicker">Manual entry</p>
+						<h2 id="card-dialog-title">{dialogMode === 'edit' ? 'Edit card' : 'Add a card'}</h2>
+						<p id="card-dialog-description">
+							{authMode === 'cloud'
+								? 'Saved to your private CardDue server.'
+								: 'Saved only to CardDue’s local database.'}
+							Enter just what you need.
+						</p>
+					</div>
+					<button class="icon-button" type="button" onclick={closeDialog} aria-label="Close dialog">
+						<svg aria-hidden="true" viewBox="0 0 20 20"><path d="m5 5 10 10M15 5 5 15"></path></svg>
+					</button>
+				</header>
+
+				<form class="card-form" onsubmit={saveCard} autocomplete="off">
+					<div class="form-grid">
+						<label class="field field-wide">
+							<span>Card name <em>Required</em></span>
+							<input
+								bind:this={firstField}
+								bind:value={form.nickname}
+								name="nickname"
+								maxlength="80"
+								placeholder="Everyday card"
+								required
+							/>
+						</label>
+
+						<label class="field">
+							<span>Issuer</span>
+							<input
+								bind:value={form.issuer}
+								name="issuer"
+								maxlength="80"
+								placeholder="Bank name"
+							/>
+						</label>
+
+						<label class="field">
+							<span>Last four digits</span>
+							<input
+								bind:value={form.last4}
+								name="last4"
+								inputmode="numeric"
+								maxlength="4"
+								pattern="[0-9]{4}"
+								placeholder="1234"
+							/>
+						</label>
+
+						<label class="field">
+							<span>Statement balance</span>
+							<div class="money-input">
+								<span>$</span><input
+									bind:value={form.statementBalance}
+									name="statementBalance"
+									type="number"
+									min="0"
+									step="0.01"
+									inputmode="decimal"
+									placeholder="0.00"
+								/>
+							</div>
+						</label>
+
+						<label class="field">
+							<span>Minimum payment</span>
+							<div class="money-input">
+								<span>$</span><input
+									bind:value={form.minimumPayment}
+									name="minimumPayment"
+									type="number"
+									min="0"
+									step="0.01"
+									inputmode="decimal"
+									placeholder="0.00"
+								/>
+							</div>
+						</label>
+
+						<label class="field">
+							<span>Current balance <small>Optional</small></span>
+							<div class="money-input">
+								<span>$</span><input
+									bind:value={form.currentBalance}
+									name="currentBalance"
+									type="number"
+									min="0"
+									step="0.01"
+									inputmode="decimal"
+									placeholder="0.00"
+								/>
+							</div>
+						</label>
+
+						<label class="field">
+							<span>Next due date</span>
+							<input bind:value={form.dueDate} name="dueDate" type="date" />
+						</label>
+
+						<label class="field">
+							<span>Statement date <small>Optional</small></span>
+							<input bind:value={form.statementDate} name="statementDate" type="date" />
+						</label>
+					</div>
+
+					<label class="checkbox-field">
+						<input bind:checked={form.autopayEnabled} name="autopayEnabled" type="checkbox" />
+						<span>
+							<strong>Autopay is enabled</strong>
+							<small>This is a reminder only—CardDue never initiates payments.</small>
+						</span>
+					</label>
+
+					{#if formError}
+						<p class="form-error" role="alert">{formError}</p>
+					{/if}
+
+					<footer class="dialog-actions">
+						<button
+							class="button button-quiet"
+							type="button"
+							onclick={closeDialog}
+							disabled={busyAction === 'save'}>Cancel</button
+						>
+						<button
+							class="button button-primary"
+							type="submit"
+							disabled={busyAction === 'save'}
+							aria-busy={busyAction === 'save'}
+						>
+							{busyAction === 'save'
+								? 'Saving…'
+								: dialogMode === 'edit'
+									? 'Save changes'
+									: 'Add card'}
+						</button>
+					</footer>
+				</form>
+			</div>
+		</div>
+	{/if}
 {/if}
 
 {#if notice}
@@ -1345,6 +1850,231 @@
 {/if}
 
 <style>
+	.auth-shell {
+		display: grid;
+		min-height: 100vh;
+		min-height: 100dvh;
+		place-items: center;
+		padding: 1.5rem;
+		background:
+			radial-gradient(circle at 50% 0%, rgba(193, 222, 205, 0.42), transparent 30rem),
+			var(--paper-soft);
+	}
+
+	.auth-shell.auth-loading {
+		align-content: center;
+		gap: 1rem;
+		color: var(--muted);
+	}
+
+	.auth-loading p {
+		margin: 0;
+		font-size: 0.78rem;
+	}
+
+	.auth-spinner {
+		width: 25px;
+		height: 25px;
+		border: 2px solid #d6ddd7;
+		border-top-color: var(--green);
+		border-radius: 50%;
+		animation: spin 850ms linear infinite;
+	}
+
+	.auth-card {
+		width: min(100%, 440px);
+		padding: 2rem;
+		border: 1px solid var(--line);
+		border-radius: 17px;
+		background: var(--paper);
+		box-shadow: var(--shadow-md);
+	}
+
+	.auth-brand {
+		display: flex;
+		gap: 0.65rem;
+		align-items: center;
+		justify-content: center;
+		color: var(--ink);
+		font-size: 1.04rem;
+		font-weight: 760;
+		letter-spacing: -0.025em;
+	}
+
+	.auth-lock {
+		display: grid;
+		width: 48px;
+		height: 48px;
+		place-items: center;
+		margin: 2rem auto 1.1rem;
+		border-radius: 14px;
+		color: var(--green);
+		background: var(--green-soft);
+	}
+
+	.auth-lock svg {
+		width: 25px;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.65;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+	}
+
+	.auth-lock.error-lock {
+		color: var(--red);
+		font-size: 1.2rem;
+		font-weight: 800;
+		background: var(--red-soft);
+	}
+
+	.auth-card > .section-kicker,
+	.auth-card > h1,
+	.auth-card > .auth-intro,
+	.auth-error-card {
+		text-align: center;
+	}
+
+	.auth-card > .section-kicker {
+		margin-bottom: 0.4rem;
+	}
+
+	.auth-card h1 {
+		margin: 0;
+		font-size: 1.55rem;
+		font-weight: 740;
+		letter-spacing: -0.04em;
+	}
+
+	.auth-intro,
+	.auth-error-card > p {
+		margin: 0.55rem 0 0;
+		color: var(--muted);
+		font-size: 0.79rem;
+		line-height: 1.55;
+	}
+
+	.auth-error-card > .button {
+		margin-top: 1.25rem;
+	}
+
+	.auth-notice {
+		margin: 1rem 0 0;
+		padding: 0.65rem 0.75rem;
+		border: 1px solid #c6ddd0;
+		border-radius: 8px;
+		color: #285f43;
+		font-size: 0.69rem;
+		line-height: 1.45;
+		background: #f0f8f3;
+	}
+
+	.login-form {
+		display: grid;
+		gap: 0.48rem;
+		margin-top: 1.5rem;
+	}
+
+	.login-form > label {
+		color: #3e4b43;
+		font-size: 0.69rem;
+		font-weight: 690;
+	}
+
+	.password-field {
+		display: flex;
+		overflow: hidden;
+		border: 1px solid var(--line-strong);
+		border-radius: 9px;
+		background: white;
+		transition:
+			border-color 140ms ease,
+			box-shadow 140ms ease;
+	}
+
+	.password-field:focus-within {
+		border-color: var(--green);
+		box-shadow: 0 0 0 3px rgba(23, 107, 73, 0.1);
+	}
+
+	.password-field input {
+		width: 100%;
+		min-width: 0;
+		min-height: 44px;
+		padding: 0.65rem 0.75rem;
+		border: 0;
+		font-size: 0.84rem;
+		outline: 0;
+	}
+
+	.password-field input[aria-invalid='true'] {
+		color: #702727;
+	}
+
+	.password-field button {
+		min-width: 55px;
+		min-height: 44px;
+		padding: 0.5rem 0.7rem;
+		border: 0;
+		border-left: 1px solid var(--line);
+		color: var(--green);
+		font-size: 0.66rem;
+		font-weight: 750;
+		background: var(--paper-soft);
+		cursor: pointer;
+	}
+
+	.login-error {
+		margin: 0.15rem 0 0;
+		color: #8b3030;
+		font-size: 0.68rem;
+		line-height: 1.4;
+	}
+
+	.login-button {
+		width: 100%;
+		margin-top: 0.65rem;
+	}
+
+	.cloud-privacy {
+		display: flex;
+		gap: 0.65rem;
+		align-items: flex-start;
+		margin-top: 1.25rem;
+		padding: 0.75rem;
+		border: 1px solid #d9e2da;
+		border-radius: 9px;
+		background: var(--paper-soft);
+	}
+
+	.cloud-privacy svg {
+		width: 19px;
+		flex: 0 0 auto;
+		fill: none;
+		stroke: var(--green);
+		stroke-width: 1.6;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+	}
+
+	.cloud-privacy p {
+		margin: 0;
+		color: var(--muted);
+		font-size: 0.64rem;
+		line-height: 1.5;
+	}
+
+	.cloud-privacy strong {
+		color: #35443b;
+	}
+
+	.auth-footer {
+		margin: 1rem 0 0;
+		color: var(--faint);
+		font-size: 0.6rem;
+		text-align: center;
+	}
+
 	.skip-link {
 		position: fixed;
 		top: 0.75rem;
@@ -1422,6 +2152,35 @@
 		color: var(--muted);
 		font-size: 0.78rem;
 		font-weight: 650;
+	}
+
+	.header-controls {
+		display: flex;
+		gap: 0.8rem;
+		align-items: center;
+	}
+
+	.logout-button {
+		min-height: 34px;
+		padding: 0.4rem 0.65rem;
+		border: 1px solid var(--line-strong);
+		border-radius: 8px;
+		color: var(--muted);
+		font-size: 0.68rem;
+		font-weight: 700;
+		background: rgba(255, 255, 255, 0.65);
+		cursor: pointer;
+	}
+
+	.logout-button:hover:not(:disabled) {
+		color: var(--red);
+		border-color: #d7aaa6;
+		background: white;
+	}
+
+	.logout-button:disabled {
+		cursor: wait;
+		opacity: 0.6;
 	}
 
 	.status-dot,
@@ -2662,6 +3421,14 @@
 	}
 
 	@media (max-width: 680px) {
+		.auth-shell {
+			padding: 1rem;
+		}
+
+		.auth-card {
+			padding: 1.4rem;
+		}
+
 		.app-shell {
 			width: min(100% - 1.5rem, 1180px);
 		}
@@ -2750,6 +3517,10 @@
 	}
 
 	@media (max-width: 430px) {
+		.header-controls {
+			gap: 0.5rem;
+		}
+
 		.header-status span:last-child {
 			display: none;
 		}

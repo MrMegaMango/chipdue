@@ -1,12 +1,16 @@
 import type { RequestHandler } from './$types';
-import { getInstallId } from '$lib/server/database';
 import { apiError, apiJson } from '$lib/server/http';
 import { isPlaidConfigured } from '$lib/server/plaid';
+import { getRuntimeMode } from '$lib/server/runtime';
 
-export const GET: RequestHandler = () => {
+export const GET: RequestHandler = async () => {
 	try {
-		getInstallId();
-		return apiJson({ ok: true, storage: 'local-encrypted', plaidConfigured: isPlaidConfigured() });
+		const mode = getRuntimeMode();
+		return apiJson({
+			ok: true,
+			storage: mode === 'cloud' ? 'cloud-encrypted' : 'local-encrypted',
+			plaidConfigured: isPlaidConfigured()
+		});
 	} catch (error) {
 		return apiError(error);
 	}

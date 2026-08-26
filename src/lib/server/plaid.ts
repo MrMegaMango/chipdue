@@ -77,10 +77,10 @@ function plaidErrorCode(error: unknown): string | null {
 	return typeof code === 'string' && /^[A-Z0-9_]{1,64}$/.test(code) ? code : null;
 }
 
-function sanitizedPlaidError(error: unknown, itemId?: string): AppError {
+async function sanitizedPlaidError(error: unknown, itemId?: string): Promise<AppError> {
 	const code = plaidErrorCode(error);
 	if (code === 'ITEM_LOGIN_REQUIRED' && itemId) {
-		markPlaidItemNeedsUpdate(itemId);
+		await markPlaidItemNeedsUpdate(itemId);
 		return new AppError('PLAID_LOGIN_REQUIRED', 'This connection needs to be updated.', 409);
 	}
 	if (code === 'PRODUCT_NOT_READY') {
@@ -93,13 +93,13 @@ function sanitizedPlaidError(error: unknown, itemId?: string): AppError {
 	return new AppError('PLAID_UNAVAILABLE', 'Plaid could not complete the request.', 502);
 }
 
-function baseLinkTokenRequest(): Omit<LinkTokenCreateRequest, 'products'> {
+async function baseLinkTokenRequest(): Promise<Omit<LinkTokenCreateRequest, 'products'>> {
 	const redirectUri = process.env.PLAID_REDIRECT_URI?.trim();
 	return {
 		client_name: 'CardDue',
 		country_codes: [CountryCode.Us],
 		language: 'en',
-		user: { client_user_id: getInstallId() },
+		user: { client_user_id: await getInstallId() },
 		...(redirectUri ? { redirect_uri: redirectUri } : {})
 	};
 }
@@ -107,7 +107,7 @@ function baseLinkTokenRequest(): Omit<LinkTokenCreateRequest, 'products'> {
 export async function createPlaidLinkToken(): Promise<{ linkToken: string; expiration: string }> {
 	try {
 		const response = await getPlaidClient().linkTokenCreate({
-			...baseLinkTokenRequest(),
+			...(await baseLinkTokenRequest()),
 			products: [Products.Liabilities],
 			account_filters: {
 				credit: { account_subtypes: [CreditAccountSubtype.CreditCard] }
@@ -116,23 +116,23 @@ export async function createPlaidLinkToken(): Promise<{ linkToken: string; expir
 		return { linkToken: response.data.link_token, expiration: response.data.expiration };
 	} catch (error) {
 		if (error instanceof AppError) throw error;
-		throw sanitizedPlaidError(error);
+		throw await sanitizedPlaidError(error);
 	}
 }
 
 export async function createPlaidUpdateToken(
 	localItemId: string
 ): Promise<{ linkToken: string; expiration: string }> {
-	const item = getPrivatePlaidItem(localItemId);
+	const item = await getPrivatePlaidItem(localItemId);
 	try {
 		const response = await getPlaidClient().linkTokenCreate({
-			...baseLinkTokenRequest(),
+			...(await baseLinkTokenRequest()),
 			access_token: item.accessToken
 		});
 		return { linkToken: response.data.link_token, expiration: response.data.expiration };
 	} catch (error) {
 		if (error instanceof AppError) throw error;
-		throw sanitizedPlaidError(error, localItemId);
+		throw await sanitizedPlaidError(error, localItemId);
 	}
 }
 
@@ -148,11 +148,11 @@ export async function exchangePlaidPublicToken(
 		accessToken = response.data.access_token;
 	} catch (error) {
 		if (error instanceof AppError) throw error;
-		throw sanitizedPlaidError(error);
+		throw await sanitizedPlaidError(error);
 	}
 
-	const localItemId = savePlaidItem(itemId, accessToken, institutionName);
-	return { connection: publicPlaidConnection(localItemId), synced: false };
+	const localItemId = await savePlaidItem(itemId, accessToken, institutionName);
+	return { connection: await publicPlaidConnection(localItemId), synced: false };
 }
 
 function amountToCents(value: number | null): number | null {
@@ -183,7 +183,7 @@ function safeDate(value: string | null): string | null {
 export async function syncPlaidItem(
 	localItemId: string
 ): Promise<{ syncedAt: string; count: number }> {
-	const item = getPrivatePlaidItem(localItemId);
+	const item = await getPrivatePlaidItem(localItemId);
 	try {
 		const response = await getPlaidClient().liabilitiesGet({ access_token: item.accessToken });
 		const liabilities = new Map(
@@ -215,12 +215,12 @@ export async function syncPlaidItem(
 		}
 
 		const syncedAt = new Date().toISOString();
-		replacePlaidCards(localItemId, snapshots, syncedAt);
-		markPlaidItemSynced(localItemId, syncedAt);
+		await replacePlaidCards(localItemId, snapshots, syncedAt);
+		await markPlaidItemSynced(localItemId, syncedAt);
 		return { syncedAt, count: snapshots.length };
 	} catch (error) {
 		if (error instanceof AppError) throw error;
-		throw sanitizedPlaidError(error, localItemId);
+		throw await sanitizedPlaidError(error, localItemId);
 	}
 }
 
@@ -229,7 +229,7 @@ export async function syncAllPlaidItems(): Promise<{
 	cardCount: number;
 	lastSyncedAt: string | null;
 }> {
-	const connections = listPlaidConnections();
+	const connections = await listPlaidConnections();
 	const results = await Promise.all(connections.map((connection) => syncPlaidItem(connection.id)));
 	return {
 		syncedItems: results.length,
@@ -243,17 +243,17 @@ export async function syncAllPlaidItems(): Promise<{
 }
 
 export async function disconnectPlaidItem(localItemId: string): Promise<void> {
-	const item = getPrivatePlaidItem(localItemId);
+	const item = await getPrivatePlaidItem(localItemId);
 	try {
 		await getPlaidClient().itemRemove({ access_token: item.accessToken });
 	} catch (error) {
 		if (error instanceof AppError) throw error;
 		const code = plaidErrorCode(error);
 		if (code !== 'INVALID_ACCESS_TOKEN' && code !== 'ITEM_NOT_FOUND') {
-			throw sanitizedPlaidError(error, localItemId);
+			throw await sanitizedPlaidError(error, localItemId);
 		}
 	}
-	removeLocalPlaidItem(localItemId);
+	await removeLocalPlaidItem(localItemId);
 }
 
 export function resetPlaidClientForTests(): void {

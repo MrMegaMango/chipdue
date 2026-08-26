@@ -1,38 +1,10 @@
 import type { Handle, HandleServerError } from '@sveltejs/kit';
+import { authenticateSession, SESSION_COOKIE_NAME } from '$lib/server/auth';
+import { apiError, apiJson } from '$lib/server/http';
+import { assertSecureCloudRequest, isLocalAuthority } from '$lib/server/request-security';
+import { getRuntimeMode } from '$lib/server/runtime';
 
-function hasLocalAuthority(authority: string | null): boolean {
-	if (!authority || authority.length > 255 || /[\s,@/\\?#]/.test(authority)) return false;
-
-	if (authority.startsWith('[')) {
-		const match = authority.match(/^\[([0-9a-f:]+)\](?::(\d{1,5}))?$/i);
-		if (!match || match[1].toLowerCase() !== '::1') return false;
-		return validPort(match[2]);
-	}
-
-	const match = authority.match(/^([^:]+)(?::(\d{1,5}))?$/);
-	if (!match || !validPort(match[2])) return false;
-	const hostname = match[1].toLowerCase();
-	return hostname === '127.0.0.1' || hostname === 'localhost';
-}
-
-function validPort(port: string | undefined): boolean {
-	if (port === undefined) return true;
-	const value = Number(port);
-	return Number.isInteger(value) && value >= 1 && value <= 65_535;
-}
-
-export const handle: Handle = async ({ event, resolve }) => {
-	if (
-		process.env.CARDDUE_ALLOW_REMOTE !== '1' &&
-		!hasLocalAuthority(event.request.headers.get('host'))
-	) {
-		return new Response('CardDue accepts local connections only.', {
-			status: 403,
-			headers: { 'content-type': 'text/plain; charset=utf-8' }
-		});
-	}
-
-	const response = await resolve(event);
+function secureHeaders(response: Response): Response {
 	response.headers.set('cache-control', 'no-store, max-age=0');
 	response.headers.set('cross-origin-opener-policy', 'same-origin-allow-popups');
 	response.headers.set('cross-origin-resource-policy', 'same-origin');
@@ -45,10 +17,52 @@ export const handle: Handle = async ({ event, resolve }) => {
 	response.headers.set('x-frame-options', 'DENY');
 	response.headers.set('x-robots-tag', 'noindex, nofollow, noarchive');
 	return response;
+}
+
+export const handle: Handle = async ({ event, resolve }) => {
+	try {
+		const mode = getRuntimeMode();
+		if (mode === 'local') {
+			if (
+				process.env.CARDDUE_ALLOW_REMOTE !== '1' &&
+				!isLocalAuthority(event.request.headers.get('host'))
+			) {
+				return secureHeaders(
+					new Response('CardDue accepts local connections only.', {
+						status: 403,
+						headers: { 'content-type': 'text/plain; charset=utf-8' }
+					})
+				);
+			}
+		} else {
+			assertSecureCloudRequest(event.request, event.url);
+			const path = event.url.pathname.replace(/\/+$/, '') || '/';
+			const matchedPath = event.route?.id?.replace(/\/+$/, '') || path;
+			const publicApi =
+				matchedPath === '/api/health' ||
+				matchedPath === '/api/auth/session' ||
+				matchedPath === '/api/auth/login' ||
+				matchedPath === '/api/auth/logout';
+			if (matchedPath.startsWith('/api/') && !publicApi) {
+				const authenticated = await authenticateSession(event.cookies.get(SESSION_COOKIE_NAME));
+				if (!authenticated) {
+					return secureHeaders(
+						apiJson(
+							{ error: { code: 'AUTH_REQUIRED', message: 'Authentication is required.' } },
+							401
+						)
+					);
+				}
+			}
+		}
+	} catch (error) {
+		return secureHeaders(apiError(error));
+	}
+
+	return secureHeaders(await resolve(event));
 };
 
 export const handleError: HandleServerError = ({ status }) => ({
-	message:
-		status >= 500 ? 'An unexpected local error occurred.' : 'The request could not be completed.',
+	message: status >= 500 ? 'An unexpected error occurred.' : 'The request could not be completed.',
 	code: status >= 500 ? 'INTERNAL_ERROR' : 'REQUEST_ERROR'
 });

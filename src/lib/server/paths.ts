@@ -1,5 +1,5 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, realpathSync, type Stats } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { AppError } from './errors';
 
@@ -9,16 +9,37 @@ export interface DataPaths {
 	masterKey: string;
 }
 
+function configuredHomeDirectory(): string | undefined {
+	return process.platform === 'win32'
+		? process.env.USERPROFILE?.trim() || undefined
+		: process.env.HOME?.trim() || undefined;
+}
+
+function userHomeDirectory(): string {
+	const value = configuredHomeDirectory();
+	if (!value) {
+		throw new AppError(
+			'PRIVATE_HOME_UNAVAILABLE',
+			'The private application-data directory could not be located.',
+			500
+		);
+	}
+	return value;
+}
+
 function defaultDataDirectory(): string {
 	if (process.platform === 'win32') {
-		return join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'CardDue');
+		return join(
+			process.env.LOCALAPPDATA ?? join(userHomeDirectory(), 'AppData', 'Local'),
+			'CardDue'
+		);
 	}
 
 	if (process.platform === 'darwin') {
-		return join(homedir(), 'Library', 'Application Support', 'CardDue');
+		return join(userHomeDirectory(), 'Library', 'Application Support', 'CardDue');
 	}
 
-	return join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local', 'share'), 'carddue');
+	return join(process.env.XDG_DATA_HOME ?? join(userHomeDirectory(), '.local', 'share'), 'carddue');
 }
 
 function lstatIfPresent(path: string): Stats | null {
@@ -87,9 +108,12 @@ function requireOutsideCheckout(target: string): void {
 
 function rejectBroadCustomDataDirectory(dataDirectory: string): void {
 	if (process.env.CARDDUE_DATA_DIR === undefined) return;
-	const broadDirectories = [parse(dataDirectory).root, homedir(), tmpdir()].map((path) =>
-		resolveThroughExistingAncestor(path)
-	);
+	const homeDirectory = configuredHomeDirectory();
+	const broadDirectories = [
+		parse(dataDirectory).root,
+		tmpdir(),
+		...(homeDirectory ? [homeDirectory] : [])
+	].map((path) => resolveThroughExistingAncestor(path));
 	if (broadDirectories.includes(dataDirectory)) {
 		throw new AppError(
 			'UNSAFE_DATA_PATH',

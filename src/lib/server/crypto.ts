@@ -8,10 +8,11 @@ import {
 import { chmodSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { AppError } from './errors';
 import { assertPrivateFilePath, ensurePrivateDataDirectory } from './paths';
+import { getCloudRuntimeConfig, getRuntimeMode } from './runtime';
 
 const KEY_BYTES = 32;
 const IV_BYTES = 12;
-let cachedKey: { path: string; value: Buffer } | undefined;
+let cachedKey: { source: string; value: Buffer } | undefined;
 
 function readAndValidateKey(path: string): Buffer {
 	assertPrivateFilePath(path);
@@ -30,8 +31,12 @@ function readAndValidateKey(path: string): Buffer {
 }
 
 export function getMasterKey(): Buffer {
+	if (getRuntimeMode() === 'cloud') {
+		return getCloudRuntimeConfig().masterKey;
+	}
+
 	const { masterKey } = ensurePrivateDataDirectory();
-	if (cachedKey?.path === masterKey) return cachedKey.value;
+	if (cachedKey?.source === masterKey) return cachedKey.value;
 
 	try {
 		writeFileSync(masterKey, `${randomBytes(KEY_BYTES).toString('base64url')}\n`, {
@@ -50,7 +55,7 @@ export function getMasterKey(): Buffer {
 	}
 
 	const value = readAndValidateKey(masterKey);
-	cachedKey = { path: masterKey, value };
+	cachedKey = { source: masterKey, value };
 	return value;
 }
 
@@ -94,7 +99,7 @@ export function decryptSecret(envelope: string, purpose: string): string {
 		]).toString('utf8');
 	} catch (error) {
 		if (error instanceof AppError) throw error;
-		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted local data could not be read.', 500);
+		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
 	}
 }
 
@@ -107,7 +112,7 @@ export function decryptJson<T>(envelope: string, purpose: string): T {
 		return JSON.parse(decryptSecret(envelope, purpose)) as T;
 	} catch (error) {
 		if (error instanceof AppError) throw error;
-		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted local data could not be read.', 500);
+		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
 	}
 }
 
@@ -116,6 +121,18 @@ export function privateFingerprint(value: string, purpose: string): string {
 		.update(`carddue:${purpose}:`)
 		.update(value)
 		.digest('base64url');
+}
+
+export function privateUuid(value: string, purpose: string): string {
+	const bytes = createHmac('sha256', getMasterKey())
+		.update(`carddue:${purpose}:uuid-v1:`)
+		.update(value)
+		.digest()
+		.subarray(0, 16);
+	bytes[6] = (bytes[6] & 0x0f) | 0x50;
+	bytes[8] = (bytes[8] & 0x3f) | 0x80;
+	const hex = bytes.toString('hex');
+	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 export function secretsEqual(left: string, right: string): boolean {

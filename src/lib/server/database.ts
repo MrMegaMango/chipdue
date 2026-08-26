@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { chmodSync } from 'node:fs';
 import Database from 'better-sqlite3';
+import { cloudQuery } from './cloud-database';
 import { AppError } from './errors';
 import { assertPrivateFilePath, ensurePrivateDataDirectory } from './paths';
+import { getRuntimeMode } from './runtime';
 
 let singleton: Database.Database | undefined;
 let singletonPath: string | undefined;
@@ -92,7 +94,21 @@ export function getDatabase(): Database.Database {
 	}
 }
 
-export function getInstallId(): string {
+export async function getInstallId(): Promise<string> {
+	if (getRuntimeMode() === 'cloud') {
+		const installId = randomUUID();
+		const rows = await cloudQuery<{ value: string }>(
+			`INSERT INTO public.carddue_metadata AS metadata (key, value) VALUES ('install_id', $1)
+			 ON CONFLICT (key) DO UPDATE SET value = metadata.value
+			 RETURNING value`,
+			[installId]
+		);
+		if (!rows[0]?.value) {
+			throw new AppError('DATABASE_UNAVAILABLE', 'Encrypted cloud storage is unavailable.', 503);
+		}
+		return rows[0].value;
+	}
+
 	const database = getDatabase();
 	const existing = database
 		.prepare('SELECT value FROM metadata WHERE key = ?')

@@ -1,8 +1,11 @@
 # CardDue
 
-CardDue is a private, local-first dashboard for tracking credit-card statement balances, minimum payments, and due dates. It works entirely in manual mode and can optionally sync the same fields through Plaid Liabilities.
+CardDue is a privacy-first dashboard for tracking credit-card statement balances, minimum payments, and due dates. It works entirely in manual mode and can optionally sync the same limited fields through Plaid Liabilities.
 
-The application is designed to run on one computer and bind only to the loopback interface. It has no analytics, advertising, cloud database, account system, or transaction tracking.
+Choose one of two deployment modes:
+
+- **Local mode** is the default. It binds to loopback, needs no login, and stores an encrypted SQLite database outside the source checkout.
+- **Private cloud mode** is a single-owner Vercel deployment. It requires a password, stores only application-encrypted records in Neon Postgres, and keeps its decryption key in Vercel's Production environment.
 
 > CardDue is a reminder tool, not a payment service. Always verify amounts and dates with the card issuer, and keep issuer alerts or autopay as a backstop.
 
@@ -10,36 +13,37 @@ The application is designed to run on one computer and bind only to the loopback
 
 - Track statement balance, minimum due, current balance, due date, statement date, and autopay status.
 - Connect Plaid only when you explicitly choose to; manual mode never contacts Plaid.
-- Store the SQLite database and encryption key outside the Git checkout.
-- Encrypt long-lived Plaid access tokens and Item IDs with AES-256-GCM.
-- Request only Plaid Liabilities—never transaction history, identity, or account numbers.
+- Encrypt card payloads, Plaid access tokens, Item IDs, and institution names with AES-256-GCM.
+- Request only Plaid Liabilities - never transaction history, identity, or full account numbers.
 - Export due dates as an iCalendar file, with amounts omitted by default.
-- Run automated checks for secrets, personal paths, email addresses, card numbers, and private files before every commit.
+- Keep financial data out of browser persistence, logs, source code, CI, and Git history.
+- Run privacy and full-history secret checks before every push.
 
 ## Privacy architecture
 
 ```text
-Browser memory
-    │ same-origin requests on loopback
-    ▼
-Local SvelteKit server
-    ├── encrypted credentials + minimal SQLite records outside the repository
-    └── Plaid API, only when configured and explicitly used
+Local mode
+Browser memory -> loopback SvelteKit server -> encrypted local SQLite
 
-Git repository
-    └── source code and synthetic tests only
+Private cloud mode
+Browser memory -> authenticated Vercel Function -> encrypted Neon Postgres rows
+                                      |
+                                      +-> Plaid, only when configured and used
+
+Git repository -> source code and synthetic tests only
 ```
 
-Read [PRIVACY.md](PRIVACY.md) and the [threat model](docs/THREAT_MODEL.md) before connecting a real account.
+Cloud encryption protects against a database-only disclosure. It is not zero-knowledge encryption: the running Vercel Function has the key so it can sync Plaid and render your records after login. Read [PRIVACY.md](PRIVACY.md) and the [threat model](docs/THREAT_MODEL.md) before entering real data.
 
 ## Requirements
 
 - Node.js 22 or newer
 - npm
 - Git
-- Optional: a Plaid account eligible for its free Trial plan
+- Optional local sync: a Plaid account
+- Optional cloud hosting: personal Vercel and Neon accounts
 
-## Start in manual mode
+## Start locally
 
 ```sh
 npm ci
@@ -47,7 +51,7 @@ npm run privacy:init
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`. No credentials are needed for manual mode.
+Open `http://127.0.0.1:5173`. No credentials are needed for local manual mode.
 
 For a production-style local build:
 
@@ -58,33 +62,57 @@ npm start
 
 The production server listens on `127.0.0.1:4173` by default.
 
-## Optional Plaid setup
+## Deploy a private cloud instance
 
-1. Create a Plaid Dashboard team and confirm that the Trial plan is available for your region and account.
-2. Copy `.env.example` to `.env.local`.
-3. Add your Plaid client ID and secret to `.env.local`; never add a `PUBLIC_` or `VITE_` prefix.
-4. Keep `PLAID_ENV=sandbox` until the complete local flow is tested.
-5. Restart CardDue, then choose **Connect with Plaid**.
+Hosted mode is deliberately single-owner. It fails closed unless all authentication, encryption, database, HTTPS, and exact-host settings are valid.
 
-Plaid's current Trial plan supports real data and Liabilities for up to ten lifetime Production Items. An Item is one institution login and can contain multiple cards. Removing an Item does not restore the slot. Plaid does not state an expiration, but its terms can change, so CardDue always retains a provider-independent manual mode.
+The deployment process uses:
+
+- A dedicated, non-owner Neon runtime role with only required row permissions, reached through a direct, unpooled TLS URL
+- A strong generated login password and separate 256-bit encryption key
+- Production-only Vercel secrets; preview deployments receive no real database or key
+- An exact production-host allowlist that rejects generated and old deployment URLs
+- Secure, HTTP-only, same-site sessions with server-side revocation and login throttling
+
+Follow [the private Vercel deployment guide](docs/DEPLOY_VERCEL.md). Do not set `CARDDUE_ALLOW_REMOTE=1` as a substitute for cloud mode.
+
+CardDue rejects Neon `-pooler` URLs for both migration and runtime use. Running `cloud:migrate` for an existing role always rotates it to a distinct credential, terminates its sessions, and can briefly interrupt access; use `cloud:verify` for routine checks. Update the protected recovery record, local runtime URL, and Vercel `DATABASE_URL` only after migration and restricted-runtime verification succeed, then redeploy.
+
+Neon currently describes its Free plan as having no time limit, while Vercel Hobby is free for personal, noncommercial use within quotas. Service terms can change. The code and local mode remain provider-independent and free.
 
 Official references:
 
-- [Plaid Trial-plan billing](https://plaid.com/docs/account/billing/)
+- [Neon pricing](https://neon.com/pricing)
+- [Vercel Hobby plan](https://vercel.com/docs/plans/hobby)
+- [Vercel deployment protection](https://vercel.com/docs/deployment-protection)
+
+## Optional Plaid setup
+
+1. Create a Plaid Dashboard team and confirm the available plan for your region and account.
+2. Add `PLAID_CLIENT_ID`, `PLAID_SECRET`, and `PLAID_ENV` to `.env.local` for local use or Vercel's Production environment for hosted use.
+3. Never add a `PUBLIC_` or `VITE_` prefix to a secret.
+4. Keep `PLAID_ENV=sandbox` until the complete flow is tested.
+5. Restart or redeploy CardDue, then choose **Connect with Plaid**.
+
+Plaid's Trial plan currently supports real data and Liabilities for a limited number of lifetime Production Items. An Item is one institution login and can contain multiple cards. Provider terms can change, so CardDue always retains manual mode.
+
+Official references:
+
+- [Plaid billing](https://plaid.com/docs/account/billing/)
 - [Plaid Liabilities](https://plaid.com/docs/liabilities/)
 - [Plaid Link security flow](https://plaid.com/docs/link/)
 
 ## Where private data lives
 
-CardDue chooses the platform application-data directory by default:
+In local mode, CardDue uses the platform application-data directory:
 
 - Linux/WSL: `$XDG_DATA_HOME/carddue`, or `~/.local/share/carddue`
 - macOS: `~/Library/Application Support/CardDue`
 - Windows: `%LOCALAPPDATA%\CardDue`
 
-The repository ignores common database, environment, export, log, trace, certificate, and backup formats as a second layer of protection. CardDue should refuse a custom data path that resolves inside a Git worktree.
+In cloud mode, Neon stores encrypted application rows plus non-sensitive operational metadata and hashed session/rate-limit identifiers. Vercel stores the database URL, password hash, and encryption key as sensitive Production environment variables. Keep the generated recovery bundle outside every Git checkout with owner-only permissions.
 
-On Linux or macOS, an existing custom data directory must already be owner-only (for example, mode `0700`). Broad locations such as the filesystem root, home directory, or system temporary directory are rejected.
+The repository ignores common database, environment, export, log, trace, certificate, and backup formats as a second layer of protection. The privacy scanner rejects secrets, personal paths, card numbers, and likely private artifacts. Every Vercel build path uses a committed verified wrapper that refuses checkout environment files and fails if output contains a private-home directory, database, credential-like artifact, source map, private path, configured secret, compact token, or private-key material.
 
 ## Development
 
@@ -92,14 +120,14 @@ On Linux or macOS, an existing custom data directory must already be owner-only 
 npm run ci
 ```
 
-This runs the privacy audit, formatting and lint checks, type checks, unit tests, and a production build. Install the repository hooks before contributing:
+This runs the privacy audit, formatting and lint checks, type checks, unit tests, and both production build paths. Install the repository hooks before contributing:
 
 ```sh
 git config core.hooksPath .githooks
 npm run privacy:init
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and the [publishing checklist](docs/PUBLISHING.md). Never copy a live Plaid response into a fixture, issue, pull request, screenshot, or log—even after attempting to redact it.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and the [publishing checklist](docs/PUBLISHING.md). Never copy a live Plaid response into a fixture, issue, pull request, screenshot, or log - even after attempting to redact it.
 
 ## License
 

@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { Card, CardSource } from '$lib/types';
-import { decryptJson, encryptJson, privateFingerprint } from './crypto';
+import { cloudQuery, cloudTransaction, type CloudStatement } from './cloud-database';
+import { decryptJson, encryptJson, privateFingerprint, privateUuid } from './crypto';
 import { getDatabase } from './database';
 import { AppError } from './errors';
+import { getRuntimeMode } from './runtime';
 import type { CreateManualCardData, UpdateManualCardData } from './schemas';
 
 interface CardPayload {
@@ -19,13 +21,17 @@ interface CardPayload {
 	autopayEnabled: boolean;
 }
 
-interface CardRow {
+interface CardRow extends Record<string, unknown> {
 	id: string;
 	source: CardSource;
 	payload_enc: string;
 	last_synced_at: string | null;
 	created_at: string;
 	updated_at: string;
+}
+
+interface PlaidCardRow extends CardRow {
+	external_account_ref: string;
 }
 
 export interface PlaidCardSnapshot extends CardPayload {
@@ -40,32 +46,24 @@ function decodePayload(row: CardRow): CardPayload {
 		typeof payload.currency !== 'string' ||
 		!('dueDate' in payload)
 	) {
-		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted local data could not be read.', 500);
+		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
 	}
 	return payload;
 }
 
 function rowToCard(row: CardRow): Card {
-	const payload = decodePayload(row);
 	return {
 		id: row.id,
 		source: row.source,
-		...payload,
+		...decodePayload(row),
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 		lastSyncedAt: row.last_synced_at
 	};
 }
 
-export function listCards(): Card[] {
-	const rows = getDatabase()
-		.prepare(
-			`SELECT id, source, payload_enc, last_synced_at, created_at, updated_at
-			 FROM cards`
-		)
-		.all() as CardRow[];
-
-	return rows.map(rowToCard).sort((left, right) => {
+function sortCards(cards: Card[]): Card[] {
+	return cards.sort((left, right) => {
 		if (left.dueDate && right.dueDate && left.dueDate !== right.dueDate) {
 			return left.dueDate.localeCompare(right.dueDate);
 		}
@@ -75,35 +73,87 @@ export function listCards(): Card[] {
 	});
 }
 
-export function getCard(id: string): Card {
-	const row = getDatabase()
-		.prepare(
-			`SELECT id, source, payload_enc, last_synced_at, created_at, updated_at
-			 FROM cards WHERE id = ?`
-		)
-		.get(id) as CardRow | undefined;
+function snapshotPayload(snapshot: PlaidCardSnapshot): CardPayload {
+	return {
+		nickname: snapshot.nickname,
+		issuer: snapshot.issuer,
+		last4: snapshot.last4,
+		currency: snapshot.currency,
+		statementBalanceCents: snapshot.statementBalanceCents,
+		minimumPaymentCents: snapshot.minimumPaymentCents,
+		currentBalanceCents: snapshot.currentBalanceCents,
+		dueDate: snapshot.dueDate,
+		statementDate: snapshot.statementDate,
+		isOverdue: snapshot.isOverdue,
+		autopayEnabled: snapshot.autopayEnabled
+	};
+}
+
+export async function listCards(): Promise<Card[]> {
+	const rows =
+		getRuntimeMode() === 'cloud'
+			? await cloudQuery<CardRow>(
+					`SELECT id::text, source, payload_enc, last_synced_at, created_at, updated_at
+					 FROM public.carddue_cards`
+				)
+			: (getDatabase()
+					.prepare(
+						`SELECT id, source, payload_enc, last_synced_at, created_at, updated_at
+						 FROM cards`
+					)
+					.all() as CardRow[]);
+	return sortCards(rows.map(rowToCard));
+}
+
+export async function getCard(id: string): Promise<Card> {
+	const row =
+		getRuntimeMode() === 'cloud'
+			? (
+					await cloudQuery<CardRow>(
+						`SELECT id::text, source, payload_enc, last_synced_at, created_at, updated_at
+						 FROM public.carddue_cards WHERE id = $1`,
+						[id]
+					)
+				)[0]
+			: (getDatabase()
+					.prepare(
+						`SELECT id, source, payload_enc, last_synced_at, created_at, updated_at
+						 FROM cards WHERE id = ?`
+					)
+					.get(id) as CardRow | undefined);
 	if (!row) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
 	return rowToCard(row);
 }
 
-export function createManualCard(input: CreateManualCardData): Card {
-	const database = getDatabase();
+export async function createManualCard(input: CreateManualCardData): Promise<Card> {
 	const id = randomUUID();
 	const now = new Date().toISOString();
 	const payload: CardPayload = { ...input };
+	const payloadEncrypted = encryptJson(payload, `card:${id}`);
 
-	database
-		.prepare(
-			`INSERT INTO cards
-			 (id, source, plaid_item_id, external_account_ref, payload_enc, last_synced_at, created_at, updated_at)
-			 VALUES (?, 'manual', NULL, NULL, ?, NULL, ?, ?)`
-		)
-		.run(id, encryptJson(payload, `card:${id}`), now, now);
+	if (getRuntimeMode() === 'cloud') {
+		await cloudQuery(
+			`INSERT INTO public.carddue_cards
+			 (id, source, plaid_item_id, external_account_ref, payload_enc,
+			  last_synced_at, created_at, updated_at)
+			 VALUES ($1, 'manual', NULL, NULL, $2, NULL, $3, $3)`,
+			[id, payloadEncrypted, now]
+		);
+	} else {
+		getDatabase()
+			.prepare(
+				`INSERT INTO cards
+				 (id, source, plaid_item_id, external_account_ref, payload_enc,
+				  last_synced_at, created_at, updated_at)
+				 VALUES (?, 'manual', NULL, NULL, ?, NULL, ?, ?)`
+			)
+			.run(id, payloadEncrypted, now, now);
+	}
 	return getCard(id);
 }
 
-export function updateManualCard(id: string, changes: UpdateManualCardData): Card {
-	const existing = getCard(id);
+export async function updateManualCard(id: string, changes: UpdateManualCardData): Promise<Card> {
+	const existing = await getCard(id);
 	if (existing.source !== 'manual') {
 		throw new AppError(
 			'PLAID_CARD_READ_ONLY',
@@ -136,16 +186,29 @@ export function updateManualCard(id: string, changes: UpdateManualCardData): Car
 		autopayEnabled:
 			changes.autopayEnabled === undefined ? existing.autopayEnabled : changes.autopayEnabled
 	};
+	const encrypted = encryptJson(payload, `card:${id}`);
+	const now = new Date().toISOString();
+
+	if (getRuntimeMode() === 'cloud') {
+		const rows = await cloudQuery<CardRow>(
+			`UPDATE public.carddue_cards SET payload_enc = $1, updated_at = $2
+			 WHERE id = $3 AND source = 'manual'
+			 RETURNING id::text, source, payload_enc, last_synced_at, created_at, updated_at`,
+			[encrypted, now, id]
+		);
+		if (!rows[0]) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
+		return rowToCard(rows[0]);
+	}
 
 	const result = getDatabase()
 		.prepare(`UPDATE cards SET payload_enc = ?, updated_at = ? WHERE id = ? AND source = 'manual'`)
-		.run(encryptJson(payload, `card:${id}`), new Date().toISOString(), id);
+		.run(encrypted, now, id);
 	if (result.changes !== 1) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
 	return getCard(id);
 }
 
-export function deleteManualCard(id: string): void {
-	const existing = getCard(id);
+export async function deleteManualCard(id: string): Promise<void> {
+	const existing = await getCard(id);
 	if (existing.source !== 'manual') {
 		throw new AppError(
 			'PLAID_CARD_READ_ONLY',
@@ -153,14 +216,63 @@ export function deleteManualCard(id: string): void {
 			409
 		);
 	}
-	getDatabase().prepare(`DELETE FROM cards WHERE id = ? AND source = 'manual'`).run(id);
+	if (getRuntimeMode() === 'cloud') {
+		await cloudQuery(`DELETE FROM public.carddue_cards WHERE id = $1 AND source = 'manual'`, [id]);
+	} else {
+		getDatabase().prepare(`DELETE FROM cards WHERE id = ? AND source = 'manual'`).run(id);
+	}
 }
 
-export function replacePlaidCards(
+async function replaceCloudPlaidCards(
 	plaidItemId: string,
 	snapshots: PlaidCardSnapshot[],
 	syncedAt: string
-): Card[] {
+): Promise<void> {
+	const references: string[] = [];
+	const statements: CloudStatement[] = snapshots.map((snapshot) => {
+		const reference = privateFingerprint(snapshot.accountId, 'plaid-account');
+		const id = privateUuid(snapshot.accountId, `plaid-card:${plaidItemId}`);
+		references.push(reference);
+		return {
+			text: `INSERT INTO public.carddue_cards
+			       (id, source, plaid_item_id, external_account_ref, payload_enc,
+			        last_synced_at, created_at, updated_at)
+			       VALUES ($1, 'plaid', $2, $3, $4, $5, $5, $5)
+			       ON CONFLICT (plaid_item_id, external_account_ref) DO UPDATE SET
+			       payload_enc = EXCLUDED.payload_enc,
+			       last_synced_at = EXCLUDED.last_synced_at,
+			       updated_at = EXCLUDED.updated_at`,
+			params: [
+				id,
+				plaidItemId,
+				reference,
+				encryptJson(snapshotPayload(snapshot), `card:${id}`),
+				syncedAt
+			]
+		};
+	});
+	statements.push(
+		references.length
+			? {
+					text: `DELETE FROM public.carddue_cards
+					       WHERE plaid_item_id = $1 AND source = 'plaid'
+					       AND NOT (external_account_ref = ANY($2::text[]))`,
+					params: [plaidItemId, references]
+				}
+			: {
+					text: `DELETE FROM public.carddue_cards
+					       WHERE plaid_item_id = $1 AND source = 'plaid'`,
+					params: [plaidItemId]
+				}
+	);
+	await cloudTransaction(statements);
+}
+
+function replaceLocalPlaidCards(
+	plaidItemId: string,
+	snapshots: PlaidCardSnapshot[],
+	syncedAt: string
+): void {
 	const database = getDatabase();
 	const transaction = database.transaction(() => {
 		const existingRows = database
@@ -169,7 +281,7 @@ export function replacePlaidCards(
 				        external_account_ref
 				 FROM cards WHERE plaid_item_id = ? AND source = 'plaid'`
 			)
-			.all(plaidItemId) as Array<CardRow & { external_account_ref: string }>;
+			.all(plaidItemId) as PlaidCardRow[];
 		const existingByReference = new Map(existingRows.map((row) => [row.external_account_ref, row]));
 		const seenReferences = new Set<string>();
 
@@ -178,21 +290,7 @@ export function replacePlaidCards(
 			seenReferences.add(reference);
 			const current = existingByReference.get(reference);
 			const id = current?.id ?? randomUUID();
-			const payload: CardPayload = {
-				nickname: snapshot.nickname,
-				issuer: snapshot.issuer,
-				last4: snapshot.last4,
-				currency: snapshot.currency,
-				statementBalanceCents: snapshot.statementBalanceCents,
-				minimumPaymentCents: snapshot.minimumPaymentCents,
-				currentBalanceCents: snapshot.currentBalanceCents,
-				dueDate: snapshot.dueDate,
-				statementDate: snapshot.statementDate,
-				isOverdue: snapshot.isOverdue,
-				autopayEnabled: snapshot.autopayEnabled
-			};
-			const encrypted = encryptJson(payload, `card:${id}`);
-
+			const encrypted = encryptJson(snapshotPayload(snapshot), `card:${id}`);
 			if (current) {
 				database
 					.prepare(
@@ -218,7 +316,17 @@ export function replacePlaidCards(
 			}
 		}
 	});
-
 	transaction();
-	return listCards().filter((card) => card.source === 'plaid' && card.lastSyncedAt === syncedAt);
+}
+
+export async function replacePlaidCards(
+	plaidItemId: string,
+	snapshots: PlaidCardSnapshot[],
+	syncedAt: string
+): Promise<void> {
+	if (getRuntimeMode() === 'cloud') {
+		await replaceCloudPlaidCards(plaidItemId, snapshots, syncedAt);
+	} else {
+		replaceLocalPlaidCards(plaidItemId, snapshots, syncedAt);
+	}
 }
