@@ -30,6 +30,8 @@ const CLOUD_ENV_KEYS = [
 	'CARDDUE_OWNER_PASSWORD_HASH',
 	'CARDDUE_ALLOWED_HOSTS',
 	'CARDDUE_SESSION_TTL_HOURS',
+	'CARDDUE_GOOGLE_CLIENT_ID',
+	'CARDDUE_GOOGLE_CLIENT_SECRET',
 	'VERCEL'
 ] as const;
 
@@ -54,6 +56,8 @@ function setValidCloudEnvironment(): void {
 	process.env.CARDDUE_OWNER_PASSWORD_HASH = passwordHash('correct horse');
 	process.env.CARDDUE_ALLOWED_HOSTS = 'cards.example.test';
 	delete process.env.CARDDUE_SESSION_TTL_HOURS;
+	delete process.env.CARDDUE_GOOGLE_CLIENT_ID;
+	delete process.env.CARDDUE_GOOGLE_CLIENT_SECRET;
 	delete process.env.VERCEL;
 }
 
@@ -401,7 +405,11 @@ describe.sequential('cloud mode privacy and authentication', () => {
 
 		const session = await sessionEndpoint({ cookies } as never);
 		expect(session.status).toBe(200);
-		expect(await session.json()).toEqual({ mode: 'cloud', authenticated: true });
+		expect(await session.json()).toEqual({
+			mode: 'cloud',
+			authenticated: true,
+			google: { configured: false, linked: false }
+		});
 
 		const logoutRequest = new Request('https://cards.example.test/api/auth/logout', {
 			method: 'POST',
@@ -415,6 +423,10 @@ describe.sequential('cloud mode privacy and authentication', () => {
 		expect(logout.status).toBe(204);
 		expect(sessionCookie).toBeUndefined();
 		const signedOutSession = await sessionEndpoint({ cookies } as never);
-		expect(await signedOutSession.json()).toEqual({ mode: 'cloud', authenticated: false });
+		expect(await signedOutSession.json()).toEqual({
+			mode: 'cloud',
+			authenticated: false,
+			google: { configured: false, linked: null }
+		});
 	});
 });

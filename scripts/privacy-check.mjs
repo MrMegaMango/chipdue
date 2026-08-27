@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { lstatSync, readFileSync, readlinkSync } from 'node:fs';
 import { extname, resolve } from 'node:path';
+import { googleCredentialRules, isReviewedPaymentCardScanExempt } from './privacy-rules.mjs';
 
 const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
 
@@ -53,6 +54,7 @@ const contentRules = [
 		'configured-plaid-credential',
 		/PLAID_(?:CLIENT_ID|SECRET)\s*=\s*["']?(?!(?:replace|example|your|<))[A-Za-z0-9_-]{8,}/i
 	],
+	...googleCredentialRules,
 	['absolute-linux-home-path', /\/home\/[A-Za-z0-9._-]+\//],
 	['absolute-windows-home-path', /[A-Za-z]:[\\/]Users[\\/][^\\/\r\n]+[\\/]/i]
 ];
@@ -130,15 +132,17 @@ for (const file of files) {
 		if (!allowedEmailDomains.has(match[1].toLowerCase())) fail(file, 'email-address');
 	}
 
-	for (const candidate of text.matchAll(/(?:\d[ -]?){13,19}/g)) {
-		const digits = candidate[0].replace(/\D/g, '');
-		if (
-			digits.length >= 13 &&
-			digits.length <= 19 &&
-			!/^(\d)\1+$/.test(digits) &&
-			passesLuhn(digits)
-		) {
-			fail(file, 'possible-payment-card-number');
+	if (!isReviewedPaymentCardScanExempt(file, buffer)) {
+		for (const candidate of text.matchAll(/(?:\d[ -]?){13,19}/g)) {
+			const digits = candidate[0].replace(/\D/g, '');
+			if (
+				digits.length >= 13 &&
+				digits.length <= 19 &&
+				!/^(\d)\1+$/.test(digits) &&
+				passesLuhn(digits)
+			) {
+				fail(file, 'possible-payment-card-number');
+			}
 		}
 	}
 

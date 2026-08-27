@@ -13,6 +13,10 @@ const RATE_BLOCK_MS = 15 * 60 * 1000;
 const RATE_MAX_ATTEMPTS = 5;
 const RATE_RETENTION_MS = 24 * 60 * 60 * 1000;
 const RATE_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+const GOOGLE_RATE_WINDOW_MS = 15 * 60 * 1000;
+const GOOGLE_RATE_BLOCK_MS = 15 * 60 * 1000;
+const GOOGLE_SOURCE_MAX_ATTEMPTS = 5;
+const GOOGLE_GLOBAL_MAX_ATTEMPTS = 100;
 const MAX_PASSWORD_BYTES = 1024;
 const SESSION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 let lastRateLimitPruneAt = 0;
@@ -59,11 +63,23 @@ function rateLimitInput(request: Request): string {
 	return isIP(forwarded) ? `ip:${forwarded}` : 'global';
 }
 
-function rateLimitReference(request: Request): string {
-	return privateFingerprint(rateLimitInput(request), 'auth-rate-limit-v1');
+function rateLimitReference(request: Request, purpose = 'auth-rate-limit-v1'): string {
+	return privateFingerprint(rateLimitInput(request), purpose);
 }
 
-async function consumeRateLimit(bucketRef: string, now: number): Promise<void> {
+async function consumeRateLimit(
+	bucketRef: string,
+	now: number,
+	options: {
+		windowMs: number;
+		maxAttempts: number;
+		blockMs: number;
+	} = {
+		windowMs: RATE_WINDOW_MS,
+		maxAttempts: RATE_MAX_ATTEMPTS,
+		blockMs: RATE_BLOCK_MS
+	}
+): Promise<void> {
 	const rows = await cloudQuery<RateLimitRow>(
 		`INSERT INTO public.carddue_auth_rate_limits AS current_rate
 		 (bucket_ref, window_started_at, attempts, blocked_until, updated_at)
@@ -90,7 +106,7 @@ async function consumeRateLimit(bucketRef: string, now: number): Promise<void> {
 		 END,
 		 updated_at = $2
 		 RETURNING attempts, blocked_until`,
-		[bucketRef, now, RATE_WINDOW_MS, RATE_MAX_ATTEMPTS, RATE_BLOCK_MS]
+		[bucketRef, now, options.windowMs, options.maxAttempts, options.blockMs]
 	);
 	const row = rows[0];
 	if (!row || Number(row.blocked_until) > now) {
@@ -106,17 +122,23 @@ async function pruneStaleRateLimits(now: number): Promise<void> {
 	lastRateLimitPruneAt = now;
 }
 
-async function issueSession(bucketRef: string, now: number): Promise<string> {
+async function assertRateLimitNotBlocked(bucketRef: string, now: number): Promise<void> {
+	const rows = await cloudQuery<Pick<RateLimitRow, 'blocked_until'>>(
+		`SELECT blocked_until FROM public.carddue_auth_rate_limits WHERE bucket_ref = $1`,
+		[bucketRef]
+	);
+	if (rows[0] && Number(rows[0].blocked_until) > now) {
+		throw new AppError('RATE_LIMITED', 'Too many attempts. Try again later.', 429);
+	}
+}
+
+async function issueSession(bucketRef: string | undefined, now: number): Promise<string> {
 	const config = getCloudRuntimeConfig();
 	const token = randomBytes(32).toString('base64url');
 	const tokenHash = sessionTokenHash(token);
 	const passwordRef = passwordConfigReference();
 	const expiresAt = now + config.sessionTtlSeconds * 1000;
-	await cloudTransaction([
-		{
-			text: `DELETE FROM public.carddue_auth_rate_limits WHERE bucket_ref = $1`,
-			params: [bucketRef]
-		},
+	const statements = [
 		{
 			text: `DELETE FROM public.carddue_auth_sessions
 			       WHERE expires_at <= $1 OR password_config_ref <> $2`,
@@ -128,8 +150,46 @@ async function issueSession(bucketRef: string, now: number): Promise<string> {
 			       VALUES ($1, $2, $3, $4, $3)`,
 			params: [tokenHash, passwordRef, now, expiresAt]
 		}
-	]);
+	];
+	if (bucketRef) {
+		statements.unshift({
+			text: `DELETE FROM public.carddue_auth_rate_limits WHERE bucket_ref = $1`,
+			params: [bucketRef]
+		});
+	}
+	await cloudTransaction(statements);
 	return token;
+}
+
+export async function consumeGoogleOidcStartRateLimit(
+	request: Request,
+	intent: 'login' | 'link'
+): Promise<void> {
+	const now = Date.now();
+	await pruneStaleRateLimits(now);
+	const options = {
+		windowMs: GOOGLE_RATE_WINDOW_MS,
+		maxAttempts: GOOGLE_GLOBAL_MAX_ATTEMPTS,
+		blockMs: GOOGLE_RATE_BLOCK_MS
+	};
+	if (intent === 'link') {
+		await consumeRateLimit(rateLimitReference(request, 'google-oidc-link-rate-limit-v1'), now, {
+			...options,
+			maxAttempts: GOOGLE_SOURCE_MAX_ATTEMPTS
+		});
+		return;
+	}
+	const globalBucket = privateFingerprint('global', 'google-oidc-global-rate-limit-v1');
+	await assertRateLimitNotBlocked(globalBucket, now);
+	await consumeRateLimit(rateLimitReference(request, 'google-oidc-login-rate-limit-v1'), now, {
+		...options,
+		maxAttempts: GOOGLE_SOURCE_MAX_ATTEMPTS
+	});
+	await consumeRateLimit(globalBucket, now, options);
+}
+
+export async function issueGoogleOidcSession(): Promise<string> {
+	return issueSession(undefined, Date.now());
 }
 
 export async function loginWithPassword(request: Request, password: string): Promise<string> {

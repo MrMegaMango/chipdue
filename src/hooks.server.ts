@@ -42,7 +42,9 @@ export const handle: Handle = async ({ event, resolve }) => {
 				matchedPath === '/api/health' ||
 				matchedPath === '/api/auth/session' ||
 				matchedPath === '/api/auth/login' ||
-				matchedPath === '/api/auth/logout';
+				matchedPath === '/api/auth/logout' ||
+				matchedPath === '/api/auth/google/start' ||
+				matchedPath === '/api/auth/google/callback';
 			if (matchedPath.startsWith('/api/') && !publicApi) {
 				const authenticated = await authenticateSession(event.cookies.get(SESSION_COOKIE_NAME));
 				if (!authenticated) {

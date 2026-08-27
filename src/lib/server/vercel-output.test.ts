@@ -97,11 +97,32 @@ describe.sequential('Vercel output privacy verification', () => {
 		);
 		expect(() => verifyVercelOutput(output)).toThrow(/credential-shaped/);
 
+		const label = ['PRIVATE', 'KEY'].join(' ');
+		const encodedBody = Buffer.alloc(48, 37)
+			.toString('base64')
+			.match(/.{1,64}/g)!
+			.join('\n');
+		const pem = `-----BEGIN ${label}-----\n${encodedBody}\n-----END ${label}-----`;
+		expect(encodedBody.replaceAll('\n', '')).toHaveLength(64);
+		writeFileSync(join(output, 'static', 'app.js'), pem);
+		expect(() => verifyVercelOutput(output)).toThrow(/credential-shaped/);
+
+		writeFileSync(join(output, 'static', 'app.js'), pem.replaceAll('\n', '\\n'));
+		expect(() => verifyVercelOutput(output)).toThrow(/credential-shaped/);
+
 		writeFileSync(
 			join(output, 'static', 'app.js'),
-			['-----BEGIN ', 'PRIVATE KEY-----\nsynthetic-only\n-----END ', 'PRIVATE KEY-----'].join('')
+			`-----BEGIN ${label}-----\n${'A'.repeat(128 * 1024)}\n-----END ${label}-----`
 		);
 		expect(() => verifyVercelOutput(output)).toThrow(/credential-shaped/);
+	});
+
+	it('allows an isolated private-key sentinel used by cryptography libraries', () => {
+		writeFileSync(
+			join(output, 'static', 'app.js'),
+			['const sentinel = "-----BEGIN ', 'PRIVATE KEY-----";'].join('')
+		);
+		expect(() => verifyVercelOutput(output)).not.toThrow();
 	});
 
 	it('rejects every checkout environment-file basename except the example', () => {

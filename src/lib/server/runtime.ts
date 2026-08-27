@@ -12,6 +12,12 @@ export interface CloudRuntimeConfig {
 	ownerPasswordHash: string;
 	allowedHosts: ReadonlySet<string>;
 	sessionTtlSeconds: number;
+	googleOidc: GoogleOidcConfig | null;
+}
+
+export interface GoogleOidcConfig {
+	clientId: string;
+	clientSecret: string;
 }
 
 const DEFAULT_SESSION_TTL_HOURS = 24;
@@ -115,6 +121,31 @@ function parseSessionTtl(): number {
 	return hours * 60 * 60;
 }
 
+function parseGoogleOidcConfig(): GoogleOidcConfig | null {
+	const clientId = process.env.CARDDUE_GOOGLE_CLIENT_ID;
+	const clientSecret = process.env.CARDDUE_GOOGLE_CLIENT_SECRET;
+
+	if (clientId === undefined && clientSecret === undefined) return null;
+	if (
+		!clientId ||
+		!clientSecret ||
+		clientId !== clientId?.trim() ||
+		clientSecret !== clientSecret?.trim() ||
+		clientId.length > 512 ||
+		clientSecret.length < 16 ||
+		clientSecret.length > 512 ||
+		!/^[A-Za-z0-9._-]+\.apps\.googleusercontent\.com$/.test(clientId) ||
+		[...clientSecret].some((character) => {
+			const code = character.charCodeAt(0);
+			return code <= 0x20 || code === 0x7f;
+		})
+	) {
+		throw new AppError('CLOUD_MISCONFIGURED', 'Cloud mode is not securely configured.', 503);
+	}
+
+	return { clientId, clientSecret };
+}
+
 export function getRuntimeMode(): CardDueMode {
 	const mode = process.env.CARDDUE_MODE?.trim().toLowerCase();
 	if (!mode || mode === 'local') {
@@ -144,6 +175,7 @@ export function getCloudRuntimeConfig(): CloudRuntimeConfig {
 		masterKey,
 		ownerPasswordHash,
 		allowedHosts,
-		sessionTtlSeconds: parseSessionTtl()
+		sessionTtlSeconds: parseSessionTtl(),
+		googleOidc: parseGoogleOidcConfig()
 	};
 }

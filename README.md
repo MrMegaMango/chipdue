@@ -5,13 +5,14 @@ CardDue is a privacy-first dashboard for tracking credit-card statement balances
 Choose one of two deployment modes:
 
 - **Local mode** is the default. It binds to loopback, needs no login, and stores an encrypted SQLite database outside the source checkout.
-- **Private cloud mode** is a single-owner Vercel deployment. It requires a password, stores only application-encrypted records in Neon Postgres, and keeps its decryption key in Vercel's Production environment.
+- **Private cloud mode** is a single-owner Vercel deployment. It requires a recovery password and can optionally use one linked Google account for sign-in. It stores only application-encrypted records in Neon Postgres and keeps its decryption key in Vercel's Production environment.
 
 > CardDue is a reminder tool, not a payment service. Always verify amounts and dates with the card issuer, and keep issuer alerts or autopay as a backstop.
 
 ## Features
 
 - Track statement balance, minimum due, current balance, due date, statement date, and autopay status.
+- Optionally link one Google account for cloud sign-in without storing an email, profile, Google token, or refresh token.
 - Connect Plaid only when you explicitly choose to; manual mode never contacts Plaid.
 - Encrypt card payloads, Plaid access tokens, Item IDs, and institution names with AES-256-GCM.
 - Request only Plaid Liabilities - never transaction history, identity, or full account numbers.
@@ -29,6 +30,7 @@ Private cloud mode
 Browser memory -> authenticated Vercel Function -> encrypted Neon Postgres rows
                                       |
                                       +-> Plaid, only when configured and used
+                                      +-> Google, only during optional sign-in
 
 Git repository -> source code and synthetic tests only
 ```
@@ -42,6 +44,7 @@ Cloud encryption protects against a database-only disclosure. It is not zero-kno
 - Git
 - Optional local sync: a Plaid account
 - Optional cloud hosting: personal Vercel and Neon accounts
+- Optional Google sign-in: a Google Cloud project and Web OAuth client
 
 ## Start locally
 
@@ -69,7 +72,8 @@ Hosted mode is deliberately single-owner. It fails closed unless all authenticat
 The deployment process uses:
 
 - A dedicated, non-owner Neon runtime role with only required row permissions, reached through a direct, unpooled TLS URL
-- A strong generated login password and separate 256-bit encryption key
+- A strong generated recovery password and separate 256-bit encryption key
+- Optional Google sign-in that must be linked from an existing password-authenticated session
 - Production-only Vercel secrets; preview deployments receive no real database or key
 - An exact production-host allowlist that rejects generated and old deployment URLs
 - Secure, HTTP-only, same-site sessions with server-side revocation and login throttling
@@ -85,6 +89,29 @@ Official references:
 - [Neon pricing](https://neon.com/pricing)
 - [Vercel Hobby plan](https://vercel.com/docs/plans/hobby)
 - [Vercel deployment protection](https://vercel.com/docs/deployment-protection)
+
+## Optional Google sign-in
+
+Google sign-in is opt-in and cloud-only. CardDue never lets the first Google visitor claim an instance: sign in with the recovery password first, then explicitly link the Google account from the authenticated dashboard. Keep the recovery password even after linking.
+
+1. Create a dedicated, non-personal monitored support alias or Google Group, then use it as Google Auth Platform's **User Support Email**. Google displays that address on the consent screen, which any visitor can reach; do not select a personal address or a group whose membership reveals one.
+2. In Google Auth Platform, configure an External audience and create a **Web application** OAuth client.
+3. Register exactly `https://YOUR_PRODUCTION_HOST/api/auth/google/callback` as its authorized redirect URI. Do not add preview or generated deployment hosts.
+4. Add `CARDDUE_GOOGLE_CLIENT_ID` and `CARDDUE_GOOGLE_CLIENT_SECRET` to Vercel **Production only**; mark the secret as Sensitive. CardDue stays disabled when both are absent and fails closed when only one is present.
+5. Redeploy, sign in with the recovery password, and choose **Link Google account**.
+
+CardDue requests only the `openid` scope. It validates Google's signed ID token, binds the stable issuer-and-subject pair through a keyed one-way fingerprint, and immediately discards Google's ID and access tokens. It does not request or store the Google email, name, picture, profile, or refresh token. Google still observes the sign-in, IP address, time, CardDue hostname, and configured public support contact.
+
+The Google binding is intentionally immutable in this release: the dashboard cannot unlink it or replace it with a different account. To contain a lost or compromised Google account, remove both Google environment variables from Vercel Production, redeploy, and use the recovery password. Rebinding requires a separate reviewed recovery change; password rotation by itself does not disable an existing Google binding.
+
+Google currently exempts apps that use only basic Sign in with Google scopes from Testing-mode test-user warnings and seven-day authorization expiry. A personal client on a generated `vercel.app` hostname can therefore remain functional without a paid domain, but that shared hostname cannot satisfy Google's owned-domain brand-verification path. Provider rules can change; a custom domain is needed for verified production branding, not for CardDue's personal-use flow.
+
+Official references:
+
+- [Google OpenID Connect](https://developers.google.com/identity/openid-connect/openid-connect)
+- [Google Auth Platform audiences](https://support.google.com/cloud/answer/15549945)
+- [Google OAuth branding and support email](https://support.google.com/cloud/answer/15549049)
+- [Google brand and domain verification](https://developers.google.com/identity/protocols/oauth2/production-readiness/brand-verification)
 
 ## Optional Plaid setup
 
@@ -110,7 +137,7 @@ In local mode, CardDue uses the platform application-data directory:
 - macOS: `~/Library/Application Support/CardDue`
 - Windows: `%LOCALAPPDATA%\CardDue`
 
-In cloud mode, Neon stores encrypted application rows plus non-sensitive operational metadata and hashed session/rate-limit identifiers. Vercel stores the database URL, password hash, and encryption key as sensitive Production environment variables. Keep the generated recovery bundle outside every Git checkout with owner-only permissions.
+In cloud mode, Neon stores encrypted application rows plus non-sensitive operational metadata, keyed session/rate-limit identifiers, and—when linked—one keyed Google issuer-and-subject fingerprint. Vercel stores the database URL, password hash, encryption key, and optional Google client secret as sensitive Production environment variables. Keep the generated recovery bundle outside every Git checkout with owner-only permissions.
 
 The repository ignores common database, environment, export, log, trace, certificate, and backup formats as a second layer of protection. The privacy scanner rejects secrets, personal paths, card numbers, and likely private artifacts. Every Vercel build path uses a committed verified wrapper that refuses checkout environment files and fails if output contains a private-home directory, database, credential-like artifact, source map, private path, configured secret, compact token, or private-key material.
 
@@ -127,7 +154,7 @@ git config core.hooksPath .githooks
 npm run privacy:init
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and the [publishing checklist](docs/PUBLISHING.md). Never copy a live Plaid response into a fixture, issue, pull request, screenshot, or log - even after attempting to redact it.
+See [CONTRIBUTING.md](CONTRIBUTING.md), the [publishing checklist](docs/PUBLISHING.md), and [third-party notices](THIRD_PARTY_NOTICES.md). Never copy a live Plaid or Google response into a fixture, issue, pull request, screenshot, or log - even after attempting to redact it.
 
 ## License
 

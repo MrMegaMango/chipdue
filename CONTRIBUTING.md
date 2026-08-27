@@ -15,11 +15,11 @@ Configure a GitHub noreply address for commits. Git embeds the author name and e
 ## Data rules
 
 - Use handwritten, obviously synthetic test data.
-- Never copy or sanitize a real Plaid response for a fixture.
+- Never copy or sanitize a real Google or Plaid response for a fixture.
 - Never attach statements, screenshots, HAR files, traces, databases, exports, or environment files.
 - Do not add analytics, telemetry, remote fonts, webhook relays, or browser persistence without a threat-model update.
 - Add no new Plaid product unless the privacy benefit and additional data collection are documented and approved.
-- Keep all Plaid calls in server-only modules.
+- Keep all Google and Plaid token or API calls in server-only modules.
 - Keep dependency lifecycle scripts disabled in `.npmrc`; enabling one requires a supply-chain review.
 
 ## Required checks
@@ -33,4 +33,4 @@ The privacy check intentionally prints only filenames and rule identifiers—not
 
 ## Pull requests
 
-Explain any new data field, network request, dependency, file output, or logging behavior. Pull requests from forks receive no production credentials, and tests must succeed without Plaid configuration.
+Explain any new data field, network request, dependency, file output, or logging behavior. Pull requests from forks receive no production credentials, and tests must succeed without Google or Plaid configuration.

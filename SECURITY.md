@@ -20,7 +20,13 @@ Local mode is intended for one trusted operating-system account. It binds to loo
 
 ### Private cloud mode
 
-Private cloud mode supports exactly one owner on Vercel with one Neon production database. Vercel's production domain is internet-accessible, so the server enforces an exact host allowlist, HTTPS, password authentication, revocable server-side sessions, login throttling, same-origin mutations, restricted content types, and no-store responses. Static page assets and the login shell may be public; financial APIs require a valid session.
+Private cloud mode supports exactly one owner on Vercel with one Neon production database. Vercel's production domain is internet-accessible, so the server enforces an exact host allowlist, HTTPS, recovery-password authentication, optional pre-linked Google authentication, revocable server-side sessions, login throttling, same-origin mutations, restricted content types, and no-store responses. Static page assets and the login shell may be public; financial APIs require a valid CardDue session.
+
+Google authentication never provisions an owner. Linking starts only from an already authenticated CardDue session and is bound to that exact session through callback. CardDue binds Google's validated issuer and `sub`, not an email address, using a master-keyed one-way fingerprint. The authorization-code flow uses PKCE S256, random one-time state and nonce values, a short-lived encrypted `__Host-` transaction cookie, an exact canonical callback, and Google's signed RS256 ID token. Provider tokens and profile claims are not retained. Keep the recovery password: it is the independent route back in after Google account loss, suspension, compromise, or outage.
+
+The linked Google identity is immutable through the application in this release; there is no unlink or rebind UI. Removing both Google OAuth environment variables and redeploying disables Google login without erasing the stored fingerprint. Rotating only the CardDue password does not contain a compromised linked Google account. Any future reset or replacement flow requires recovery-password reauthentication, global session revocation, and a new threat-model review.
+
+Google displays the OAuth User Support Email on a consent screen reachable from the public login start. Configure a dedicated non-personal monitored alias or Google Group, keep group membership private, and review the complete consent screen before linking. A personal support address is a public identity disclosure even though CardDue itself never stores it.
 
 This is not a multi-user identity or authorization system. Do not use the same instance for multiple people, expose a second hostname casually, disable the request guards, or rely on Vercel Deployment Protection as the production login. Any such change requires a new design and threat-model review.
 
@@ -28,9 +34,9 @@ The Neon runtime connection must use a direct, unpooled TLS URL and a dedicated,
 
 ## Secret handling
 
-All cloud credentials are server-only and Production-only Vercel environment variables. Mark the database URL, AES key, password hash, and optional Plaid credentials as Sensitive. Preview and Development environments must receive no production database, key, password hash, migration URL, recovery bundle, or real Plaid credential.
+All cloud credentials are server-only and Production-only Vercel environment variables. Mark the database URL, AES key, password hash, optional Google client secret, and optional Plaid credentials as Sensitive. Preview and Development environments must receive no production database, key, password hash, Google secret, migration URL, recovery bundle, or real Plaid credential.
 
-Plaid secrets and long-lived tokens must never reach the browser. Never place any credential in a variable beginning with `PUBLIC_` or `VITE_`, in a URL, or directly in a shell command. Use the generated recovery bundle only from private encrypted storage outside every Git checkout.
+Google and Plaid secrets and long-lived tokens must never reach the browser. Never place any credential in a variable beginning with `PUBLIC_` or `VITE_`, in a URL, or directly in a shell command. Use the generated recovery bundle only from private encrypted storage outside every Git checkout.
 
 An existing-role migration requires the protected old/current database password and a distinct desired replacement. Fresh-role creation uses a locally derived SCRAM verifier, but an existing-role rotation binds the desired plaintext only into a transaction-local setting, forces SCRAM password encryption, and performs a fixed dynamic self-password change without putting the value in SQL text or output. An owner-only catalog check returns only a boolean SCRAM confirmation. Neon necessarily sees the bind and remains trusted for authentication, bind and database processing, catalog results, and storage. Do not update the deployed runtime URL or recovery record until the migration has proved the new login, the old credential's authentication rejection, termination with zero remaining direct role backends, and the exact role and catalog boundary. Rejection requires SQLSTATE `28P01`; when the pinned Neon driver omits SQLSTATE, only its observed exact `NeonDbError` shape (an own empty `code` and the exact role-specific authentication message) is accepted. Any provider or driver change fails closed.
 
@@ -38,11 +44,11 @@ Application encryption limits a Neon-only disclosure, but the running Vercel Fun
 
 ## Operational responsibilities
 
-- Enable phishing-resistant MFA where available for GitHub, Vercel, Neon, Plaid, and the password manager holding the recovery bundle.
+- Enable phishing-resistant MFA where available for GitHub, Vercel, Neon, Google, Plaid, and the password manager holding the recovery bundle.
 - Keep production secrets out of pull-request and preview builds, logs, screenshots, tickets, and support transcripts.
 - Run the publishing and deployment verification checklists before publishing code or entering real data.
 - Maintain an encrypted off-provider backup and test restoration. Neon restore history alone is not a durable recovery plan.
 - Disconnect Plaid Items before destroying the database so CardDue can revoke their access tokens.
-- Treat a leaked database URL, AES key, login password, session cookie, Plaid credential, or recovery bundle as an incident and rotate or revoke every affected credential before public discussion.
+- Treat a leaked database URL, AES key, login password, session or OAuth transaction cookie, Google client secret, Plaid credential, or recovery bundle as an incident and rotate or revoke every affected credential before public discussion.
 
 Review [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for the complete boundary and assumptions.

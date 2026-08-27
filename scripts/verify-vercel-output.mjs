@@ -24,12 +24,14 @@ const SECRET_ENVIRONMENT_NAMES = [
 	'CARDDUE_OWNER_PASSWORD_HASH',
 	'CARDDUE_MIGRATION_DATABASE_URL',
 	'CARDDUE_DATABASE_PASSWORD',
+	'CARDDUE_GOOGLE_CLIENT_ID',
+	'CARDDUE_GOOGLE_CLIENT_SECRET',
 	'PLAID_CLIENT_ID',
 	'PLAID_SECRET'
 ];
 const SENSITIVE_ENVIRONMENT_NAME =
 	/(?:^|_)(?:TOKEN|SECRET|PASSWORD|PRIVATE_KEY|API_KEY|DATABASE_URL)(?:$|_)/i;
-const PRIVATE_KEY_MATERIAL = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/;
+const PRIVATE_KEY_HEADER = /-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----/g;
 const COMPACT_JWT =
 	/(?:^|[^A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?:$|[^A-Za-z0-9_-])/;
 const CHECKOUT_SCAN_IGNORES = new Set(['.git', '.svelte-kit', '.vercel', 'build', 'node_modules']);
@@ -141,6 +143,39 @@ function forbiddenValues() {
 	return values;
 }
 
+/** @param {string} text */
+function containsPrivateKeyMaterial(text) {
+	PRIVATE_KEY_HEADER.lastIndex = 0;
+	let match;
+	while ((match = PRIVATE_KEY_HEADER.exec(text)) !== null) {
+		const footer = `-----END ${match[1]}-----`;
+		const footerIndex = text.indexOf(footer, PRIVATE_KEY_HEADER.lastIndex);
+		if (footerIndex === -1) continue;
+		const encodedBody = text.slice(PRIVATE_KEY_HEADER.lastIndex, footerIndex);
+		if (encodedBody.length > 128 * 1024) return true;
+		const normalizedBody = encodedBody
+			.replaceAll('\\r\\n', '\n')
+			.replaceAll('\\n', '\n')
+			.replaceAll('\\r', '\n')
+			.replaceAll('\r\n', '\n')
+			.replaceAll('\r', '\n');
+		if (!normalizedBody.startsWith('\n') || !normalizedBody.endsWith('\n')) continue;
+		const lines = normalizedBody.slice(1, -1).replaceAll('\r', '').split('\n');
+		while (lines[0]?.includes(':')) lines.shift();
+		while (lines[0] === '') lines.shift();
+		const compact = lines.join('');
+		if (
+			compact.length >= 64 &&
+			compact.length % 4 === 0 &&
+			/^[A-Za-z0-9+/]+={0,2}$/.test(compact) &&
+			Buffer.from(compact, 'base64').byteLength >= 48
+		) {
+			return true;
+		}
+	}
+	return false;
+}
+
 /** @param {string[]} files */
 function verifyFileContents(files) {
 	const forbidden = forbiddenValues();
@@ -148,7 +183,7 @@ function verifyFileContents(files) {
 		if (statSync(path).size === 0) continue;
 		const content = readFileSync(path);
 		const text = content.toString('utf8');
-		if (PRIVATE_KEY_MATERIAL.test(text) || COMPACT_JWT.test(text)) {
+		if (containsPrivateKeyMaterial(text) || COMPACT_JWT.test(text)) {
 			throw new Error('Vercel output contains credential-shaped material; deployment was blocked.');
 		}
 		for (const candidate of forbidden) {

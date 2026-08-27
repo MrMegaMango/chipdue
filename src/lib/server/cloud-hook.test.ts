@@ -14,6 +14,8 @@ const ENV_KEYS = [
 	'CARDDUE_MASTER_KEY',
 	'CARDDUE_OWNER_PASSWORD_HASH',
 	'CARDDUE_ALLOWED_HOSTS',
+	'CARDDUE_GOOGLE_CLIENT_ID',
+	'CARDDUE_GOOGLE_CLIENT_SECRET',
 	'VERCEL'
 ] as const;
 
@@ -58,6 +60,8 @@ describe.sequential('cloud request guard', () => {
 		process.env.CARDDUE_MASTER_KEY = Buffer.alloc(32, 4).toString('base64url');
 		process.env.CARDDUE_OWNER_PASSWORD_HASH = `scrypt$16384$8$1$${Buffer.alloc(16, 2).toString('base64url')}$${Buffer.alloc(32, 3).toString('base64url')}`;
 		process.env.CARDDUE_ALLOWED_HOSTS = 'cards.example.test';
+		delete process.env.CARDDUE_GOOGLE_CLIENT_ID;
+		delete process.env.CARDDUE_GOOGLE_CLIENT_SECRET;
 		delete process.env.VERCEL;
 		setCloudDatabaseAdapterForTests(emptyAdapter);
 		resetCryptoStateForTests();
@@ -101,6 +105,14 @@ describe.sequential('cloud request guard', () => {
 		const response = await cloudRequest('/api/auth/session');
 		expect(response.status).toBe(200);
 		expect(await response.text()).toBe('resolved');
+	});
+
+	it('lets the Google start and callback routes perform their own intent validation', async () => {
+		for (const path of ['/api/auth/google/start', '/api/auth/google/callback']) {
+			const response = await cloudRequest(path);
+			expect(response.status).toBe(200);
+			expect(await response.text()).toBe('resolved');
+		}
 	});
 
 	it('refuses accidental local mode on Vercel', async () => {

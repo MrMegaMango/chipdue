@@ -1,12 +1,58 @@
+<script module lang="ts">
+	export type GoogleCallbackResult = 'login' | 'linked' | 'error';
+	export const LAST_FOUR_PATTERN = '[0-9][0-9][0-9][0-9]';
+
+	export function inputToCents(value: string | number | undefined): number | null {
+		if (value === undefined || (typeof value === 'string' && !value.trim())) return null;
+		const parsed = Number(value);
+		return Number.isFinite(parsed) ? Math.round(parsed * 100) : null;
+	}
+
+	export function isValidOptionalAmount(value: string | number | null | undefined): boolean {
+		if (value === null || value === undefined) return true;
+		if (typeof value === 'string' && !value.trim()) return true;
+		const parsed = Number(value);
+		return Number.isFinite(parsed) && parsed >= 0;
+	}
+
+	export function parseGoogleCallbackResult(value: string | null): GoogleCallbackResult | null {
+		return value === 'login' || value === 'linked' || value === 'error' ? value : null;
+	}
+
+	export function authorizeGoogleCallbackResult(
+		result: GoogleCallbackResult | null,
+		authenticated: boolean,
+		googleLinked: boolean
+	): GoogleCallbackResult | null {
+		if (result === 'login' || result === 'linked') {
+			return authenticated && googleLinked ? result : 'error';
+		}
+		return result;
+	}
+
+	export function canOfferGoogleLogin(
+		authMode: 'local' | 'cloud' | null,
+		configured: boolean
+	): boolean {
+		return authMode === 'cloud' && configured;
+	}
+</script>
+
 <script lang="ts">
-	import { resolve } from '$app/paths';
+	import { asset, resolve } from '$app/paths';
+	import { replaceState } from '$app/navigation';
 	import { onMount, tick } from 'svelte';
 
 	type CardSource = 'manual' | 'plaid';
 	type DialogMode = 'add' | 'edit' | null;
 	type NoticeKind = 'success' | 'error';
 	type AuthMode = 'local' | 'cloud';
-	type AuthSession = { mode: AuthMode; authenticated: boolean };
+	type GoogleAuthStatus = { configured: boolean; linked: boolean | null };
+	type AuthSession = {
+		mode: AuthMode;
+		authenticated: boolean;
+		google: GoogleAuthStatus;
+	};
 	type RequestOptions = { handleUnauthorized?: boolean; privateEpoch?: number };
 
 	type CardView = {
@@ -54,9 +100,9 @@
 		nickname: string;
 		issuer: string;
 		last4: string;
-		statementBalance: string;
-		minimumPayment: string;
-		currentBalance: string;
+		statementBalance: string | number | undefined;
+		minimumPayment: string | number | undefined;
+		currentBalance: string | number | undefined;
 		dueDate: string;
 		statementDate: string;
 		autopayEnabled: boolean;
@@ -101,10 +147,16 @@
 	let authChecking = $state(true);
 	let authBusy = $state<'login' | 'logout' | null>(null);
 	let authError = $state('');
+	let authErrorKind = $state<'general' | 'password'>('general');
 	let authNotice = $state('');
+	let googleConfigured = $state(false);
+	let googleLinked = $state<boolean | null>(null);
+	let googleCallbackResult: GoogleCallbackResult | null = null;
+	let googleNavigationPending = $state<'login' | 'link' | null>(null);
 	let password = $state('');
 	let showPassword = $state(false);
 	let passwordInput = $state<HTMLInputElement>();
+	let googleLoginLink = $state<HTMLAnchorElement>();
 	let cards = $state<CardView[]>([]);
 	let plaid = $state<PlaidStatus>({ ...emptyPlaid });
 	let loading = $state(true);
@@ -135,6 +187,7 @@
 	let sessionCheckInFlight = false;
 	let privateStateEpoch = 0;
 	let nowTick = $state(Date.now());
+	const googleLoginAvailable = $derived(canOfferGoogleLogin(authMode, googleConfigured));
 
 	const totalStatementCents = $derived(
 		cards.reduce((total, card) => total + (card.statementBalanceCents ?? 0), 0)
@@ -149,6 +202,7 @@
 			.toSorted((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''))[0] ?? null
 	);
 	onMount(() => {
+		googleCallbackResult = consumeGoogleCallbackResult();
 		void initializeAuth();
 		document.addEventListener('visibilitychange', handleVisibilityChange);
 		clockTimer = setInterval(() => {
@@ -200,7 +254,7 @@
 			options.handleUnauthorized !== false &&
 			isPrivateEpochCurrent(requestEpoch)
 		) {
-			lockCloudSession('Your session expired. Enter your password to continue.');
+			lockCloudSession('Your session expired. Sign in to continue.');
 		}
 		if (!response.ok) {
 			const detail =
@@ -220,6 +274,7 @@
 	async function initializeAuth(): Promise<void> {
 		authChecking = true;
 		authError = '';
+		authErrorKind = 'general';
 
 		try {
 			const session = await requestJson<AuthSession>(
@@ -228,12 +283,18 @@
 				{ handleUnauthorized: false }
 			);
 			authMode = session.mode;
+			googleConfigured = session.google.configured;
+			googleLinked = session.google.linked;
 			authenticated = session.mode === 'local' || session.authenticated;
 			if (session.mode === 'cloud' && !session.authenticated) {
-				void tick().then(() => passwordInput?.focus());
+				void tick().then(() => {
+					if (googleLoginAvailable) googleLoginLink?.focus();
+					else passwordInput?.focus();
+				});
 			} else {
 				loadDashboardData();
 			}
+			showGoogleCallbackResult();
 		} catch (error) {
 			authMode = null;
 			authenticated = false;
@@ -254,8 +315,10 @@
 				{ privateEpoch: epoch }
 			);
 			if (!isPrivateEpochCurrent(epoch)) return;
+			googleConfigured = session.google.configured;
+			googleLinked = session.google.linked;
 			if (session.mode === 'cloud' && !session.authenticated) {
-				lockCloudSession('Your session expired. Enter your password to continue.');
+				lockCloudSession('Your session expired. Sign in to continue.');
 			}
 		} catch {
 			// A 401 locks the UI in requestJson. Transient network errors leave the current view intact.
@@ -266,6 +329,55 @@
 
 	function handleVisibilityChange(): void {
 		if (document.visibilityState === 'visible') void revalidateCloudSession();
+	}
+
+	function beginGoogleNavigation(event: MouseEvent, intent: 'login' | 'link'): void {
+		if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+			return;
+		if (googleNavigationPending) {
+			event.preventDefault();
+			return;
+		}
+		googleNavigationPending = intent;
+	}
+
+	function handleWindowPageShow(event: PageTransitionEvent): void {
+		if (event.persisted) googleNavigationPending = null;
+	}
+
+	function consumeGoogleCallbackResult(): GoogleCallbackResult | null {
+		const url = new URL(window.location.href);
+		const marker = url.searchParams.get('google');
+		const result = parseGoogleCallbackResult(marker);
+		if (marker !== null) {
+			replaceState(resolve('/'), {});
+		}
+		return result;
+	}
+
+	function showGoogleCallbackResult(): void {
+		const result = authorizeGoogleCallbackResult(
+			googleCallbackResult,
+			authenticated,
+			googleLinked === true
+		);
+		if (!result) return;
+		googleCallbackResult = null;
+
+		if (result === 'error') {
+			authErrorKind = 'general';
+			const message =
+				'Google sign-in could not be completed. Try again or use your CardDue password.';
+			if (authenticated) showNotice(message, 'error');
+			else authError = message;
+			return;
+		}
+
+		showNotice(
+			result === 'linked'
+				? 'Google sign-in is ready. Your CardDue password remains available for recovery.'
+				: 'Signed in with Google.'
+		);
 	}
 
 	function loadDashboardData(): void {
@@ -280,6 +392,7 @@
 		event.preventDefault();
 		if (authMode !== 'cloud' || authBusy) return;
 		authError = '';
+		authErrorKind = 'password';
 		authNotice = '';
 		if (!password) {
 			authError = 'Enter your CardDue password.';
@@ -300,6 +413,20 @@
 			password = '';
 			showPassword = false;
 			authenticated = true;
+			googleLinked = null;
+			try {
+				const session = await requestJson<AuthSession>(
+					resolve('/api/auth/session'),
+					{},
+					{ handleUnauthorized: false }
+				);
+				if (session.mode === 'cloud' && session.authenticated) {
+					googleConfigured = session.google.configured;
+					googleLinked = session.google.linked;
+				}
+			} catch {
+				// The password session remains valid; status is retried when this window regains focus.
+			}
 			loadDashboardData();
 		} catch (error) {
 			authError = readableError(error, 'Sign-in failed. Check your password and try again.');
@@ -332,12 +459,17 @@
 		if (authMode !== 'cloud') return;
 		privateStateEpoch += 1;
 		authenticated = false;
+		googleLinked = null;
 		authError = '';
+		authErrorKind = 'general';
 		authNotice = message;
 		password = '';
 		showPassword = false;
 		clearPrivateUiState();
-		void tick().then(() => passwordInput?.focus());
+		void tick().then(() => {
+			if (googleLoginAvailable) googleLoginLink?.focus();
+			else passwordInput?.focus();
+		});
 	}
 
 	function clearPrivateUiState(): void {
@@ -542,12 +674,6 @@
 		return cents === null ? '' : (cents / 100).toFixed(2);
 	}
 
-	function inputToCents(value: string): number | null {
-		if (!value.trim()) return null;
-		const parsed = Number(value);
-		return Number.isFinite(parsed) ? Math.round(parsed * 100) : null;
-	}
-
 	async function openAddDialog(): Promise<void> {
 		if (busyAction) return;
 		prepareDialog();
@@ -640,7 +766,7 @@
 			['Minimum payment', form.minimumPayment],
 			['Current balance', form.currentBalance]
 		] as const) {
-			if (value && (!Number.isFinite(Number(value)) || Number(value) < 0)) {
+			if (!isValidOptionalAmount(value)) {
 				return `${label} must be zero or more.`;
 			}
 		}
@@ -1073,7 +1199,11 @@
 	}
 </script>
 
-<svelte:window onkeydown={handleWindowKeydown} onfocus={revalidateCloudSession} />
+<svelte:window
+	onkeydown={handleWindowKeydown}
+	onfocus={revalidateCloudSession}
+	onpageshow={handleWindowPageShow}
+/>
 
 {#if authChecking}
 	<main class="auth-shell auth-loading" aria-busy="true">
@@ -1132,14 +1262,45 @@
 			</div>
 			<p class="section-kicker">Private cloud</p>
 			<h1 id="login-title">Unlock your dashboard</h1>
-			<p class="auth-intro">Enter the password for this CardDue server.</p>
+			<p class="auth-intro">
+				{googleLoginAvailable
+					? 'Continue with the Google account linked to this server. Your CardDue password remains available for recovery and first-time linking.'
+					: 'Enter the password for this CardDue server.'}
+			</p>
 
 			{#if authNotice}
 				<p class="auth-notice" role="status">{authNotice}</p>
 			{/if}
+			{#if authError}
+				<p id="login-error" class="login-error auth-login-error" role="alert">{authError}</p>
+			{/if}
+
+			{#if googleLoginAvailable}
+				<a
+					bind:this={googleLoginLink}
+					class="button google-button"
+					href={resolve('/api/auth/google/start?intent=login')}
+					onclick={(event) => beginGoogleNavigation(event, 'login')}
+					aria-busy={googleNavigationPending === 'login'}
+					aria-disabled={googleNavigationPending !== null ? 'true' : undefined}
+					aria-describedby="cloud-privacy-copy"
+					data-sveltekit-reload
+				>
+					<img
+						src={asset('/google-sign-in.svg')}
+						alt={googleNavigationPending === 'login' ? '' : 'Sign in with Google'}
+						width="180"
+						height="40"
+					/>
+					{#if googleNavigationPending === 'login'}
+						<span class="google-login-pending">Opening Google…</span>
+					{/if}
+				</a>
+				<div class="auth-divider" aria-hidden="true"><span>or use recovery password</span></div>
+			{/if}
 
 			<form class="login-form" onsubmit={login}>
-				<label for="cloud-password">Password</label>
+				<label for="cloud-password">CardDue password</label>
 				<div class="password-field">
 					<input
 						bind:this={passwordInput}
@@ -1151,8 +1312,10 @@
 						autocapitalize="none"
 						maxlength="1024"
 						spellcheck="false"
-						aria-invalid={authError ? 'true' : undefined}
-						aria-describedby={authError ? 'login-error cloud-privacy-copy' : 'cloud-privacy-copy'}
+						aria-invalid={authError && authErrorKind === 'password' ? 'true' : undefined}
+						aria-describedby={authError && authErrorKind === 'password'
+							? 'login-error cloud-privacy-copy'
+							: 'cloud-privacy-copy'}
 						required
 					/>
 					<button
@@ -1164,16 +1327,19 @@
 						{showPassword ? 'Hide' : 'Show'}
 					</button>
 				</div>
-				{#if authError}
-					<p id="login-error" class="login-error" role="alert">{authError}</p>
-				{/if}
 				<button
-					class="button button-primary login-button"
+					class="button login-button"
+					class:button-primary={!googleLoginAvailable}
+					class:button-secondary={googleLoginAvailable}
 					type="submit"
 					disabled={authBusy === 'login' || !password}
 					aria-busy={authBusy === 'login'}
 				>
-					{authBusy === 'login' ? 'Unlocking…' : 'Unlock CardDue'}
+					{authBusy === 'login'
+						? 'Unlocking…'
+						: googleLoginAvailable
+							? 'Unlock with password'
+							: 'Unlock CardDue'}
 				</button>
 			</form>
 
@@ -1183,10 +1349,16 @@
 					<path d="m7.5 10 1.7 1.7 3.5-4"></path>
 				</svg>
 				<p>
-					<strong>Know where your data lives.</strong> Cloud mode stores card data on the private CardDue
-					server you chose, not solely on this device. Use a deployment you trust over HTTPS. CardDue
-					keeps neither this password nor card data in browser storage; your server maintains the session
-					with an HttpOnly cookie.
+					{#if googleLoginAvailable}
+						<strong>Google never receives your card data.</strong> Choosing Google reveals this site’s
+						domain, your IP address, and sign-in timing. CardDue requests no email or profile details,
+						keeps no Google access token, and stores no card data in browser storage.
+					{:else}
+						<strong>Know where your data lives.</strong> Cloud mode stores card data on the private CardDue
+						server you chose, not solely on this device. Use a deployment you trust over HTTPS. CardDue
+						keeps neither this password nor card data in browser storage; your server maintains the session
+						with an HttpOnly cookie.
+					{/if}
 				</p>
 			</div>
 			<p class="auth-footer">No analytics · No external fonts · Open source</p>
@@ -1535,6 +1707,56 @@
 							<strong>Before you connect:</strong> Plaid’s CDN script runs in this dashboard page and
 							can access data rendered here. Refresh the page after connecting to unload it.
 						</p>
+						{#if authMode === 'cloud' && googleConfigured}
+							<section class="google-access" aria-labelledby="google-access-title">
+								<div class="google-access-heading">
+									<span class="google-access-icon" aria-hidden="true">
+										<svg viewBox="0 0 20 20">
+											<circle cx="7.5" cy="10" r="3.5"></circle>
+											<path d="M11 10h6m-2 0v2m-2-2v2"></path>
+										</svg>
+									</span>
+									<div>
+										<h3 id="google-access-title">Google sign-in</h3>
+										<p>
+											{googleLinked === true
+												? 'Ready to use. Your CardDue password remains available for recovery.'
+												: googleLinked === false
+													? 'Link your account while this password-authenticated session is open.'
+													: 'Checking account status…'}
+										</p>
+									</div>
+									{#if googleLinked === true}
+										<span class="google-ready"><span aria-hidden="true">✓</span> Ready</span>
+									{:else if googleLinked === false}
+										<a
+											class="button google-link-button"
+											href={resolve('/api/auth/google/start?intent=link')}
+											onclick={(event) => beginGoogleNavigation(event, 'link')}
+											aria-busy={googleNavigationPending === 'link'}
+											aria-disabled={googleNavigationPending !== null ? 'true' : undefined}
+											aria-describedby="google-link-privacy"
+											data-sveltekit-reload
+										>
+											{googleNavigationPending === 'link'
+												? 'Opening Google…'
+												: 'Link Google account'}
+										</a>
+									{/if}
+								</div>
+								<p id="google-link-privacy" class="google-privacy-note">
+									Google sees this site’s domain, your IP address, and sign-in timing when you use
+									it, but receives no card data from CardDue. CardDue requests no email or profile
+									details and does not keep Google tokens.
+								</p>
+								{#if googleLinked === false}
+									<p class="google-setup-note">
+										<strong>Deployment note:</strong> Google displays the OAuth support address publicly.
+										Use a monitored, non-personal alias or Google Group instead of a personal inbox.
+									</p>
+								{/if}
+							</section>
+						{/if}
 						<ul class="privacy-list">
 							<li>
 								<span class="check-mark">✓</span><span
@@ -1738,7 +1960,7 @@
 								name="last4"
 								inputmode="numeric"
 								maxlength="4"
-								pattern="[0-9]{4}"
+								pattern={LAST_FOUR_PATTERN}
 								placeholder="1234"
 							/>
 						</label>
@@ -1975,6 +2197,10 @@
 		margin-top: 1.5rem;
 	}
 
+	.auth-divider + .login-form {
+		margin-top: 0;
+	}
+
 	.login-form > label {
 		color: #3e4b43;
 		font-size: 0.69rem;
@@ -2029,6 +2255,83 @@
 		color: #8b3030;
 		font-size: 0.68rem;
 		line-height: 1.4;
+	}
+
+	.auth-login-error {
+		margin-top: 1rem;
+		padding: 0.65rem 0.75rem;
+		border: 1px solid #e8b9b5;
+		border-radius: 8px;
+		background: var(--red-soft);
+	}
+
+	.google-button {
+		position: relative;
+		width: 184px;
+		min-height: 44px;
+		padding: 2px;
+		border: 0;
+		border-radius: 22px;
+		background: transparent;
+		box-shadow: none;
+	}
+
+	.google-button {
+		margin-top: 1.25rem;
+		margin-right: auto;
+		margin-left: auto;
+	}
+
+	.google-button:hover {
+		background: transparent;
+		box-shadow: 0 5px 15px rgba(23, 35, 29, 0.12);
+	}
+
+	.google-button img {
+		display: block;
+		width: 180px;
+		height: 40px;
+	}
+
+	.google-login-pending {
+		position: absolute;
+		inset: 2px;
+		display: grid;
+		place-items: center;
+		border-radius: 20px;
+		color: #3c4043;
+		font-size: 0.72rem;
+		font-weight: 600;
+		background: #f2f2f2;
+	}
+
+	.google-button:focus-visible,
+	.google-link-button:focus-visible {
+		outline: 3px solid rgba(23, 107, 73, 0.22);
+		outline-offset: 2px;
+	}
+
+	.google-button[aria-disabled='true'],
+	.google-link-button[aria-disabled='true'] {
+		cursor: wait;
+		opacity: 0.65;
+	}
+
+	.auth-divider {
+		display: flex;
+		gap: 0.65rem;
+		align-items: center;
+		margin: 1.1rem 0;
+		color: var(--faint);
+		font-size: 0.62rem;
+	}
+
+	.auth-divider::before,
+	.auth-divider::after {
+		height: 1px;
+		flex: 1;
+		background: var(--line);
+		content: '';
 	}
 
 	.login-button {
@@ -2888,6 +3191,123 @@
 		list-style: none;
 	}
 
+	.google-access {
+		margin-top: 1rem;
+		padding: 0.85rem;
+		border: 1px solid #d9e2da;
+		border-radius: 10px;
+		background: var(--paper-soft);
+	}
+
+	.google-access-heading {
+		display: flex;
+		gap: 0.65rem;
+		align-items: center;
+		flex-wrap: wrap;
+	}
+
+	.google-access-heading > div {
+		min-width: 0;
+		flex: 1;
+	}
+
+	.google-access-icon {
+		display: grid;
+		width: 28px;
+		height: 28px;
+		flex: 0 0 auto;
+		place-items: center;
+		border-radius: 8px;
+		color: var(--green);
+		background: var(--green-soft);
+	}
+
+	.google-access-icon svg {
+		width: 17px;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.6;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+	}
+
+	.google-access h3,
+	.google-access p {
+		margin: 0;
+	}
+
+	.google-access h3 {
+		font-size: 0.75rem;
+		font-weight: 740;
+	}
+
+	.google-access-heading p {
+		margin-top: 0.18rem;
+		color: var(--muted);
+		font-size: 0.64rem;
+		line-height: 1.45;
+	}
+
+	.google-link-button {
+		min-height: 43px;
+		padding: 0.5rem 0.7rem;
+		color: var(--green);
+		border-color: #b9cfc0;
+		font-size: 0.66rem;
+		background: white;
+		box-shadow: none;
+	}
+
+	.google-link-button:hover {
+		border-color: var(--green);
+		background: white;
+	}
+
+	.google-ready {
+		display: inline-flex;
+		flex: 0 0 auto;
+		gap: 0.25rem;
+		align-items: center;
+		color: var(--green);
+		font-size: 0.64rem;
+		font-weight: 740;
+	}
+
+	.google-ready > span {
+		display: grid;
+		width: 17px;
+		height: 17px;
+		place-items: center;
+		border-radius: 50%;
+		color: white;
+		font-size: 0.57rem;
+		background: var(--green);
+	}
+
+	.google-access > .google-privacy-note {
+		margin-top: 0.7rem;
+		padding-top: 0.65rem;
+		border-top: 1px solid var(--line);
+		color: var(--faint);
+		font-size: 0.61rem;
+		line-height: 1.5;
+	}
+
+	.google-access > .google-setup-note {
+		margin-top: 0.65rem;
+		padding: 0.6rem 0.65rem;
+		border-left: 3px solid #d2a24c;
+		border-radius: 0 7px 7px 0;
+		color: #66553d;
+		font-size: 0.61rem;
+		line-height: 1.5;
+		background: #fff8e9;
+	}
+
+	.google-setup-note strong {
+		color: #6f4818;
+	}
+
 	.privacy-list li {
 		display: flex;
 		gap: 0.55rem;
@@ -3547,6 +3967,15 @@
 		.connection-list > li {
 			align-items: stretch;
 			flex-direction: column;
+		}
+
+		.google-access-heading {
+			align-items: flex-start;
+			flex-wrap: wrap;
+		}
+
+		.google-link-button {
+			margin-left: 0;
 		}
 
 		.connection-actions button {
