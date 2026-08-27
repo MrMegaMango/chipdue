@@ -2074,6 +2074,7 @@
 <style>
 	.auth-shell {
 		display: grid;
+		grid-template-columns: minmax(0, 1fr);
 		min-height: 100vh;
 		min-height: 100dvh;
 		place-items: center;
