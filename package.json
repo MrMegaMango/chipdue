@@ -8,6 +8,9 @@
 	"engines": {
 		"node": "22.x"
 	},
+	"overrides": {
+		"cookie": "^0.7.2"
+	},
 	"scripts": {
 		"dev": "vite dev --host 127.0.0.1",
 		"build": "node scripts/build-vercel.mjs",
