@@ -207,6 +207,11 @@ describe('banking visual identity', () => {
 			/\.activity-preview-list span \{[\s\S]*?color: var\(--faint\);[\s\S]*?font-size: 0\.74rem;/
 		);
 	});
+
+	it('lays out four cards across on desktop', () => {
+		const pageSource = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+		expect(pageSource).toContain('grid-template-columns: repeat(4, minmax(0, 1fr))');
+	});
 });
 
 describe('returning-user dashboard', () => {

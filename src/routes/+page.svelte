@@ -3689,8 +3689,8 @@
 
 	.card-grid {
 		display: grid;
-		grid-template-columns: repeat(3, minmax(0, 1fr));
-		gap: 1.2rem;
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+		gap: 1rem;
 	}
 
 	.credit-card {
@@ -5024,6 +5024,12 @@
 		from {
 			opacity: 0;
 			transform: translateY(8px);
+		}
+	}
+
+	@media (max-width: 1100px) {
+		.card-grid {
+			grid-template-columns: repeat(3, minmax(0, 1fr));
 		}
 	}
 
