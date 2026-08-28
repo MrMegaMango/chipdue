@@ -73,6 +73,24 @@
 	export function cardBrandForIssuer(issuer: string | null): 'venmo' | null {
 		return issuer && /\bvenmo\b/i.test(issuer) ? 'venmo' : null;
 	}
+
+	export type InterestSavingTarget = {
+		amountCents: number | null;
+		source: 'statement' | 'current' | 'unavailable';
+	};
+
+	export function interestSavingTarget(
+		statementBalanceCents: number | null,
+		currentBalanceCents: number | null
+	): InterestSavingTarget {
+		if (statementBalanceCents !== null) {
+			return { amountCents: Math.max(0, statementBalanceCents), source: 'statement' };
+		}
+		if (currentBalanceCents !== null) {
+			return { amountCents: Math.max(0, currentBalanceCents), source: 'current' };
+		}
+		return { amountCents: null, source: 'unavailable' };
+	}
 </script>
 
 <script lang="ts">
@@ -284,11 +302,17 @@
 	);
 	const showOnboardingHero = $derived(hasLoadedCards && cards.length === 0);
 
-	const totalStatementCents = $derived(
-		cards.reduce((total, card) => total + (card.statementBalanceCents ?? 0), 0)
+	const interestSavingTargets = $derived(
+		cards.map((card) => interestSavingTarget(card.statementBalanceCents, card.currentBalanceCents))
 	);
-	const knownStatementCount = $derived(
-		cards.reduce((total, card) => total + (card.statementBalanceCents === null ? 0 : 1), 0)
+	const totalInterestSavingCents = $derived(
+		interestSavingTargets.reduce((total, target) => total + (target.amountCents ?? 0), 0)
+	);
+	const knownInterestSavingCount = $derived(
+		interestSavingTargets.filter((target) => target.amountCents !== null).length
+	);
+	const estimatedInterestSavingCount = $derived(
+		interestSavingTargets.filter((target) => target.source === 'current').length
 	);
 	const dueSoonCount = $derived(cards.filter((card) => isDueSoon(card)).length);
 	const nextCard = $derived(
@@ -1975,19 +1999,24 @@
 						>
 					</div>
 					<div>
-						<p>Statement balances</p>
+						<p>Pay to avoid interest</p>
 						<strong>
 							{loading || !hasLoadedCards
 								? '—'
-								: cards.length > 0 && knownStatementCount === 0
+								: cards.length > 0 && knownInterestSavingCount === 0
 									? 'Not reported'
-									: formatMoney(totalStatementCents)}
+									: formatMoney(totalInterestSavingCents)}
 						</strong>
 						<span>
 							{#if !hasLoadedCards}
 								Awaiting local data
-							{:else if knownStatementCount < cards.length}
-								{knownStatementCount} of {cards.length} reported
+							{:else if estimatedInterestSavingCount > 0}
+								Includes {estimatedInterestSavingCount} current-balance {estimatedInterestSavingCount ===
+								1
+									? 'estimate'
+									: 'estimates'}
+							{:else if knownInterestSavingCount < cards.length}
+								{knownInterestSavingCount} of {cards.length} reported
 							{:else}
 								Across {cards.length} {cards.length === 1 ? 'card' : 'cards'}
 							{/if}
@@ -2082,6 +2111,10 @@
 						{#each cards as card (card.id)}
 							{@const status = dueStatus(card)}
 							{@const cardBrand = cardBrandForIssuer(card.issuer)}
+							{@const paymentTarget = interestSavingTarget(
+								card.statementBalanceCents,
+								card.currentBalanceCents
+							)}
 							<article class:overdue={status.tone === 'danger'} class="credit-card">
 								<header class="card-header">
 									<div class="card-identity">
@@ -2101,22 +2134,30 @@
 								</header>
 
 								<div class="balance-block">
-									<span>Statement balance</span>
-									<strong class:unavailable={card.statementBalanceCents === null}>
-										{formatMoney(card.statementBalanceCents)}
+									<span>Pay to avoid interest</span>
+									<strong class:unavailable={paymentTarget.amountCents === null}>
+										{formatMoney(paymentTarget.amountCents)}
 									</strong>
-									{#if card.currentBalanceCents !== null}
-										<small>Current {formatMoney(card.currentBalanceCents)}</small>
+									{#if paymentTarget.source === 'statement'}
+										<small>
+											Latest statement balance{card.currentBalanceCents !== null
+												? ` · Current ${formatMoney(card.currentBalanceCents)}`
+												: ''}
+										</small>
+									{:else if paymentTarget.source === 'current'}
+										<small>Current-balance estimate · statement not reported</small>
+									{:else}
+										<small>Check your issuer for the statement balance</small>
 									{/if}
 								</div>
 
 								<div class="payment-details">
 									<div>
-										<span>Minimum due</span>
+										<span>Minimum payment</span>
 										<strong>{formatMoney(card.minimumPaymentCents)}</strong>
 									</div>
 									<div>
-										<span>Next due date</span>
+										<span>Due date</span>
 										<strong>{formatDate(card.dueDate)}</strong>
 									</div>
 								</div>

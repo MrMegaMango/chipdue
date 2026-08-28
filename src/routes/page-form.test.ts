@@ -8,6 +8,7 @@ import {
 	canShowPasswordLogin,
 	GOOGLE_BOOTSTRAP_CONTINUE_TO,
 	inputToCents,
+	interestSavingTarget,
 	isApprovedBootstrapContinuation,
 	isGoogleOnlyCloudMode,
 	isValidOptionalAmount,
@@ -135,6 +136,33 @@ describe('card activity preview', () => {
 		expect(source).toContain('View all activity');
 		expect(source).toContain('?limit=${RECENT_ACTIVITY_LIMIT}');
 		expect(source).toContain('onclick={() => openTransactionHistory(card)}');
+	});
+});
+
+describe('interest-saving payment target', () => {
+	it('prioritizes the reported statement balance over the current balance', () => {
+		expect(interestSavingTarget(120_000, 145_000)).toEqual({
+			amountCents: 120_000,
+			source: 'statement'
+		});
+	});
+
+	it('uses a clearly identified current-balance estimate when the statement is unavailable', () => {
+		expect(interestSavingTarget(null, 145_000)).toEqual({
+			amountCents: 145_000,
+			source: 'current'
+		});
+		expect(interestSavingTarget(null, null)).toEqual({
+			amountCents: null,
+			source: 'unavailable'
+		});
+	});
+
+	it('never suggests paying a negative balance', () => {
+		expect(interestSavingTarget(-2_500, -1_000)).toEqual({
+			amountCents: 0,
+			source: 'statement'
+		});
 	});
 });
 
