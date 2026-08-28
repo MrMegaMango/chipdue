@@ -152,3 +152,15 @@ describe('issuer branding', () => {
 		expect(source).not.toContain('paypalobjects.com');
 	});
 });
+
+describe('banking visual identity', () => {
+	it('uses the ink-and-cobalt palette without the decorative card stripe', () => {
+		const pageSource = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+		const layoutSource = readFileSync(new URL('./layout.css', import.meta.url), 'utf8');
+		expect(pageSource).not.toContain('class="card-accent"');
+		expect(pageSource).not.toContain('var(--green');
+		expect(layoutSource).toContain('--ink: #111827');
+		expect(layoutSource).toContain('--accent: #3d5afe');
+		expect(layoutSource).toContain('background: #f1ede5');
+	});
+});
