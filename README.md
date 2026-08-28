@@ -15,6 +15,7 @@ Choose one of two deployment modes:
 - Track signup bonuses from opening through requirements, qualification, payout, and safe-to-close dates.
 - Record brokerage balances and cost basis to see simple performance without turning ChipDue into a trading terminal.
 - Track statement balance, minimum due, current balance, due date, statement date, and autopay status.
+- Track each card’s rewards program, current cash-equivalent reward value, and flexible bonus categories such as dining at 3x or groceries at 5%.
 - Optionally link one Google account for cloud sign-in without storing an email, profile, Google token, or refresh token.
 - Connect Plaid only when you explicitly choose to; manual mode never contacts Plaid.
 - Encrypt account and bonus records, card payloads, transaction history, Plaid cursors, access tokens, Item IDs, and institution names with AES-256-GCM.

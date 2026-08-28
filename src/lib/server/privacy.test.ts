@@ -12,12 +12,18 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createManualCard, listCards, listCardTransactions, replacePlaidCards } from './cards';
+import {
+	createManualCard,
+	listCards,
+	listCardTransactions,
+	replacePlaidCards,
+	updateCardRewards
+} from './cards';
 import { closeDatabaseForTests, getDatabase } from './database';
 import { decryptSecret, encryptSecret, resetCryptoStateForTests } from './crypto';
 import { ensurePrivateDataDirectory, getDataPaths } from './paths';
 import { savePlaidItem } from './plaid-store';
-import { createManualCardSchema } from './schemas';
+import { createManualCardSchema, updateCardRewardsSchema } from './schemas';
 
 describe.sequential('private local persistence', () => {
 	let temporaryDirectory: string;
@@ -53,6 +59,8 @@ describe.sequential('private local persistence', () => {
 
 	it('never writes plaintext card details to SQLite', async () => {
 		const privateNickname = 'Private test card 7f061bd7';
+		const privateRewardProgram = 'Private reward program 2d1441a4';
+		const privateRewardCategory = 'Private reward category a9d12520';
 		const card = await createManualCard(
 			createManualCardSchema.parse({
 				nickname: privateNickname,
@@ -62,12 +70,34 @@ describe.sequential('private local persistence', () => {
 				statementBalanceCents: 12_345
 			})
 		);
+		const updatedCard = await updateCardRewards(
+			card.id,
+			updateCardRewardsSchema.parse({
+				rewardProgramName: privateRewardProgram,
+				rewardValueCents: 8_765,
+				rewardCategories: [{ name: privateRewardCategory, rate: '4x' }]
+			})
+		);
 
 		expect(card.nickname).toBe(privateNickname);
+		expect(updatedCard).toMatchObject({
+			rewardProgramName: privateRewardProgram,
+			rewardValueCents: 8_765
+		});
+		expect(updatedCard.rewardCategories[0]).toMatchObject({
+			name: privateRewardCategory,
+			rate: '4x'
+		});
 		getDatabase().pragma('wal_checkpoint(TRUNCATE)');
 		const databaseBytes = readFileSync(join(temporaryDirectory, 'carddue.sqlite3'));
-		expect(databaseBytes.includes(Buffer.from(privateNickname))).toBe(false);
-		expect(databaseBytes.includes(Buffer.from('Private test issuer'))).toBe(false);
+		for (const privateValue of [
+			privateNickname,
+			'Private test issuer',
+			privateRewardProgram,
+			privateRewardCategory
+		]) {
+			expect(databaseBytes.includes(Buffer.from(privateValue))).toBe(false);
+		}
 	});
 
 	it('encrypts transaction history, cursors, and provider identifiers at rest', async () => {

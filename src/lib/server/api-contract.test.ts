@@ -6,6 +6,7 @@ import {
 	GET as listCardsEndpoint,
 	POST as createCardEndpoint
 } from '../../routes/api/cards/+server';
+import { PATCH as updateCardRewardsEndpoint } from '../../routes/api/cards/[id]/rewards/+server';
 import { closeDatabaseForTests } from './database';
 import { resetCryptoStateForTests } from './crypto';
 
@@ -24,6 +25,14 @@ function restoreEnvironment(previous: TestEnvironment): void {
 
 async function createCard(request: Request): Promise<Response> {
 	return (await createCardEndpoint({
+		request,
+		url: new URL(request.url)
+	} as never)) as Response;
+}
+
+async function updateCardRewards(id: string, request: Request): Promise<Response> {
+	return (await updateCardRewardsEndpoint({
+		params: { id },
 		request,
 		url: new URL(request.url)
 	} as never)) as Response;
@@ -84,9 +93,47 @@ describe.sequential('cards API contract', () => {
 			minimumPaymentCents: 2_500,
 			currentBalanceCents: null,
 			statementDate: null,
-			autopayEnabled: false
+			autopayEnabled: false,
+			rewardProgramName: null,
+			rewardValueCents: null,
+			rewardCategories: []
 		});
 		expect(payload.card).not.toHaveProperty('payload_enc');
+	});
+
+	it('updates reward value and categories for a card', async () => {
+		const createResponse = await createCard(
+			new Request('http://localhost/api/cards', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json', origin: 'http://localhost' },
+				body: JSON.stringify({ nickname: 'Rewards card' })
+			})
+		);
+		const created = await createResponse.json();
+		const response = await updateCardRewards(
+			created.card.id,
+			new Request(`http://localhost/api/cards/${created.card.id}/rewards`, {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json', origin: 'http://localhost' },
+				body: JSON.stringify({
+					rewardProgramName: 'Cash Rewards',
+					rewardValueCents: 4_321,
+					rewardCategories: [{ name: 'Online shopping', rate: '3%' }]
+				})
+			})
+		);
+
+		expect(response.status).toBe(200);
+		const payload = await response.json();
+		expect(payload.card).toMatchObject({
+			rewardProgramName: 'Cash Rewards',
+			rewardValueCents: 4_321
+		});
+		expect(payload.card.rewardCategories[0]).toMatchObject({
+			name: 'Online shopping',
+			rate: '3%'
+		});
+		expect(payload.card.rewardCategories[0].id).toMatch(/^[0-9a-f]{8}-[0-9a-f-]{27}$/i);
 	});
 
 	it('rejects non-JSON and cross-origin mutations without reflecting input', async () => {

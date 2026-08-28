@@ -60,6 +60,14 @@ const bonusRequirementSchema = z
 	})
 	.strict();
 
+const cardRewardCategorySchema = z
+	.object({
+		id: z.uuid().optional(),
+		name: z.string().trim().min(1).max(60),
+		rate: z.string().trim().min(1).max(20)
+	})
+	.strict();
+
 export const createManualCardSchema = z
 	.object({
 		nickname: labelSchema,
@@ -89,6 +97,15 @@ export const updateManualCardSchema = z
 		statementDate: isoDateSchema.nullable().optional(),
 		isOverdue: z.boolean().nullable().optional(),
 		autopayEnabled: z.boolean().optional()
+	})
+	.strict()
+	.refine((value) => Object.keys(value).length > 0, 'At least one field is required');
+
+export const updateCardRewardsSchema = z
+	.object({
+		rewardProgramName: optionalNameSchema.optional(),
+		rewardValueCents: nonnegativeCentsSchema.optional(),
+		rewardCategories: z.array(cardRewardCategorySchema).max(12).optional()
 	})
 	.strict()
 	.refine((value) => Object.keys(value).length > 0, 'At least one field is required');
@@ -172,6 +189,7 @@ export const exchangeTokenSchema = z
 
 export type CreateManualCardData = z.infer<typeof createManualCardSchema>;
 export type UpdateManualCardData = z.infer<typeof updateManualCardSchema>;
+export type UpdateCardRewardsData = z.infer<typeof updateCardRewardsSchema>;
 export type CreateFinancialAccountData = z.infer<typeof createFinancialAccountSchema>;
 export type UpdateFinancialAccountData = z.infer<typeof updateFinancialAccountSchema>;
 export type CreateBonusData = z.infer<typeof createBonusSchema>;

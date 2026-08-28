@@ -139,6 +139,9 @@
 		statementDate: string | null;
 		isOverdue: boolean | null;
 		autopayEnabled: boolean;
+		rewardProgramName: string | null;
+		rewardValueCents: number | null;
+		rewardCategories: CardRewardCategory[];
 		transactionHistoryEnabled: boolean;
 		transactionHistoryStatus:
 			| 'TRANSACTIONS_UPDATE_STATUS_UNKNOWN'
@@ -150,6 +153,13 @@
 		updatedAt: string;
 		lastSyncedAt?: string | null;
 	};
+
+	type CardRewardCategory = {
+		id: string;
+		name: string;
+		rate: string;
+	};
+	type EditableRewardCategory = Omit<CardRewardCategory, 'id'> & { id?: string };
 
 	type CardTransaction = {
 		id: string;
@@ -213,6 +223,12 @@
 		dueDate: string;
 		statementDate: string;
 		autopayEnabled: boolean;
+	};
+
+	type RewardsForm = {
+		programName: string;
+		rewardValue: string | number | undefined;
+		categories: EditableRewardCategory[];
 	};
 
 	type PlaidHandler = {
@@ -284,7 +300,15 @@
 	let form = $state<CardForm>(blankForm());
 	let formError = $state('');
 	let busyAction = $state<
-		'save' | 'delete' | 'connect' | 'sync' | 'disconnect' | 'update' | 'enable-history' | null
+		| 'save'
+		| 'save-rewards'
+		| 'delete'
+		| 'connect'
+		| 'sync'
+		| 'disconnect'
+		| 'update'
+		| 'enable-history'
+		| null
 	>(null);
 	let deletingId = $state<string | null>(null);
 	let plaidConnections = $state<PlaidConnection[]>([]);
@@ -298,6 +322,11 @@
 	let historyLoading = $state(false);
 	let historyError = $state('');
 	let historyCloseButton = $state<HTMLButtonElement>();
+	let rewardsCard = $state<CardView | null>(null);
+	let rewardsForm = $state<RewardsForm>(blankRewardsForm());
+	let rewardsError = $state('');
+	let rewardsFirstField = $state<HTMLInputElement>();
+	let rewardsCloseButton = $state<HTMLButtonElement>();
 	let recentActivityByCard = $state<Record<string, CardTransaction[]>>({});
 	let recentActivityLoadingByCard = $state<Record<string, boolean>>({});
 	let recentActivityErrorByCard = $state<Record<string, boolean>>({});
@@ -394,7 +423,9 @@
 			setupToken = '';
 			if (noticeTimer) clearTimeout(noticeTimer);
 			if (clockTimer) clearInterval(clockTimer);
-			if (dialogMode || historyCard) document.body.style.overflow = previousBodyOverflow;
+			if (dialogMode || historyCard || rewardsCard) {
+				document.body.style.overflow = previousBodyOverflow;
+			}
 			document.removeEventListener('visibilitychange', handleVisibilityChange);
 		};
 	});
@@ -410,6 +441,14 @@
 			dueDate: '',
 			statementDate: '',
 			autopayEnabled: false
+		};
+	}
+
+	function blankRewardsForm(): RewardsForm {
+		return {
+			programName: '',
+			rewardValue: '',
+			categories: []
 		};
 	}
 
@@ -783,6 +822,11 @@
 		historyLoading = false;
 		historyError = '';
 		historyCloseButton = undefined;
+		rewardsCard = null;
+		rewardsForm = blankRewardsForm();
+		rewardsError = '';
+		rewardsFirstField = undefined;
+		rewardsCloseButton = undefined;
 		recentActivityByCard = {};
 		recentActivityLoadingByCard = {};
 		recentActivityErrorByCard = {};
@@ -1103,6 +1147,111 @@
 		dismissDialog();
 	}
 
+	async function openRewardsDialog(card: CardView): Promise<void> {
+		if (busyAction) return;
+		prepareDialog();
+		rewardsCard = card;
+		rewardsForm = {
+			programName: card.rewardProgramName ?? '',
+			rewardValue: centsToInput(card.rewardValueCents),
+			categories: card.rewardCategories.map((category) => ({ ...category }))
+		};
+		rewardsError = '';
+		await tick();
+		rewardsFirstField?.focus();
+	}
+
+	function addRewardCategory(): void {
+		if (rewardsForm.categories.length >= 12) return;
+		rewardsForm.categories = [...rewardsForm.categories, { name: '', rate: '' }];
+	}
+
+	function removeRewardCategory(index: number): void {
+		rewardsForm.categories = rewardsForm.categories.filter(
+			(_category, categoryIndex) => categoryIndex !== index
+		);
+	}
+
+	function validateRewardsForm(): string | null {
+		if (rewardsForm.programName.trim().length > 80) {
+			return 'Program name must be 80 characters or fewer.';
+		}
+		if (!isValidOptionalAmount(rewardsForm.rewardValue)) {
+			return 'Reward value must be zero or more.';
+		}
+		for (const category of rewardsForm.categories) {
+			const name = category.name.trim();
+			const rate = category.rate.trim();
+			if (!name && !rate) continue;
+			if (!name || !rate) return 'Each reward category needs both a category and a rate.';
+			if (name.length > 60) return 'Category names must be 60 characters or fewer.';
+			if (rate.length > 20) return 'Reward rates must be 20 characters or fewer.';
+		}
+		return null;
+	}
+
+	function closeRewardsDialog(): void {
+		if (busyAction === 'save-rewards') return;
+		const focusTarget = previouslyFocused;
+		rewardsCard = null;
+		rewardsForm = blankRewardsForm();
+		rewardsError = '';
+		document.body.style.overflow = previousBodyOverflow;
+		previouslyFocused = undefined;
+		void tick().then(() => focusTarget?.focus());
+	}
+
+	async function saveCardRewards(event: SubmitEvent): Promise<void> {
+		event.preventDefault();
+		const card = rewardsCard;
+		const epoch = privateStateEpoch;
+		if (!card || !isPrivateEpochCurrent(epoch)) return;
+		rewardsError = validateRewardsForm() ?? '';
+		if (rewardsError) return;
+
+		const rewardCategories = rewardsForm.categories.flatMap((category) => {
+			const name = category.name.trim();
+			const rate = category.rate.trim();
+			if (!name && !rate) return [];
+			return [{ ...(category.id ? { id: category.id } : {}), name, rate }];
+		});
+		busyAction = 'save-rewards';
+		try {
+			await requestJson(
+				resolve('/api/cards/[id]/rewards', { id: card.id }),
+				{
+					method: 'PATCH',
+					body: JSON.stringify({
+						rewardProgramName: rewardsForm.programName.trim() || null,
+						rewardValueCents: inputToCents(rewardsForm.rewardValue),
+						rewardCategories
+					})
+				},
+				{ privateEpoch: epoch }
+			);
+			if (!isPrivateEpochCurrent(epoch)) return;
+			const focusTarget = previouslyFocused;
+			rewardsCard = null;
+			rewardsForm = blankRewardsForm();
+			document.body.style.overflow = previousBodyOverflow;
+			previouslyFocused = undefined;
+			const refreshed = await refreshCards(true, epoch);
+			if (!isPrivateEpochCurrent(epoch)) return;
+			showNotice(
+				refreshed
+					? 'Card rewards updated.'
+					: 'Card rewards updated, but the dashboard could not refresh.',
+				refreshed ? 'success' : 'error'
+			);
+			focusTarget?.focus();
+		} catch (error) {
+			if (!isPrivateEpochCurrent(epoch)) return;
+			rewardsError = readableError(error, 'Card rewards could not be saved.');
+		} finally {
+			if (isPrivateEpochCurrent(epoch)) busyAction = null;
+		}
+	}
+
 	async function openTransactionHistory(card: CardView): Promise<void> {
 		if (card.source !== 'plaid' || !card.transactionHistoryEnabled || busyAction) return;
 		const epoch = privateStateEpoch;
@@ -1154,10 +1303,11 @@
 	}
 
 	function handleWindowKeydown(event: KeyboardEvent): void {
-		if (!dialogMode && !historyCard) return;
+		if (!dialogMode && !historyCard && !rewardsCard) return;
 		if (event.key === 'Escape') {
 			event.preventDefault();
 			if (historyCard) closeTransactionHistory();
+			else if (rewardsCard) closeRewardsDialog();
 			else closeDialog();
 			return;
 		}
@@ -2303,6 +2453,30 @@
 									{/if}
 								</div>
 
+								{#if card.rewardProgramName || card.rewardValueCents !== null || card.rewardCategories.length > 0}
+									<section class="card-rewards" aria-label={`Rewards for ${card.nickname}`}>
+										<header>
+											<div>
+												<span>Rewards</span>
+												<strong>{card.rewardProgramName ?? 'Card rewards'}</strong>
+											</div>
+											{#if card.rewardValueCents !== null}
+												<div class="reward-value">
+													<span>Cash value</span>
+													<strong>{formatMoney(card.rewardValueCents)}</strong>
+												</div>
+											{/if}
+										</header>
+										{#if card.rewardCategories.length > 0}
+											<ul>
+												{#each card.rewardCategories as category (category.id)}
+													<li><span>{category.name}</span><strong>{category.rate}</strong></li>
+												{/each}
+											</ul>
+										{/if}
+									</section>
+								{/if}
+
 								{#if card.source === 'plaid' && card.transactionHistoryEnabled}
 									<section
 										class="card-activity-preview"
@@ -2374,8 +2548,14 @@
 											card.source === 'plaid' ? 'Synced' : 'Updated'
 										)}
 									</span>
-									{#if card.source === 'manual'}
-										<div class="card-actions">
+									<div class="card-actions">
+										<button
+											class="rewards-button"
+											type="button"
+											onclick={() => openRewardsDialog(card)}
+											disabled={busyAction !== null}>Rewards</button
+										>
+										{#if card.source === 'manual'}
 											<button
 												type="button"
 												onclick={() => openEditDialog(card)}
@@ -2389,9 +2569,7 @@
 											>
 												{deletingId === card.id ? 'Deleting…' : 'Delete'}
 											</button>
-										</div>
-									{:else if !card.transactionHistoryEnabled}
-										<div class="card-actions">
+										{:else if !card.transactionHistoryEnabled}
 											<button
 												class="history-button"
 												type="button"
@@ -2406,8 +2584,8 @@
 													? 'Opening…'
 													: 'Enable activity'}
 											</button>
-										</div>
-									{/if}
+										{/if}
+									</div>
 								</footer>
 							</article>
 						{/each}
@@ -2825,6 +3003,137 @@
 								: dialogMode === 'edit'
 									? 'Save changes'
 									: 'Add card'}
+						</button>
+					</footer>
+				</form>
+			</div>
+		</div>
+	{/if}
+
+	{#if rewardsCard}
+		<div class="dialog-layer">
+			<div class="dialog-backdrop"></div>
+			<div
+				bind:this={dialogElement}
+				class="dialog rewards-dialog"
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby="rewards-dialog-title"
+				aria-describedby="rewards-dialog-description"
+			>
+				<header class="dialog-header">
+					<div>
+						<p class="section-kicker">Card rewards</p>
+						<h2 id="rewards-dialog-title">{rewardsCard.nickname}</h2>
+						<p id="rewards-dialog-description">
+							Track the cash value you have earned and the categories that earn more.
+						</p>
+					</div>
+					<button
+						bind:this={rewardsCloseButton}
+						class="icon-button"
+						type="button"
+						onclick={closeRewardsDialog}
+						disabled={busyAction === 'save-rewards'}
+						aria-label="Close card rewards"
+					>
+						<svg aria-hidden="true" viewBox="0 0 20 20"><path d="m5 5 10 10M15 5 5 15"></path></svg>
+					</button>
+				</header>
+
+				<form class="card-form rewards-form" onsubmit={saveCardRewards} autocomplete="off">
+					<div class="form-grid">
+						<label class="field">
+							<span>Rewards program <small>Optional</small></span>
+							<input
+								bind:this={rewardsFirstField}
+								bind:value={rewardsForm.programName}
+								name="rewardProgramName"
+								maxlength="80"
+								placeholder="Ultimate Rewards"
+							/>
+						</label>
+
+						<label class="field">
+							<span>Current reward value <small>Cash equivalent</small></span>
+							<div class="money-input">
+								<span>$</span><input
+									bind:value={rewardsForm.rewardValue}
+									name="rewardValue"
+									type="number"
+									min="0"
+									step="0.01"
+									inputmode="decimal"
+									placeholder="0.00"
+								/>
+							</div>
+						</label>
+					</div>
+
+					<section class="reward-category-editor" aria-labelledby="reward-categories-title">
+						<header>
+							<div>
+								<h3 id="reward-categories-title">Bonus categories</h3>
+								<p>Examples: Dining at 3x, or groceries at 5%.</p>
+							</div>
+							<button
+								type="button"
+								onclick={addRewardCategory}
+								disabled={rewardsForm.categories.length >= 12 || busyAction === 'save-rewards'}
+							>
+								+ Add category
+							</button>
+						</header>
+
+						{#if rewardsForm.categories.length > 0}
+							<div class="reward-category-rows">
+								{#each rewardsForm.categories as category, index (category)}
+									<div class="reward-category-row">
+										<label>
+											<span>Category</span>
+											<input bind:value={category.name} maxlength="60" placeholder="Dining" />
+										</label>
+										<label class="reward-rate-field">
+											<span>Rate</span>
+											<input bind:value={category.rate} maxlength="20" placeholder="3x" />
+										</label>
+										<button
+											class="remove-reward-category"
+											type="button"
+											onclick={() => removeRewardCategory(index)}
+											disabled={busyAction === 'save-rewards'}
+											aria-label={`Remove ${category.name || `category ${index + 1}`}`}
+										>
+											<svg aria-hidden="true" viewBox="0 0 20 20"
+												><path d="M5 5l10 10M15 5 5 15"></path></svg
+											>
+										</button>
+									</div>
+								{/each}
+							</div>
+						{:else}
+							<p class="reward-categories-empty">No bonus categories added yet.</p>
+						{/if}
+					</section>
+
+					{#if rewardsError}
+						<p class="form-error" role="alert">{rewardsError}</p>
+					{/if}
+
+					<footer class="dialog-actions">
+						<button
+							class="button button-quiet"
+							type="button"
+							onclick={closeRewardsDialog}
+							disabled={busyAction === 'save-rewards'}>Cancel</button
+						>
+						<button
+							class="button button-primary"
+							type="submit"
+							disabled={busyAction === 'save-rewards'}
+							aria-busy={busyAction === 'save-rewards'}
+						>
+							{busyAction === 'save-rewards' ? 'Saving…' : 'Save rewards'}
 						</button>
 					</footer>
 				</form>
@@ -4145,6 +4454,79 @@
 		stroke-width: 2;
 	}
 
+	.card-rewards {
+		margin: 0 1.25rem 1rem;
+		padding: 0.8rem;
+		border: 1px solid #d9d2f0;
+		border-radius: 8px;
+		background: #f7f4ff;
+	}
+
+	.card-rewards header {
+		display: flex;
+		gap: 0.75rem;
+		align-items: flex-start;
+		justify-content: space-between;
+	}
+
+	.card-rewards header > div {
+		display: grid;
+		min-width: 0;
+		gap: 0.12rem;
+	}
+
+	.card-rewards header span {
+		color: #756c8c;
+		font-size: 0.58rem;
+		font-weight: 720;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+
+	.card-rewards header strong {
+		overflow: hidden;
+		font-size: 0.76rem;
+		font-weight: 720;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.card-rewards .reward-value {
+		align-items: end;
+		text-align: right;
+	}
+
+	.card-rewards .reward-value strong {
+		color: var(--positive);
+		font-variant-numeric: tabular-nums;
+	}
+
+	.card-rewards ul {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.38rem;
+		margin: 0.7rem 0 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	.card-rewards li {
+		display: inline-flex;
+		gap: 0.32rem;
+		align-items: center;
+		padding: 0.3rem 0.42rem;
+		border: 1px solid #ded7f2;
+		border-radius: 999px;
+		color: #544d67;
+		font-size: 0.63rem;
+		background: white;
+	}
+
+	.card-rewards li strong {
+		color: var(--accent);
+		font-size: inherit;
+	}
+
 	.card-activity-preview {
 		margin: 0 1.25rem 1rem;
 		overflow: hidden;
@@ -4336,6 +4718,10 @@
 
 	.card-actions .history-button {
 		color: var(--accent);
+	}
+
+	.card-actions .rewards-button {
+		color: #5b4b91;
 	}
 
 	.skeleton-card {
@@ -4934,6 +5320,11 @@
 		background: var(--paper-soft);
 	}
 
+	.icon-button:disabled {
+		cursor: not-allowed;
+		opacity: 0.55;
+	}
+
 	.icon-button svg {
 		width: 17px;
 		fill: none;
@@ -4944,6 +5335,10 @@
 
 	.history-dialog {
 		width: min(100%, 720px);
+	}
+
+	.rewards-dialog {
+		width: min(100%, 680px);
 	}
 
 	.history-body {
@@ -5157,6 +5552,133 @@
 		border-radius: 0;
 		font-size: 0.78rem;
 		outline: 0;
+	}
+
+	.reward-category-editor {
+		margin-top: 1rem;
+		padding: 0.9rem;
+		border: 1px solid var(--line);
+		border-radius: 9px;
+		background: var(--paper-soft);
+	}
+
+	.reward-category-editor > header {
+		display: flex;
+		gap: 1rem;
+		align-items: center;
+		justify-content: space-between;
+	}
+
+	.reward-category-editor h3,
+	.reward-category-editor p {
+		margin: 0;
+	}
+
+	.reward-category-editor h3 {
+		font-size: 0.74rem;
+		font-weight: 730;
+	}
+
+	.reward-category-editor header p {
+		margin-top: 0.2rem;
+		color: var(--muted);
+		font-size: 0.62rem;
+	}
+
+	.reward-category-editor header button {
+		min-height: 32px;
+		padding: 0.42rem 0.58rem;
+		border: 1px solid #b9c3f5;
+		border-radius: 7px;
+		color: var(--accent);
+		font-size: 0.65rem;
+		font-weight: 700;
+		background: white;
+		cursor: pointer;
+	}
+
+	.reward-category-editor button:disabled {
+		cursor: not-allowed;
+		opacity: 0.5;
+	}
+
+	.reward-category-rows {
+		display: grid;
+		gap: 0.6rem;
+		margin-top: 0.8rem;
+	}
+
+	.reward-category-row {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) 110px 32px;
+		gap: 0.5rem;
+		align-items: end;
+	}
+
+	.reward-category-row label {
+		display: grid;
+		min-width: 0;
+		gap: 0.32rem;
+	}
+
+	.reward-category-row label > span {
+		color: var(--muted);
+		font-size: 0.59rem;
+		font-weight: 650;
+	}
+
+	.reward-category-row input {
+		width: 100%;
+		min-width: 0;
+		min-height: 38px;
+		padding: 0.55rem 0.62rem;
+		border: 1px solid var(--line-strong);
+		border-radius: 8px;
+		font-size: 0.72rem;
+		background: white;
+	}
+
+	.reward-category-row input:focus {
+		border-color: var(--accent);
+		outline: 0;
+		box-shadow: 0 0 0 3px rgba(61, 90, 254, 0.12);
+	}
+
+	.remove-reward-category {
+		display: grid;
+		width: 32px;
+		height: 38px;
+		place-items: center;
+		padding: 0;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		color: var(--muted);
+		background: white;
+		cursor: pointer;
+	}
+
+	.remove-reward-category:hover:not(:disabled) {
+		color: var(--red);
+		border-color: #dfbbb7;
+	}
+
+	.remove-reward-category svg {
+		width: 14px;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.8;
+		stroke-linecap: round;
+	}
+
+	.reward-categories-empty {
+		margin-top: 0.8rem;
+		padding: 0.75rem;
+		border: 1px dashed var(--line-strong);
+		border-radius: 8px;
+		color: var(--faint);
+		font-size: 0.65rem;
+		text-align: center;
+		background: white;
 	}
 
 	.checkbox-field {

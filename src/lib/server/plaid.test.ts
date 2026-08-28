@@ -39,7 +39,7 @@ vi.mock('plaid', async (importOriginal) => {
 	};
 });
 
-import { listCards, listCardTransactions } from './cards';
+import { listCards, listCardTransactions, updateCardRewards } from './cards';
 import { resetCryptoStateForTests } from './crypto';
 import { closeDatabaseForTests } from './database';
 import {
@@ -49,6 +49,7 @@ import {
 	syncPlaidItem
 } from './plaid';
 import { savePlaidItem } from './plaid-store';
+import { updateCardRewardsSchema } from './schemas';
 
 function liabilityResponse() {
 	return {
@@ -200,6 +201,41 @@ describe.sequential('Plaid transaction history', () => {
 		const [card] = await listCards();
 		expect(card.issuer).toBe('Institution from Plaid');
 		expect(card.issuerLogoUrl).toBe(`data:image/png;base64,${logoBase64}`);
+	});
+
+	it('keeps user-entered rewards when a Plaid card refreshes', async () => {
+		const itemId = await savePlaidItem(
+			'provider-item-rewards',
+			'test-access-value',
+			'Synthetic Bank'
+		);
+		plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
+		await syncPlaidItem(itemId);
+
+		const [card] = await listCards();
+		await updateCardRewards(
+			card.id,
+			updateCardRewardsSchema.parse({
+				rewardProgramName: 'Synthetic points',
+				rewardValueCents: 9_876,
+				rewardCategories: [
+					{ name: 'Dining', rate: '3x' },
+					{ name: 'Groceries', rate: '5%' }
+				]
+			})
+		);
+
+		await syncPlaidItem(itemId);
+		const [refreshedCard] = await listCards();
+		expect(refreshedCard).toMatchObject({
+			id: card.id,
+			rewardProgramName: 'Synthetic points',
+			rewardValueCents: 9_876
+		});
+		expect(refreshedCard.rewardCategories).toMatchObject([
+			{ name: 'Dining', rate: '3x' },
+			{ name: 'Groceries', rate: '5%' }
+		]);
 	});
 
 	it('paginates, persists, modifies, and removes encrypted card transactions', async () => {

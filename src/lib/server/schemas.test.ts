@@ -5,6 +5,7 @@ import {
 	createManualCardSchema,
 	isoDateSchema,
 	updateBonusSchema,
+	updateCardRewardsSchema,
 	updateFinancialAccountSchema,
 	updateManualCardSchema
 } from './schemas';
@@ -27,6 +28,24 @@ describe('card request validation', () => {
 
 	it('requires at least one field for updates', () => {
 		expect(updateManualCardSchema.safeParse({}).success).toBe(false);
+	});
+
+	it('accepts flexible reward categories and rejects invalid reward values', () => {
+		expect(
+			updateCardRewardsSchema.safeParse({
+				rewardProgramName: 'Ultimate Rewards',
+				rewardValueCents: 12_345,
+				rewardCategories: [
+					{ name: 'Dining', rate: '3x' },
+					{ name: 'Groceries', rate: '5%' }
+				]
+			}).success
+		).toBe(true);
+		expect(updateCardRewardsSchema.safeParse({ rewardValueCents: -1 }).success).toBe(false);
+		expect(
+			updateCardRewardsSchema.safeParse({ rewardCategories: [{ name: '', rate: '3x' }] }).success
+		).toBe(false);
+		expect(updateCardRewardsSchema.safeParse({}).success).toBe(false);
 	});
 });
 

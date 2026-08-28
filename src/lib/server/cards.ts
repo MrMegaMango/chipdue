@@ -1,11 +1,23 @@
 import { randomUUID } from 'node:crypto';
-import type { Card, CardSource, CardTransaction, TransactionHistoryStatus } from '$lib/types';
+import type {
+	Card,
+	CardRewardCategory,
+	CardSource,
+	CardTransaction,
+	TransactionHistoryStatus
+} from '$lib/types';
 import { cloudQuery, cloudTransaction, type CloudStatement } from './cloud-database';
 import { decryptJson, encryptJson, privateFingerprint, privateUuid } from './crypto';
 import { getDatabase } from './database';
 import { AppError } from './errors';
 import { getRuntimeMode } from './runtime';
-import type { CreateManualCardData, UpdateManualCardData } from './schemas';
+import type { CreateManualCardData, UpdateCardRewardsData, UpdateManualCardData } from './schemas';
+
+interface StoredCardRewards {
+	programName: string | null;
+	cashValueCents: number | null;
+	categories: CardRewardCategory[];
+}
 
 interface CardPayload {
 	nickname: string;
@@ -20,6 +32,7 @@ interface CardPayload {
 	statementDate: string | null;
 	isOverdue: boolean | null;
 	autopayEnabled: boolean;
+	rewards?: StoredCardRewards;
 	transactionHistory?: StoredTransactionHistory;
 }
 
@@ -135,6 +148,38 @@ function isStoredIssuerLogo(value: unknown): value is string | null | undefined 
 	);
 }
 
+function isStoredCardRewards(value: unknown): value is StoredCardRewards | undefined {
+	if (value === undefined) return true;
+	if (!value || typeof value !== 'object') return false;
+	const rewards = value as Partial<StoredCardRewards>;
+	return (
+		(rewards.programName === null ||
+			(typeof rewards.programName === 'string' && rewards.programName.length <= 80)) &&
+		(rewards.cashValueCents === null ||
+			(typeof rewards.cashValueCents === 'number' &&
+				Number.isSafeInteger(rewards.cashValueCents) &&
+				rewards.cashValueCents >= 0 &&
+				rewards.cashValueCents <= 100_000_000_000)) &&
+		Array.isArray(rewards.categories) &&
+		rewards.categories.length <= 12 &&
+		rewards.categories.every(
+			(category) =>
+				category &&
+				typeof category === 'object' &&
+				typeof category.id === 'string' &&
+				/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+					category.id
+				) &&
+				typeof category.name === 'string' &&
+				category.name.length > 0 &&
+				category.name.length <= 60 &&
+				typeof category.rate === 'string' &&
+				category.rate.length > 0 &&
+				category.rate.length <= 20
+		)
+	);
+}
+
 function decodePayload(row: CardRow): CardPayload | null {
 	const payload = decryptJson<CardPayload & { recordType?: unknown }>(
 		row.payload_enc,
@@ -156,6 +201,9 @@ function decodePayload(row: CardRow): CardPayload | null {
 		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
 	}
 	if (!isStoredIssuerLogo(payload.issuerLogoBase64)) {
+		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
+	}
+	if (!isStoredCardRewards(payload.rewards)) {
 		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
 	}
 	return payload;
@@ -181,6 +229,9 @@ function rowToCard(row: CardRow): Card | null {
 		statementDate: payload.statementDate,
 		isOverdue: payload.isOverdue,
 		autopayEnabled: payload.autopayEnabled,
+		rewardProgramName: payload.rewards?.programName ?? null,
+		rewardValueCents: payload.rewards?.cashValueCents ?? null,
+		rewardCategories: payload.rewards?.categories ?? [],
 		transactionHistoryEnabled: payload.transactionHistory?.enabled === true,
 		transactionHistoryStatus: payload.transactionHistory?.status ?? null,
 		plaidConnectionId: row.source === 'plaid' ? row.plaid_item_id : null,
@@ -201,7 +252,7 @@ function sortCards(cards: Card[]): Card[] {
 	});
 }
 
-function snapshotPayload(snapshot: PlaidCardSnapshot): CardPayload {
+function snapshotPayload(snapshot: PlaidCardSnapshot, rewards?: StoredCardRewards): CardPayload {
 	return {
 		nickname: snapshot.nickname,
 		issuer: snapshot.issuer,
@@ -215,6 +266,7 @@ function snapshotPayload(snapshot: PlaidCardSnapshot): CardPayload {
 		statementDate: snapshot.statementDate,
 		isOverdue: snapshot.isOverdue,
 		autopayEnabled: snapshot.autopayEnabled,
+		...(rewards ? { rewards } : {}),
 		...(snapshot.transactionHistory ? { transactionHistory: snapshot.transactionHistory } : {})
 	};
 }
@@ -237,24 +289,27 @@ export async function listCards(): Promise<Card[]> {
 	return sortCards(rows.map(rowToCard).filter((card): card is Card => card !== null));
 }
 
-export async function getCard(id: string): Promise<Card> {
-	const row =
-		getRuntimeMode() === 'cloud'
-			? (
-					await cloudQuery<CardRow>(
-						`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
+async function findCardRow(id: string): Promise<CardRow | undefined> {
+	return getRuntimeMode() === 'cloud'
+		? (
+				await cloudQuery<CardRow>(
+					`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
 						        last_synced_at, created_at, updated_at
 						 FROM public.carddue_cards WHERE id = $1`,
-						[id]
-					)
-				)[0]
-			: (getDatabase()
-					.prepare(
-						`SELECT id, source, plaid_item_id, external_account_ref, payload_enc,
+					[id]
+				)
+			)[0]
+		: (getDatabase()
+				.prepare(
+					`SELECT id, source, plaid_item_id, external_account_ref, payload_enc,
 						        last_synced_at, created_at, updated_at
 						 FROM cards WHERE id = ?`
-					)
-					.get(id) as CardRow | undefined);
+				)
+				.get(id) as CardRow | undefined);
+}
+
+export async function getCard(id: string): Promise<Card> {
+	const row = await findCardRow(id);
 	if (!row) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
 	const card = rowToCard(row);
 	if (!card) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
@@ -320,7 +375,12 @@ export async function updateManualCard(id: string, changes: UpdateManualCardData
 			changes.statementDate === undefined ? existing.statementDate : changes.statementDate,
 		isOverdue: changes.isOverdue === undefined ? existing.isOverdue : changes.isOverdue,
 		autopayEnabled:
-			changes.autopayEnabled === undefined ? existing.autopayEnabled : changes.autopayEnabled
+			changes.autopayEnabled === undefined ? existing.autopayEnabled : changes.autopayEnabled,
+		rewards: {
+			programName: existing.rewardProgramName,
+			cashValueCents: existing.rewardValueCents,
+			categories: existing.rewardCategories
+		}
 	};
 	const encrypted = encryptJson(payload, `card:${id}`);
 	const now = new Date().toISOString();
@@ -341,6 +401,53 @@ export async function updateManualCard(id: string, changes: UpdateManualCardData
 
 	const result = getDatabase()
 		.prepare(`UPDATE cards SET payload_enc = ?, updated_at = ? WHERE id = ? AND source = 'manual'`)
+		.run(encrypted, now, id);
+	if (result.changes !== 1) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
+	return getCard(id);
+}
+
+export async function updateCardRewards(id: string, changes: UpdateCardRewardsData): Promise<Card> {
+	const row = await findCardRow(id);
+	const payload = row ? decodePayload(row) : null;
+	if (!row || !payload) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
+
+	const existing = payload.rewards;
+	payload.rewards = {
+		programName:
+			changes.rewardProgramName === undefined
+				? (existing?.programName ?? null)
+				: changes.rewardProgramName,
+		cashValueCents:
+			changes.rewardValueCents === undefined
+				? (existing?.cashValueCents ?? null)
+				: changes.rewardValueCents,
+		categories:
+			changes.rewardCategories === undefined
+				? (existing?.categories ?? [])
+				: changes.rewardCategories.map((category) => ({
+						id: category.id ?? randomUUID(),
+						name: category.name,
+						rate: category.rate
+					}))
+	};
+	const encrypted = encryptJson(payload, `card:${id}`);
+	const now = new Date().toISOString();
+
+	if (getRuntimeMode() === 'cloud') {
+		const rows = await cloudQuery<CardRow>(
+			`UPDATE public.carddue_cards SET payload_enc = $1, updated_at = $2
+			 WHERE id = $3
+			 RETURNING id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
+			           last_synced_at, created_at, updated_at`,
+			[encrypted, now, id]
+		);
+		const card = rows[0] ? rowToCard(rows[0]) : null;
+		if (!card) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
+		return card;
+	}
+
+	const result = getDatabase()
+		.prepare(`UPDATE cards SET payload_enc = ?, updated_at = ? WHERE id = ?`)
 		.run(encrypted, now, id);
 	if (result.changes !== 1) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
 	return getCard(id);
@@ -367,6 +474,20 @@ async function replaceCloudPlaidCards(
 	snapshots: PlaidCardSnapshot[],
 	syncedAt: string
 ): Promise<void> {
+	const existingRows = await cloudQuery<CardRow>(
+		`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
+		        last_synced_at, created_at, updated_at
+		 FROM public.carddue_cards WHERE plaid_item_id = $1 AND source = 'plaid'`,
+		[plaidItemId]
+	);
+	const rewardsByReference = new Map(
+		existingRows.flatMap((row) => {
+			const rewards = decodePayload(row)?.rewards;
+			return row.external_account_ref && rewards
+				? [[row.external_account_ref, rewards] as const]
+				: [];
+		})
+	);
 	const references: string[] = [];
 	const statements: CloudStatement[] = snapshots.map((snapshot) => {
 		const reference = privateFingerprint(snapshot.accountId, 'plaid-account');
@@ -385,7 +506,7 @@ async function replaceCloudPlaidCards(
 				id,
 				plaidItemId,
 				reference,
-				encryptJson(snapshotPayload(snapshot), `card:${id}`),
+				encryptJson(snapshotPayload(snapshot, rewardsByReference.get(reference)), `card:${id}`),
 				syncedAt
 			]
 		};
@@ -429,7 +550,8 @@ function replaceLocalPlaidCards(
 			seenReferences.add(reference);
 			const current = existingByReference.get(reference);
 			const id = current?.id ?? randomUUID();
-			const encrypted = encryptJson(snapshotPayload(snapshot), `card:${id}`);
+			const rewards = current ? decodePayload(current)?.rewards : undefined;
+			const encrypted = encryptJson(snapshotPayload(snapshot, rewards), `card:${id}`);
 			if (current) {
 				database
 					.prepare(

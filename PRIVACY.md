@@ -23,12 +23,12 @@ ChipDue stores only the fields required for the private financial workspace:
 - A user-selected account nickname, optional institution, account type, personal or business classification, lifecycle status, and optional last four characters
 - Optional account balance, brokerage cost basis or contributions, opening date, and private notes
 - A user-selected bonus name, optional linked account and institution, reward value, lifecycle status, requirements checklist, opening date, requirement deadline, expected or actual payout dates, safe-to-close date, and private notes
-
 - A user-selected card nickname and optional issuer name
 - Optional last four digits
 - Statement balance, minimum payment, and current balance
 - Statement date and next payment due date
 - Autopay preference, source, and last-update time
+- Optional rewards program name, cash-equivalent reward value, and user-entered bonus categories and rates
 - Opaque identifiers needed to update or delete records
 - For Plaid connections, encrypted access tokens and Item IDs
 - When transaction access is enabled, up to 24 months of encrypted card transactions, their pending/category fields, and the encrypted incremental-sync cursor

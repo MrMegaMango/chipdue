@@ -21,12 +21,21 @@ export interface Card {
 	statementDate: string | null;
 	isOverdue: boolean | null;
 	autopayEnabled: boolean;
+	rewardProgramName: string | null;
+	rewardValueCents: number | null;
+	rewardCategories: CardRewardCategory[];
 	transactionHistoryEnabled: boolean;
 	transactionHistoryStatus: TransactionHistoryStatus | null;
 	plaidConnectionId: string | null;
 	createdAt: string;
 	updatedAt: string;
 	lastSyncedAt: string | null;
+}
+
+export interface CardRewardCategory {
+	id: string;
+	name: string;
+	rate: string;
 }
 
 export interface CardTransaction {
@@ -54,6 +63,12 @@ export interface ManualCardInput {
 	statementDate?: string | null;
 	isOverdue?: boolean | null;
 	autopayEnabled?: boolean;
+}
+
+export interface CardRewardsInput {
+	rewardProgramName?: string | null;
+	rewardValueCents?: number | null;
+	rewardCategories?: Array<{ id?: string; name: string; rate: string }>;
 }
 
 export type FinancialAccountType =
