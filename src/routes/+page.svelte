@@ -206,6 +206,7 @@
 		day: 'numeric',
 		year: 'numeric'
 	});
+	const RECENT_ACTIVITY_LIMIT = 3;
 
 	let authMode = $state<AuthMode | null>(null);
 	let authenticationMode = $state<AuthenticationMode | null>(null);
@@ -252,6 +253,9 @@
 	let historyLoading = $state(false);
 	let historyError = $state('');
 	let historyCloseButton = $state<HTMLButtonElement>();
+	let recentActivityByCard = $state<Record<string, CardTransaction[]>>({});
+	let recentActivityLoadingByCard = $state<Record<string, boolean>>({});
+	let recentActivityErrorByCard = $state<Record<string, boolean>>({});
 	let notice = $state('');
 	let noticeKind = $state<NoticeKind>('success');
 	let firstField = $state<HTMLInputElement>();
@@ -266,6 +270,7 @@
 	let pageMounted = false;
 	let sessionCheckInFlight = false;
 	let privateStateEpoch = 0;
+	let recentActivityLoadVersion = 0;
 	let nowTick = $state(Date.now());
 	const googleLoginAvailable = $derived(canOfferGoogleLogin(authMode, googleConfigured));
 	const googleOnlyMode = $derived(isGoogleOnlyCloudMode(authMode, authenticationMode));
@@ -664,6 +669,10 @@
 		historyLoading = false;
 		historyError = '';
 		historyCloseButton = undefined;
+		recentActivityByCard = {};
+		recentActivityLoadingByCard = {};
+		recentActivityErrorByCard = {};
+		recentActivityLoadVersion += 1;
 		setupToken = '';
 		setupBusy = false;
 		setupError = '';
@@ -717,6 +726,7 @@
 			if (!isPrivateEpochCurrent(expectedEpoch)) return false;
 			cards = Array.isArray(payload) ? payload : (payload.cards ?? []);
 			if (!Array.isArray(payload) && payload.plaid) plaid = payload.plaid;
+			void refreshRecentActivity(cards, expectedEpoch);
 			hasLoadedCards = true;
 			return true;
 		} catch (error) {
@@ -726,6 +736,52 @@
 		} finally {
 			if (isPrivateEpochCurrent(expectedEpoch)) loading = false;
 		}
+	}
+
+	async function refreshRecentActivity(
+		cardViews: CardView[],
+		expectedEpoch = privateStateEpoch
+	): Promise<void> {
+		if (!isPrivateEpochCurrent(expectedEpoch)) return;
+		const loadVersion = ++recentActivityLoadVersion;
+		const eligibleCards = cardViews.filter(
+			(card) => card.source === 'plaid' && card.transactionHistoryEnabled
+		);
+		recentActivityByCard = {};
+		recentActivityErrorByCard = {};
+		recentActivityLoadingByCard = Object.fromEntries(eligibleCards.map((card) => [card.id, true]));
+
+		await Promise.all(
+			eligibleCards.map(async (card) => {
+				try {
+					const endpoint = `${resolve('/api/cards/[id]/transactions', { id: card.id })}?limit=${RECENT_ACTIVITY_LIMIT}`;
+					const payload = await requestJson<TransactionHistoryResponse>(
+						endpoint,
+						{},
+						{ privateEpoch: expectedEpoch }
+					);
+					if (!isPrivateEpochCurrent(expectedEpoch) || loadVersion !== recentActivityLoadVersion) {
+						return;
+					}
+					recentActivityByCard = {
+						...recentActivityByCard,
+						[card.id]: payload.transactions
+					};
+				} catch {
+					if (!isPrivateEpochCurrent(expectedEpoch) || loadVersion !== recentActivityLoadVersion) {
+						return;
+					}
+					recentActivityErrorByCard = { ...recentActivityErrorByCard, [card.id]: true };
+				} finally {
+					if (isPrivateEpochCurrent(expectedEpoch) && loadVersion === recentActivityLoadVersion) {
+						recentActivityLoadingByCard = {
+							...recentActivityLoadingByCard,
+							[card.id]: false
+						};
+					}
+				}
+			})
+		);
 	}
 
 	async function refreshPlaidStatus(
@@ -2047,6 +2103,67 @@
 									{/if}
 								</div>
 
+								{#if card.source === 'plaid' && card.transactionHistoryEnabled}
+									<section
+										class="card-activity-preview"
+										aria-label={`Recent activity for ${card.nickname}`}
+									>
+										<header class="activity-preview-header">
+											<h4>Recent activity</h4>
+											<button
+												type="button"
+												onclick={() => openTransactionHistory(card)}
+												disabled={busyAction !== null}
+											>
+												View all activity
+												<svg aria-hidden="true" viewBox="0 0 16 16"
+													><path d="m6 3 5 5-5 5"></path></svg
+												>
+											</button>
+										</header>
+
+										{#if recentActivityLoadingByCard[card.id]}
+											<div
+												class="activity-preview-loading"
+												aria-label="Loading recent activity"
+												aria-busy="true"
+											>
+												<span></span><span></span><span></span>
+											</div>
+										{:else if recentActivityErrorByCard[card.id]}
+											<p class="activity-preview-message">Recent activity is unavailable.</p>
+										{:else if recentActivityByCard[card.id]?.length > 0}
+											<ul class="activity-preview-list">
+												{#each recentActivityByCard[card.id] as transaction (transaction.id)}
+													<li>
+														<div>
+															<strong>{transaction.merchantName ?? transaction.name}</strong>
+															<span>
+																{new Date(`${transaction.date}T12:00:00`).toLocaleDateString(
+																	'en-US',
+																	{
+																		month: 'short',
+																		day: 'numeric'
+																	}
+																)}
+																{transaction.pending ? ' · Pending' : ''}
+															</span>
+														</div>
+														<strong
+															class:credit={transaction.amountCents < 0}
+															class="activity-preview-amount"
+														>
+															{formatTransactionAmount(transaction)}
+														</strong>
+													</li>
+												{/each}
+											</ul>
+										{:else}
+											<p class="activity-preview-message">No recent activity yet.</p>
+										{/if}
+									</section>
+								{/if}
+
 								<footer class="card-footer">
 									<span>
 										<span class="mini-dot"></span>
@@ -2073,15 +2190,12 @@
 												{deletingId === card.id ? 'Deleting…' : 'Delete'}
 											</button>
 										</div>
-									{:else}
+									{:else if !card.transactionHistoryEnabled}
 										<div class="card-actions">
 											<button
 												class="history-button"
 												type="button"
-												onclick={() =>
-													card.transactionHistoryEnabled
-														? openTransactionHistory(card)
-														: enableTransactionHistory(card)}
+												onclick={() => enableTransactionHistory(card)}
 												disabled={busyAction !== null}
 												aria-busy={busyAction === 'enable-history' &&
 													plaidItemActionId === card.plaidConnectionId}
@@ -2090,9 +2204,7 @@
 												{busyAction === 'enable-history' &&
 												plaidItemActionId === card.plaidConnectionId
 													? 'Opening…'
-													: card.transactionHistoryEnabled
-														? 'Activity'
-														: 'Enable activity'}
+													: 'Enable activity'}
 											</button>
 										</div>
 									{/if}
@@ -3637,6 +3749,136 @@
 		fill: none;
 		stroke: var(--green);
 		stroke-width: 2;
+	}
+
+	.card-activity-preview {
+		margin: 0 1.25rem 1rem;
+		overflow: hidden;
+		border: 1px solid var(--line);
+		border-radius: 11px;
+		background: white;
+	}
+
+	.activity-preview-header {
+		display: flex;
+		min-height: 42px;
+		gap: 0.75rem;
+		align-items: center;
+		justify-content: space-between;
+		padding: 0.55rem 0.7rem;
+		border-bottom: 1px solid var(--line);
+		background: var(--paper-soft);
+	}
+
+	.activity-preview-header h4 {
+		margin: 0;
+		font-size: 0.69rem;
+		font-weight: 730;
+		letter-spacing: -0.01em;
+	}
+
+	.activity-preview-header button {
+		display: inline-flex;
+		min-height: 30px;
+		gap: 0.22rem;
+		align-items: center;
+		padding: 0.35rem 0.52rem;
+		border: 1px solid #c9dcd1;
+		border-radius: 8px;
+		color: var(--green);
+		font-size: 0.61rem;
+		font-weight: 720;
+		background: white;
+		cursor: pointer;
+	}
+
+	.activity-preview-header button:hover {
+		border-color: #a9c5b5;
+		background: var(--green-soft);
+	}
+
+	.activity-preview-header button:disabled {
+		cursor: not-allowed;
+		opacity: 0.55;
+	}
+
+	.activity-preview-header svg {
+		width: 11px;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.8;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+	}
+
+	.activity-preview-list {
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	.activity-preview-list li {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		gap: 0.7rem;
+		align-items: center;
+		padding: 0.62rem 0.7rem;
+	}
+
+	.activity-preview-list li + li {
+		border-top: 1px solid #edf0ec;
+	}
+
+	.activity-preview-list li > div {
+		display: grid;
+		min-width: 0;
+		gap: 0.14rem;
+	}
+
+	.activity-preview-list strong,
+	.activity-preview-list span {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.activity-preview-list strong {
+		font-size: 0.65rem;
+		font-weight: 690;
+	}
+
+	.activity-preview-list span {
+		color: var(--faint);
+		font-size: 0.56rem;
+	}
+
+	.activity-preview-amount {
+		font-variant-numeric: tabular-nums;
+	}
+
+	.activity-preview-amount.credit {
+		color: var(--green);
+	}
+
+	.activity-preview-message {
+		margin: 0;
+		padding: 1rem 0.7rem;
+		color: var(--faint);
+		font-size: 0.62rem;
+		text-align: center;
+	}
+
+	.activity-preview-loading {
+		display: grid;
+		gap: 1px;
+		background: #edf0ec;
+	}
+
+	.activity-preview-loading span {
+		height: 48px;
+		background: linear-gradient(90deg, #f4f6f3 25%, #fbfcfa 50%, #f4f6f3 75%);
+		background-size: 200% 100%;
+		animation: shimmer 1.5s infinite;
 	}
 
 	.card-footer {

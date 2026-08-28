@@ -493,11 +493,17 @@ export async function readPlaidTransactionState(
 	};
 }
 
-export async function listCardTransactions(cardId: string): Promise<{
+export async function listCardTransactions(
+	cardId: string,
+	limit = 500
+): Promise<{
 	transactions: CardTransaction[];
 	status: TransactionHistoryStatus;
 	lastSyncedAt: string | null;
 }> {
+	if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+		throw new AppError('INVALID_REQUEST', 'The request is invalid.', 400);
+	}
 	const row =
 		getRuntimeMode() === 'cloud'
 			? (
@@ -547,6 +553,6 @@ export async function listCardTransactions(cardId: string): Promise<{
 		.sort(
 			(left, right) => right.date.localeCompare(left.date) || left.name.localeCompare(right.name)
 		)
-		.slice(0, 500);
+		.slice(0, limit);
 	return { transactions, status: history.status, lastSyncedAt: row.last_synced_at };
 }

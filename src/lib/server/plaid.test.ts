@@ -202,6 +202,13 @@ describe.sequential('Plaid transaction history', () => {
 			'Merchant alpha',
 			'Payment beta'
 		]);
+		expect((await listCardTransactions(card.id, 1)).transactions.map(({ name }) => name)).toEqual([
+			'Merchant alpha'
+		]);
+		await expect(listCardTransactions(card.id, 0)).rejects.toMatchObject({
+			code: 'INVALID_REQUEST',
+			status: 400
+		});
 
 		plaidMocks.transactionsSync.mockResolvedValueOnce({
 			data: {
