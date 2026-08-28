@@ -1965,14 +1965,14 @@
 				</svg>
 				<p>
 					{#if googleOnlyMode || googleLoginAvailable}
-						<strong>Google never receives your card data.</strong> Choosing Google reveals this site’s
+						<strong>Google never receives your financial data.</strong> Choosing Google reveals this site’s
 						domain, your IP address, and sign-in timing. ChipDue requests no email or profile details,
-						keeps no Google access token, and stores no card data in browser storage.
+						keeps no Google access token, and stores no financial data in browser storage.
 					{:else}
-						<strong>Know where your data lives.</strong> Cloud mode stores card data on the private ChipDue
-						server you chose, not solely on this device. Use a deployment you trust over HTTPS. ChipDue
-						keeps neither this password nor card data in browser storage; your server maintains the session
-						with an HttpOnly cookie.
+						<strong>Know where your data lives.</strong> Cloud mode stores financial data on the private
+						ChipDue server you chose, not solely on this device. Use a deployment you trust over HTTPS.
+						ChipDue keeps neither this password nor financial data in browser storage; your server maintains
+						the session with an HttpOnly cookie.
 					{/if}
 				</p>
 			</div>
@@ -2510,8 +2510,8 @@
 								</div>
 								<p id="google-link-privacy" class="google-privacy-note">
 									Google sees this site’s domain, your IP address, and sign-in timing when you use
-									it, but receives no card data from ChipDue. ChipDue requests no email or profile
-									details and does not keep Google tokens.
+									it, but receives no financial data from ChipDue. ChipDue requests no email or
+									profile details and does not keep Google tokens.
 								</p>
 								{#if googleLinked === false && authenticationMode === 'password'}
 									<p class="google-setup-note">
@@ -2525,8 +2525,8 @@
 							<li>
 								<span class="check-mark">✓</span><span
 									>{authMode === 'cloud'
-										? 'Card details and enabled transaction history are encrypted on your private ChipDue server'
-										: 'Card details and enabled transaction history are encrypted in a local database outside this source checkout'}</span
+										? 'Account, bonus, card, and enabled transaction details are encrypted on your private ChipDue server'
+										: 'Account, bonus, card, and enabled transaction details are encrypted in a local database outside this source checkout'}</span
 								>
 							</li>
 							<li>
