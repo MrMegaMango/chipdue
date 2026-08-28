@@ -254,8 +254,13 @@
 	);
 	onMount(() => {
 		pageMounted = true;
-		googleCallbackResult = consumeGoogleCallbackResult();
-		void initializeAuth();
+		const shouldCleanCallbackUrl = Boolean(window.location.search || window.location.hash);
+		googleCallbackResult = readGoogleCallbackResult();
+		void initializeAuth().finally(() => {
+			// SvelteKit's root is not assigned when onMount begins. Shallow routing is safe
+			// after the asynchronous session initialization yields back to the router.
+			if (pageMounted && shouldCleanCallbackUrl) replaceState(resolve('/'), {});
+		});
 		document.addEventListener('visibilitychange', handleVisibilityChange);
 		clockTimer = setInterval(() => {
 			nowTick = Date.now();
@@ -415,14 +420,10 @@
 		}
 	}
 
-	function consumeGoogleCallbackResult(): GoogleCallbackResult | null {
+	function readGoogleCallbackResult(): GoogleCallbackResult | null {
 		const url = new URL(window.location.href);
 		const marker = url.searchParams.get('google');
-		const result = parseGoogleCallbackResult(marker);
-		if (url.search || url.hash) {
-			replaceState(resolve('/'), {});
-		}
-		return result;
+		return parseGoogleCallbackResult(marker);
 	}
 
 	function showGoogleCallbackResult(): void {

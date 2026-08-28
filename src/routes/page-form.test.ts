@@ -117,4 +117,11 @@ describe('Google-only setup privacy contract', () => {
 		expect(source).not.toMatch(/location\.(?:assign|replace)\([^)]*setupToken/);
 		expect(source).toContain('window.location.assign(resolve(GOOGLE_BOOTSTRAP_CONTINUE_TO))');
 	});
+
+	it('defers callback URL cleanup until after SvelteKit hydration', () => {
+		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+		expect(source).toMatch(
+			/initializeAuth\(\)\.finally\(\(\) => \{[\s\S]*replaceState\(resolve\('\/'\), \{\}\);[\s\S]*\}\);/
+		);
+	});
 });
