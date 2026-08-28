@@ -10,7 +10,8 @@ import {
 	type Transaction,
 	type TransactionsUpdateStatus
 } from 'plaid';
-import type { PlaidConnection, TransactionHistoryStatus } from '$lib/types';
+import type { PlaidConnection } from '$lib/types';
+import type { TransactionHistoryStatus } from '$lib/types';
 import {
 	readPlaidTransactionState,
 	replacePlaidCards,
