@@ -164,3 +164,16 @@ describe('banking visual identity', () => {
 		expect(layoutSource).toContain('background: #f1ede5');
 	});
 });
+
+describe('returning-user dashboard', () => {
+	it('replaces onboarding copy with a compact toolbar after a card is added', () => {
+		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+		expect(source).toContain(
+			'const showOnboardingHero = $derived(hasLoadedCards && cards.length === 0)'
+		);
+		expect(source).toContain('{#if showOnboardingHero}');
+		expect(source).toContain('class:dashboard-toolbar={!showOnboardingHero}');
+		expect(source).toContain('Cards &amp; deadlines');
+		expect(source).toContain('class:visually-hidden={!showOnboardingHero}');
+	});
+});

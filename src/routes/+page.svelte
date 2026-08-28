@@ -282,6 +282,7 @@
 	const googleBootstrapVisible = $derived(
 		canShowGoogleBootstrap(authMode, authenticationMode, googleBootstrapAvailable)
 	);
+	const showOnboardingHero = $derived(hasLoadedCards && cards.length === 0);
 
 	const totalStatementCents = $derived(
 		cards.reduce((total, card) => total + (card.statementBalanceCents ?? 0), 0)
@@ -1886,18 +1887,32 @@
 		</header>
 
 		<main id="main-content">
-			<section class="hero" aria-labelledby="page-title">
-				<div class="hero-copy">
-					<p class="eyebrow">Your payment command center</p>
-					<h1 id="page-title">Never miss a card due date.</h1>
-					<p class="hero-description">
-						Balances and deadlines in one calm, private dashboard—{authMode === 'cloud'
-							? 'served by your private ChipDue cloud.'
-							: 'stored on your machine.'}
-					</p>
-				</div>
-				<div class="hero-action-stack">
-					<div class="hero-actions">
+			<section
+				class:hero={showOnboardingHero}
+				class:dashboard-toolbar={!showOnboardingHero}
+				aria-labelledby="page-title"
+			>
+				{#if showOnboardingHero}
+					<div class="hero-copy">
+						<p class="eyebrow">Your payment command center</p>
+						<h1 id="page-title">Never miss a card due date.</h1>
+						<p class="hero-description">
+							Balances and deadlines in one calm, private dashboard—{authMode === 'cloud'
+								? 'served by your private ChipDue cloud.'
+								: 'stored on your machine.'}
+						</p>
+					</div>
+				{:else}
+					<div>
+						<p class="section-kicker">Dashboard</p>
+						<h1 id="page-title">Cards &amp; deadlines</h1>
+					</div>
+				{/if}
+				<div class:hero-action-stack={showOnboardingHero}>
+					<div
+						class:hero-actions={showOnboardingHero}
+						class:dashboard-actions={!showOnboardingHero}
+					>
 						<button
 							class="button button-secondary"
 							type="button"
@@ -1929,7 +1944,11 @@
 									: 'Connect Plaid'}
 						</button>
 					</div>
-					<p id="plaid-consent-copy" class="plaid-consent">
+					<p
+						id="plaid-consent-copy"
+						class:plaid-consent={showOnboardingHero}
+						class:visually-hidden={!showOnboardingHero}
+					>
 						Plaid’s CDN script runs in this page and can access data rendered here. It loads only
 						after you choose Connect Plaid. New connections request card balances, liabilities, and
 						up to 24 months of transactions.
@@ -3287,6 +3306,44 @@
 		padding: 4.4rem 0 3rem;
 	}
 
+	.dashboard-toolbar {
+		display: flex;
+		gap: 1.5rem;
+		align-items: flex-end;
+		justify-content: space-between;
+		padding: 2.2rem 0 1.45rem;
+	}
+
+	.dashboard-toolbar .section-kicker {
+		margin-bottom: 0.25rem;
+	}
+
+	.dashboard-toolbar h1 {
+		margin: 0;
+		font-size: clamp(1.75rem, 3vw, 2.35rem);
+		font-weight: 740;
+		line-height: 1.05;
+		letter-spacing: -0.045em;
+	}
+
+	.dashboard-actions {
+		display: flex;
+		gap: 0.65rem;
+		align-items: center;
+	}
+
+	.visually-hidden {
+		position: absolute !important;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
+	}
+
 	.hero-copy {
 		max-width: 670px;
 	}
@@ -3535,7 +3592,7 @@
 	}
 
 	.cards-section {
-		padding: 4rem 0 4.6rem;
+		padding: 2.8rem 0 4.6rem;
 	}
 
 	.section-heading {
@@ -4932,6 +4989,22 @@
 		.hero {
 			gap: 1.5rem;
 			padding: 3rem 0 2.2rem;
+		}
+
+		.dashboard-toolbar {
+			gap: 1rem;
+			align-items: stretch;
+			flex-direction: column;
+			padding: 1.75rem 0 1.1rem;
+		}
+
+		.dashboard-actions {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+
+		.dashboard-actions .button {
+			width: 100%;
 		}
 
 		.hero h1 {
