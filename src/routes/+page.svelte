@@ -70,8 +70,16 @@
 		return value === GOOGLE_BOOTSTRAP_CONTINUE_TO;
 	}
 
-	export function cardBrandForIssuer(issuer: string | null): 'venmo' | null {
-		return issuer && /\bvenmo\b/i.test(issuer) ? 'venmo' : null;
+	export function cardBrandForIssuer(issuer: string | null): 'chase' | 'venmo' | null {
+		if (!issuer) return null;
+		if (/\bvenmo\b/i.test(issuer)) return 'venmo';
+		if (/\bchase\b/i.test(issuer)) return 'chase';
+		return null;
+	}
+
+	function fallbackInstitutionLogoUrl(issuer: string | null): string | null {
+		const brand = cardBrandForIssuer(issuer);
+		return brand ? asset(`/brands/${brand}.svg`) : null;
 	}
 
 	export type InterestSavingTarget = {
@@ -1506,7 +1514,10 @@
 	}
 
 	function connectionLogoUrl(connection: PlaidConnection): string | null {
-		return cards.find((card) => card.plaidConnectionId === connection.id)?.issuerLogoUrl ?? null;
+		return (
+			cards.find((card) => card.plaidConnectionId === connection.id)?.issuerLogoUrl ??
+			fallbackInstitutionLogoUrl(connection.institutionName)
+		);
 	}
 
 	async function disconnectPlaid(connection: PlaidConnection): Promise<void> {
@@ -2129,11 +2140,12 @@
 												src={card.issuerLogoUrl}
 												alt={`${card.issuer ?? card.nickname} logo`}
 											/>
-										{:else if cardBrand === 'venmo'}
+										{:else if cardBrand}
 											<img
-												class="issuer-logo issuer-logo-venmo"
-												src={asset('/brands/venmo.svg')}
-												alt="Venmo"
+												class:issuer-logo-venmo={cardBrand === 'venmo'}
+												class="issuer-logo"
+												src={fallbackInstitutionLogoUrl(card.issuer)}
+												alt={cardBrand === 'venmo' ? 'Venmo' : 'Chase'}
 											/>
 										{/if}
 										<h3>{card.nickname}</h3>

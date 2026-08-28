@@ -167,18 +167,20 @@ describe('interest-saving payment target', () => {
 });
 
 describe('issuer branding', () => {
-	it('recognizes Venmo institution labels without matching unrelated names', () => {
+	it('recognizes local logo fallbacks without matching unrelated names', () => {
 		expect(cardBrandForIssuer('Venmo - Personal')).toBe('venmo');
 		expect(cardBrandForIssuer('VENMO')).toBe('venmo');
+		expect(cardBrandForIssuer('Chase')).toBe('chase');
+		expect(cardBrandForIssuer('JPMorgan Chase Bank')).toBe('chase');
 		expect(cardBrandForIssuer('Venmoney Bank')).toBeNull();
 		expect(cardBrandForIssuer(null)).toBeNull();
 	});
 
-	it('shows stored Plaid institution logos and keeps a local Venmo fallback', () => {
+	it('shows stored Plaid institution logos and keeps local bank fallbacks', () => {
 		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
 		expect(source).toContain('{#if card.issuerLogoUrl}');
 		expect(source).toContain('connectionLogoUrl(connection)');
-		expect(source).toContain("asset('/brands/venmo.svg')");
+		expect(source).toContain('asset(`/brands/${brand}.svg`)');
 		expect(source).not.toContain('paypalobjects.com');
 	});
 });
