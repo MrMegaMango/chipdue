@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
 	authorizeGoogleCallbackResult,
+	cardBrandForIssuer,
 	canOfferGoogleLogin,
 	canShowGoogleBootstrap,
 	canShowPasswordLogin,
@@ -134,5 +135,20 @@ describe('card activity preview', () => {
 		expect(source).toContain('View all activity');
 		expect(source).toContain('?limit=${RECENT_ACTIVITY_LIMIT}');
 		expect(source).toContain('onclick={() => openTransactionHistory(card)}');
+	});
+});
+
+describe('issuer branding', () => {
+	it('recognizes Venmo institution labels without matching unrelated names', () => {
+		expect(cardBrandForIssuer('Venmo - Personal')).toBe('venmo');
+		expect(cardBrandForIssuer('VENMO')).toBe('venmo');
+		expect(cardBrandForIssuer('Venmoney Bank')).toBeNull();
+		expect(cardBrandForIssuer(null)).toBeNull();
+	});
+
+	it('serves the Venmo wordmark locally instead of loading a third-party image', () => {
+		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+		expect(source).toContain("asset('/brands/venmo.svg')");
+		expect(source).not.toContain('paypalobjects.com');
 	});
 });

@@ -69,6 +69,10 @@
 	export function isApprovedBootstrapContinuation(value: unknown): boolean {
 		return value === GOOGLE_BOOTSTRAP_CONTINUE_TO;
 	}
+
+	export function cardBrandForIssuer(issuer: string | null): 'venmo' | null {
+		return issuer && /\bvenmo\b/i.test(issuer) ? 'venmo' : null;
+	}
 </script>
 
 <script lang="ts">
@@ -2058,10 +2062,18 @@
 					<div class="card-grid">
 						{#each cards as card (card.id)}
 							{@const status = dueStatus(card)}
+							{@const cardBrand = cardBrandForIssuer(card.issuer)}
 							<article class:overdue={status.tone === 'danger'} class="credit-card">
 								<div class="card-accent"></div>
 								<header class="card-header">
 									<div class="card-identity">
+										{#if cardBrand === 'venmo'}
+											<img
+												class="issuer-logo issuer-logo-venmo"
+												src={asset('/brands/venmo.svg')}
+												alt="Venmo"
+											/>
+										{/if}
 										<h3>{card.nickname}</h3>
 										<p>{cardSubtitle(card)}</p>
 									</div>
@@ -3605,6 +3617,20 @@
 
 	.card-identity {
 		min-width: 0;
+	}
+
+	.issuer-logo {
+		display: block;
+		width: auto;
+		max-width: 82px;
+		height: 18px;
+		margin-bottom: 0.65rem;
+		object-fit: contain;
+		object-position: left center;
+	}
+
+	.issuer-logo-venmo {
+		width: 82px;
 	}
 
 	.card-identity h3 {
