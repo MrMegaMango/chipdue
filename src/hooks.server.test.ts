@@ -36,6 +36,6 @@ describe('loopback host enforcement', () => {
 	])('rejects a non-loopback or malformed authority (%s)', async (host) => {
 		const response = await requestWithHost(host);
 		expect(response.status).toBe(403);
-		expect(await response.text()).toBe('CardDue accepts local connections only.');
+		expect(await response.text()).toBe('ChipDue accepts local connections only.');
 	});
 });

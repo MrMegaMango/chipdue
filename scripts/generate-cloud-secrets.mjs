@@ -26,7 +26,7 @@ function fail(message) {
 function parseOutputPath() {
 	const args = process.argv.slice(2);
 	if (args.length !== 2 || args[0] !== '--output' || !args[1]) {
-		throw new Error('Usage: npm run cloud:secrets -- --output /private/path/carddue-recovery.json');
+		throw new Error('Usage: npm run cloud:secrets -- --output /private/path/chipdue-recovery.json');
 	}
 	if (!isAbsolute(args[1])) throw new Error('The recovery bundle path must be absolute.');
 	return resolve(args[1]);

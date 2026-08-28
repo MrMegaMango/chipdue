@@ -230,8 +230,8 @@ describe('cloud SQL security contract', () => {
 	});
 
 	it('accepts only direct Neon endpoint hosts', () => {
-		expect(isDirectNeonDatabaseHost('ep-carddue-test.us-west-2.aws.neon.tech')).toBe(true);
-		expect(isDirectNeonDatabaseHost('ep-carddue-test-pooler.us-west-2.aws.neon.tech')).toBe(false);
+		expect(isDirectNeonDatabaseHost('ep-chipdue-test.us-west-2.aws.neon.tech')).toBe(true);
+		expect(isDirectNeonDatabaseHost('ep-chipdue-test-pooler.us-west-2.aws.neon.tech')).toBe(false);
 		expect(isDirectNeonDatabaseHost('database.example.test')).toBe(false);
 	});
 });

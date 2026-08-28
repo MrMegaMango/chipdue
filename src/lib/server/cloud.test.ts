@@ -53,7 +53,7 @@ function setValidCloudEnvironment(): void {
 	delete process.env.CARDDUE_AUTH_MODE;
 	process.env.DATABASE_URL = [
 		'postgresql://carddue_runtime:secret',
-		'ep-carddue-test.us-west-2.aws.neon.tech/carddue?sslmode=require'
+		'ep-chipdue-test.us-west-2.aws.neon.tech/carddue?sslmode=require'
 	].join('@');
 	process.env.CARDDUE_MASTER_KEY = Buffer.alloc(32, 7).toString('base64url');
 	process.env.CARDDUE_OWNER_PASSWORD_HASH = passwordHash('correct horse');
@@ -228,22 +228,22 @@ describe.sequential('cloud mode privacy and authentication', () => {
 		process.env.CARDDUE_ALLOWED_HOSTS = 'cards.example.test';
 		process.env.DATABASE_URL = [
 			'postgresql://carddue_runtime',
-			'ep-carddue-test.us-west-2.aws.neon.tech/carddue'
+			'ep-chipdue-test.us-west-2.aws.neon.tech/carddue'
 		].join('@');
 		expect(() => getCloudRuntimeConfig()).toThrow(/not securely configured/);
 		process.env.DATABASE_URL = [
 			'postgresql://owner:secret',
-			'ep-carddue-test.us-west-2.aws.neon.tech/carddue?sslmode=require'
+			'ep-chipdue-test.us-west-2.aws.neon.tech/carddue?sslmode=require'
 		].join('@');
 		expect(() => getCloudRuntimeConfig()).toThrow(/not securely configured/);
 		process.env.DATABASE_URL = [
 			'postgresql://carddue_runtime:secret',
-			'ep-carddue-test.us-west-2.aws.neon.tech/carddue?sslmode=require&options=unsafe'
+			'ep-chipdue-test.us-west-2.aws.neon.tech/carddue?sslmode=require&options=unsafe'
 		].join('@');
 		expect(() => getCloudRuntimeConfig()).toThrow(/not securely configured/);
 		process.env.DATABASE_URL = [
 			'postgresql://carddue_runtime:secret',
-			'ep-carddue-test-pooler.us-west-2.aws.neon.tech/carddue?sslmode=require'
+			'ep-chipdue-test-pooler.us-west-2.aws.neon.tech/carddue?sslmode=require'
 		].join('@');
 		expect(() => getCloudRuntimeConfig()).toThrow(/not securely configured/);
 

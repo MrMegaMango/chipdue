@@ -39,7 +39,7 @@ describe.sequential('cards API contract', () => {
 			PLAID_CLIENT_ID: process.env.PLAID_CLIENT_ID,
 			PLAID_SECRET: process.env.PLAID_SECRET
 		};
-		temporaryDirectory = mkdtempSync(join(tmpdir(), 'carddue-api-test-'));
+		temporaryDirectory = mkdtempSync(join(tmpdir(), 'chipdue-api-test-'));
 		process.env.CARDDUE_DATA_DIR = temporaryDirectory;
 		delete process.env.PLAID_CLIENT_ID;
 		delete process.env.PLAID_SECRET;

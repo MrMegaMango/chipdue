@@ -46,7 +46,7 @@ const GOOGLE_ENV_KEYS = [
 	'VERCEL'
 ] as const;
 
-const CLIENT_ID = ['synthetic-carddue', 'client.apps.googleusercontent.com'].join('-');
+const CLIENT_ID = ['synthetic-chipdue', 'client.apps.googleusercontent.com'].join('-');
 const CLIENT_SECRET = ['synthetic', 'google', 'client', 'secret'].join('-');
 const TRANSACTION_COOKIE_PURPOSE = 'google-oidc-transaction-cookie-v1';
 const TRANSACTION_REFERENCE_PURPOSE = 'google-oidc-transaction-reference-v1';
@@ -278,7 +278,7 @@ function setCloudEnvironment(): void {
 	delete process.env.CARDDUE_AUTH_MODE;
 	process.env.DATABASE_URL = [
 		'postgresql://carddue_runtime:synthetic-password',
-		'ep-carddue-test.us-west-2.aws.neon.tech/carddue?sslmode=require'
+		'ep-chipdue-test.us-west-2.aws.neon.tech/carddue?sslmode=require'
 	].join('@');
 	process.env.CARDDUE_MASTER_KEY = Buffer.alloc(32, 29).toString('base64url');
 	process.env.CARDDUE_OWNER_PASSWORD_HASH = passwordHash('recovery password');
@@ -390,7 +390,7 @@ async function signIdToken(options: {
 	if (options.authorizedParty !== undefined) payload.azp = options.authorizedParty;
 	if (options.email !== undefined) payload.email = options.email;
 	return new SignJWT(payload)
-		.setProtectedHeader({ alg: 'RS256', kid: 'carddue-test-key' })
+		.setProtectedHeader({ alg: 'RS256', kid: 'chipdue-test-key' })
 		.setIssuer(options.issuer ?? GOOGLE_ISSUER)
 		.setAudience(options.audience ?? CLIENT_ID)
 		.setIssuedAt(now + (options.issuedAtOffset ?? 0))
@@ -425,7 +425,7 @@ describe.sequential('single-owner Google OIDC', () => {
 		signingKey = keys.privateKey;
 		const publicJwk = await exportJWK(keys.publicKey);
 		googleKeySet = createLocalJWKSet({
-			keys: [{ ...publicJwk, alg: 'RS256', kid: 'carddue-test-key', use: 'sig' }]
+			keys: [{ ...publicJwk, alg: 'RS256', kid: 'chipdue-test-key', use: 'sig' }]
 		});
 	});
 
@@ -865,7 +865,7 @@ describe.sequential('single-owner Google OIDC', () => {
 		});
 	});
 
-	it('links only from a live CardDue session with PKCE, nonce, and account selection', async () => {
+	it('links only from a live ChipDue session with PKCE, nonce, and account selection', async () => {
 		const cookies = new TestCookies();
 		const sessionToken = await loginWithPassword(
 			new Request('https://cards.example.test/api/auth/login'),
@@ -1107,7 +1107,7 @@ describe.sequential('single-owner Google OIDC', () => {
 
 		const otherKeys = await generateKeyPair('RS256');
 		const badSignature = new SignJWT({ nonce, sub: 'subject-123' })
-			.setProtectedHeader({ alg: 'RS256', kid: 'carddue-test-key' })
+			.setProtectedHeader({ alg: 'RS256', kid: 'chipdue-test-key' })
 			.setIssuer(GOOGLE_ISSUER)
 			.setAudience(CLIENT_ID)
 			.setIssuedAt()
@@ -1117,7 +1117,7 @@ describe.sequential('single-owner Google OIDC', () => {
 
 		const ellipticKeys = await generateKeyPair('ES256');
 		const wrongAlgorithm = await new SignJWT({ nonce, sub: 'subject-123' })
-			.setProtectedHeader({ alg: 'ES256', kid: 'carddue-test-key' })
+			.setProtectedHeader({ alg: 'ES256', kid: 'chipdue-test-key' })
 			.setIssuer(GOOGLE_ISSUER)
 			.setAudience(CLIENT_ID)
 			.setIssuedAt()

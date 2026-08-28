@@ -2,9 +2,9 @@
 
 ## Goal
 
-Prevent CardDue's source repository, Git history, CI, logs, browser storage, and normal runtime behavior from disclosing personal financial data or credentials.
+Prevent ChipDue's source repository, Git history, CI, logs, browser storage, and normal runtime behavior from disclosing personal financial data or credentials.
 
-CardDue has two supported, single-owner deployments. Local and cloud mode do not share the same trust boundary.
+ChipDue has two supported, single-owner deployments. Local and cloud mode do not share the same trust boundary.
 
 ## Architecture and trust boundaries
 
@@ -71,7 +71,7 @@ The hosted model has one password or one explicitly bootstrapped Google-only ide
 - Vercel is trusted to execute the application and protect Production environment variables. Neon is trusted for database availability and platform controls but is not entrusted with plaintext application fields.
 - npm, Vercel, Neon, and optional Google and Plaid integrations are trusted dependencies or processors within their documented roles.
 - Production secrets are never assigned to Preview or Development, and untrusted changes are never deployed with them.
-- The dedicated Neon runtime role was created directly with SQL, not through Neon Console, CLI, or API role creation that grants `neon_superuser` membership. Provisioning verifies that it has no memberships, administrative attributes, effective DDL, or access outside the CardDue tables.
+- The dedicated Neon runtime role was created directly with SQL, not through Neon Console, CLI, or API role creation that grants `neon_superuser` membership. Provisioning verifies that it has no memberships, administrative attributes, effective DDL, or access outside ChipDue's compatibility-stable `carddue_*` tables.
 - The user verifies payment details with the card issuer.
 
 ## Controls
@@ -84,11 +84,11 @@ The hosted model has one password or one explicitly bootstrapped Google-only ide
 | A client bundle contains credentials     | Server-only modules and environment access; no credential uses a `PUBLIC_` or `VITE_` prefix; generated bundles are inspected                                                       |
 | Neon is disclosed                        | AES-256-GCM payload encryption with random nonces and purpose/record-bound authenticated data; key remains in Vercel and offline recovery storage                                   |
 | Neon metadata reveals too much           | Plaintext schema is limited to opaque keyed IDs, source/status, schema version, and operational timestamps; raw financial fields stay in encrypted payloads                         |
-| Runtime DB credentials can change schema | Cold-start identity, role, exact privilege, public/column grant, unrelated-access, and schema-catalog verification; explicit DML only for CardDue tables                            |
+| Runtime DB credentials can change schema | Cold-start identity, role, exact privilege, public/column grant, unrelated-access, and schema-catalog verification; explicit DML only for compatibility-stable `carddue_*` tables   |
 | Migration authority reaches the app      | Owner migration URL exists only in a temporary protected local environment and is never configured in Vercel or CI                                                                  |
 | Public requests bypass authentication    | Every private cloud API is authorized server-side; sessions are random, stored only as keyed hashes, auth-config-bound, expiring, revocable, Secure, HTTP-only, and SameSite Strict |
 | Password guessing                        | Password mode uses a memory-hard hash, generic failures, persistent keyed rate-limit buckets, and a bounded lockout window                                                          |
-| Google flow claims or links an owner     | Password mode requires an exact CardDue session; Google-only bootstrap requires a one-start 256-bit operator token, serialized opaque claim, and atomic first-subject bind          |
+| Google flow claims or links an owner     | Password mode requires an exact ChipDue session; Google-only bootstrap requires a one-start 256-bit operator token, serialized opaque claim, and atomic first-subject bind          |
 | OAuth callback is injected or replayed   | Exact redirect and response issuer; PKCE S256; random nonce/state; encrypted short-lived host-only cookie; atomic one-time server marker; strict claim and subject checks           |
 | Google identity leaks through storage    | Only a master-keyed fingerprint of normalized issuer and `sub` is stored; email/profile/provider tokens are neither requested nor retained                                          |
 | OAuth branding identifies the owner      | Use a dedicated non-personal monitored support alias/group with private membership; review the publicly reachable consent screen before linking                                     |
@@ -110,8 +110,8 @@ The hosted model has one password or one explicitly bootstrapped Google-only ide
 - A compromised Vercel owner account, Function runtime, build supplied with Production secrets, or recovery bundle; each can access the cloud AES key
 - Simultaneous compromise of Neon ciphertext and the Vercel or recovery copy of the AES key
 - Compromise, malicious behavior, outage, suspension, or retention failures by Vercel, Neon, Google, Plaid, or a connected institution
-- A compromised linked Google account authenticating to CardDue; password mode retains an independent recovery password, while Google-only mode intentionally does not
-- An unlocked browser with an active Google session can reuse ambient Google SSO after CardDue logout; shared-device containment also requires signing out of Google and locking the browser or operating-system profile
+- A compromised linked Google account authenticating to ChipDue; password mode retains an independent recovery password, while Google-only mode intentionally does not
+- An unlocked browser with an active Google session can reuse ambient Google SSO after ChipDue logout; shared-device containment also requires signing out of Google and locking the browser or operating-system profile
 - No in-application Google unlink or rebind flow; incident containment requires disabling both Google variables, redeploying, and explicitly invalidating sessions before any reviewed identity reset
 - Immediate deletion from provider restore points, infrastructure logs, or already-created independent backups
 - Recovery after losing both the Neon data and all backups, or after losing every copy of the AES key

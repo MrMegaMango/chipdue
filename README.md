@@ -1,13 +1,13 @@
-# CardDue
+# ChipDue
 
-CardDue is a privacy-first dashboard for tracking credit-card statement balances, minimum payments, and due dates. It works entirely in manual mode and can optionally sync the same limited fields through Plaid Liabilities.
+ChipDue is a privacy-first dashboard for tracking credit-card statement balances, minimum payments, and due dates. It works entirely in manual mode and can optionally sync the same limited fields through Plaid Liabilities.
 
 Choose one of two deployment modes:
 
 - **Local mode** is the default. It binds to loopback, needs no login, and stores an encrypted SQLite database outside the source checkout.
 - **Private cloud mode** is a single-owner Vercel deployment. It uses either a password with optional linked Google sign-in, or an explicit Google-only mode with a one-time operator bootstrap and no password endpoint. It stores only application-encrypted records in Neon Postgres and keeps its decryption key in Vercel's Production environment.
 
-> CardDue is a reminder tool, not a payment service. Always verify amounts and dates with the card issuer, and keep issuer alerts or autopay as a backstop.
+> ChipDue is a reminder tool, not a payment service. Always verify amounts and dates with the card issuer, and keep issuer alerts or autopay as a backstop.
 
 ## Features
 
@@ -80,7 +80,7 @@ The deployment process uses:
 
 Follow [the private Vercel deployment guide](docs/DEPLOY_VERCEL.md). Do not set `CARDDUE_ALLOW_REMOTE=1` as a substitute for cloud mode.
 
-CardDue rejects Neon `-pooler` URLs for both migration and runtime use. Running `cloud:migrate` for an existing role always rotates it to a distinct credential, terminates its sessions, and can briefly interrupt access; use `cloud:verify` for routine checks. Update the protected recovery record, local runtime URL, and Vercel `DATABASE_URL` only after migration and restricted-runtime verification succeed, then redeploy.
+ChipDue rejects Neon `-pooler` URLs for both migration and runtime use. Running `cloud:migrate` for an existing role always rotates it to a distinct credential, terminates its sessions, and can briefly interrupt access; use `cloud:verify` for routine checks. Update the protected recovery record, local runtime URL, and Vercel `DATABASE_URL` only after migration and restricted-runtime verification succeed, then redeploy.
 
 Neon currently describes its Free plan as having no time limit, while Vercel Hobby is free for personal, noncommercial use within quotas. Service terms can change. The code and local mode remain provider-independent and free.
 
@@ -92,20 +92,20 @@ Official references:
 
 ## Optional Google sign-in
 
-Google authentication is opt-in and cloud-only. CardDue never lets an arbitrary first Google visitor claim an instance. The default password mode links Google only from an authenticated CardDue session. Explicit Google-only mode removes the password endpoint and gates the first owner behind a locally generated, 256-bit, one-start setup token whose verifier is temporarily configured by the operator.
+Google authentication is opt-in and cloud-only. ChipDue never lets an arbitrary first Google visitor claim an instance. The default password mode links Google only from an authenticated ChipDue session. Explicit Google-only mode removes the password endpoint and gates the first owner behind a locally generated, 256-bit, one-start setup token whose verifier is temporarily configured by the operator.
 
 1. Create a dedicated, non-personal monitored support alias or Google Group, then use it as Google Auth Platform's **User Support Email**. Google displays that address on the consent screen, which any visitor can reach; do not select a personal address or a group whose membership reveals one.
 2. In Google Auth Platform, configure an External audience and create a **Web application** OAuth client.
 3. Register exactly `https://YOUR_PRODUCTION_HOST/api/auth/google/callback` as its authorized redirect URI. Do not add preview or generated deployment hosts.
-4. Add `CARDDUE_GOOGLE_CLIENT_ID` and `CARDDUE_GOOGLE_CLIENT_SECRET` to Vercel **Production only**; mark the secret as Sensitive. CardDue stays disabled when both are absent and fails closed when only one is present.
+4. Add `CARDDUE_GOOGLE_CLIENT_ID` and `CARDDUE_GOOGLE_CLIENT_SECRET` to Vercel **Production only**; mark the secret as Sensitive. ChipDue stays disabled when both are absent and fails closed when only one is present.
 5. In password mode, redeploy, sign in with the password, and choose **Link Google account**.
 6. For Google-only mode, follow [the complete bootstrap and decommission guide](docs/GOOGLE_ONLY_AUTH.md); never put its setup token in a URL or browser storage.
 
-CardDue requests only the `openid` scope. It validates Google's signed ID token, binds the stable issuer-and-subject pair through a keyed one-way fingerprint, and immediately discards Google's ID and access tokens. It does not request or store the Google email, name, picture, profile, or refresh token. Google still observes the sign-in, IP address, time, CardDue hostname, and configured public support contact.
+ChipDue requests only the `openid` scope. It validates Google's signed ID token, binds the stable issuer-and-subject pair through a keyed one-way fingerprint, and immediately discards Google's ID and access tokens. It does not request or store the Google email, name, picture, profile, or refresh token. Google still observes the sign-in, IP address, time, ChipDue hostname, and configured public support contact.
 
 The Google binding is intentionally immutable in this release: the dashboard cannot unlink it or replace it with a different account. In password mode, removing both Google variables and redeploying disables Google while the password remains available. In Google-only mode, removing them deliberately makes the application fail closed with `503`; there is no password fallback. Rebinding requires a separate reviewed recovery change and explicit session invalidation.
 
-Google currently exempts apps that use only basic Sign in with Google scopes from Testing-mode test-user warnings and seven-day authorization expiry. A personal client on a generated `vercel.app` hostname can therefore remain functional without a paid domain, but that shared hostname cannot satisfy Google's owned-domain brand-verification path. Provider rules can change; a custom domain is needed for verified production branding, not for CardDue's personal-use flow.
+Google currently exempts apps that use only basic Sign in with Google scopes from Testing-mode test-user warnings and seven-day authorization expiry. A personal client on a generated `vercel.app` hostname can therefore remain functional without a paid domain, but that shared hostname cannot satisfy Google's owned-domain brand-verification path. Provider rules can change; a custom domain is needed for verified production branding, not for ChipDue's personal-use flow.
 
 Official references:
 
@@ -120,9 +120,9 @@ Official references:
 2. Add `PLAID_CLIENT_ID`, `PLAID_SECRET`, and `PLAID_ENV` to `.env.local` for local use or Vercel's Production environment for hosted use.
 3. Never add a `PUBLIC_` or `VITE_` prefix to a secret.
 4. Keep `PLAID_ENV=sandbox` until the complete flow is tested.
-5. Restart or redeploy CardDue, then choose **Connect with Plaid**.
+5. Restart or redeploy ChipDue, then choose **Connect with Plaid**.
 
-Plaid's Trial plan currently supports real data and Liabilities for a limited number of lifetime Production Items. An Item is one institution login and can contain multiple cards. Provider terms can change, so CardDue always retains manual mode.
+Plaid's Trial plan currently supports real data and Liabilities for a limited number of lifetime Production Items. An Item is one institution login and can contain multiple cards. Provider terms can change, so ChipDue always retains manual mode.
 
 Official references:
 
@@ -132,11 +132,17 @@ Official references:
 
 ## Where private data lives
 
-In local mode, CardDue uses the platform application-data directory:
+In local mode, ChipDue uses the platform application-data directory:
 
 - Linux/WSL: `$XDG_DATA_HOME/carddue`, or `~/.local/share/carddue`
 - macOS: `~/Library/Application Support/CardDue`
 - Windows: `%LOCALAPPDATA%\CardDue`
+
+These legacy `carddue`/`CardDue` storage names intentionally remain stable after the ChipDue
+product rename so existing encrypted databases and keys continue to open without a migration.
+The same compatibility rule applies to `CARDDUE_*` environment variables, `carddue_*` database
+objects and runtime roles, host-only cookie names, calendar UID domains, and cryptographic context
+strings. Changing those identifiers in place could orphan encrypted data or invalidate live state.
 
 In cloud mode, Neon stores encrypted application rows plus non-sensitive operational metadata, keyed session/rate-limit identifiers, an opaque bootstrap claim state when used, and—when linked—one keyed Google issuer-and-subject fingerprint. Vercel stores the database URL, encryption key, mode-specific authentication values, and optional Google client secret as sensitive Production environment variables. Keep generated recovery and temporary bootstrap bundles outside every Git checkout with owner-only permissions.
 

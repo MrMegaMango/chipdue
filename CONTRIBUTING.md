@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for helping improve CardDue. Privacy failures are treated as security bugs.
+Thank you for helping improve ChipDue. Privacy failures are treated as security bugs.
 
 ## Before making changes
 

@@ -3,7 +3,7 @@ const loopbackHosts = new Set(['127.0.0.1', 'localhost', '::1']);
 
 if (!loopbackHosts.has(host) && process.env.CARDDUE_ALLOW_REMOTE !== '1') {
 	throw new Error(
-		'Refusing to bind CardDue beyond loopback. Set CARDDUE_ALLOW_REMOTE=1 only after a security review.'
+		'Refusing to bind ChipDue beyond loopback. Set CARDDUE_ALLOW_REMOTE=1 only after a security review.'
 	);
 }
 

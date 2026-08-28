@@ -1,4 +1,4 @@
-title = "CardDue secret scanning"
+title = "ChipDue secret scanning"
 
 [extend]
 useDefault = true

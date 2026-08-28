@@ -10,7 +10,7 @@ export const GET: RequestHandler = async ({ url }) => {
 			headers: {
 				...privateResponseHeaders,
 				'content-type': 'text/calendar; charset=utf-8',
-				'content-disposition': 'attachment; filename="carddue-payments.ics"'
+				'content-disposition': 'attachment; filename="chipdue-payments.ics"'
 			}
 		});
 	} catch (error) {

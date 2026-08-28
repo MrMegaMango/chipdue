@@ -263,7 +263,7 @@ export async function verifyCloudRolePrivileges(query, role) {
  */
 export async function verifyCloudRoleBoundary(query, role) {
 	if (!isCloudRuntimeRoleName(role)) {
-		throw new Error('The runtime database identity is not a dedicated CardDue role.');
+		throw new Error('The runtime database identity is not a dedicated ChipDue role.');
 	}
 	assertRestrictedCloudRoleState(await readCloudRoleState(query, role));
 	await verifyCloudRolePrivileges(query, role);

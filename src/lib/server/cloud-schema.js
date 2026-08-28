@@ -484,6 +484,6 @@ export async function verifyCloudSchemaCatalog(query) {
 		!sameRows(constraints, expectedConstraints, comparableConstraint) ||
 		!sameRows(indexes, EXPECTED_INDEXES, comparableIndex)
 	) {
-		throw new Error('The cloud schema catalog does not match this CardDue release.');
+		throw new Error('The cloud schema catalog does not match this ChipDue release.');
 	}
 }

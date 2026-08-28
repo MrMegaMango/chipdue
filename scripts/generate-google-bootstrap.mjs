@@ -23,7 +23,7 @@ function parseOutputPath() {
 	const args = process.argv.slice(2);
 	if (args.length !== 2 || args[0] !== '--output' || !args[1]) {
 		throw new Error(
-			'Usage: npm run google:bootstrap -- --output /private/path/carddue-google-bootstrap.json'
+			'Usage: npm run google:bootstrap -- --output /private/path/chipdue-google-bootstrap.json'
 		);
 	}
 	if (!isAbsolute(args[1])) throw new Error('The bootstrap bundle path must be absolute.');

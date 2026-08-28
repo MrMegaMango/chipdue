@@ -6,7 +6,7 @@
 </script>
 
 <svelte:head>
-	<title>CardDue — Credit card due dates, kept private</title>
+	<title>ChipDue — Credit card due dates, kept private</title>
 	<meta
 		name="description"
 		content="A private, local-first dashboard for credit card statement balances and due dates."

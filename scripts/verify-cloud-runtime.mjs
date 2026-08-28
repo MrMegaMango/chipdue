@@ -51,7 +51,7 @@ async function main() {
 		`SELECT value FROM public.carddue_metadata WHERE key = 'schema_version'`
 	);
 	if (schema.length !== 1 || schema[0].value !== String(CLOUD_SCHEMA_VERSION)) {
-		throw new Error('The cloud schema version does not match this CardDue release.');
+		throw new Error('The cloud schema version does not match this ChipDue release.');
 	}
 
 	console.log(`Restricted cloud runtime verified for schema ${CLOUD_SCHEMA_VERSION}.`);

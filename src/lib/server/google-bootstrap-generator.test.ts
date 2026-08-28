@@ -19,7 +19,7 @@ const script = new URL('../../../scripts/generate-google-bootstrap.mjs', import.
 const temporaryDirectories: string[] = [];
 
 function makePrivateDirectory(): string {
-	const directory = mkdtempSync(join(tmpdir(), 'carddue-google-bootstrap-test-'));
+	const directory = mkdtempSync(join(tmpdir(), 'chipdue-google-bootstrap-test-'));
 	chmodSync(directory, 0o700);
 	temporaryDirectories.push(directory);
 	return directory;

@@ -111,7 +111,7 @@ export function createScramVerifier(password, salt = randomBytes(16)) {
  * @param {string} password
  */
 export function createPasswordRotationParameters(role, password) {
-	if (!isCloudRuntimeRoleName(role)) throw new Error('A valid CardDue runtime role is required.');
+	if (!isCloudRuntimeRoleName(role)) throw new Error('A valid ChipDue runtime role is required.');
 	return [password, role];
 }
 

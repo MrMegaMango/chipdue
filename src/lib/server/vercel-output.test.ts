@@ -24,8 +24,8 @@ describe.sequential('Vercel output privacy verification', () => {
 		delete process.env.CARDDUE_MASTER_KEY;
 		delete process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH;
 		delete process.env.VERCEL_TOKEN;
-		output = mkdtempSync(join(tmpdir(), 'carddue-vercel-output-test-'));
-		checkout = mkdtempSync(join(tmpdir(), 'carddue-vercel-checkout-test-'));
+		output = mkdtempSync(join(tmpdir(), 'chipdue-vercel-output-test-'));
+		checkout = mkdtempSync(join(tmpdir(), 'chipdue-vercel-checkout-test-'));
 		const functionRoot = join(output, 'functions', 'app.func');
 		mkdirSync(join(functionRoot, '.svelte-kit'), { recursive: true });
 		mkdirSync(join(functionRoot, 'node_modules'), { recursive: true });

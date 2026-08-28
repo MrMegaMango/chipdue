@@ -72,7 +72,7 @@ export function createCalendar(cards: Card[], now = new Date(), includeAmounts =
 	const logicalLines = [
 		'BEGIN:VCALENDAR',
 		'VERSION:2.0',
-		'PRODID:-//CardDue//Payment reminders//EN',
+		'PRODID:-//ChipDue//Payment reminders//EN',
 		'CALSCALE:GREGORIAN',
 		'METHOD:PUBLISH'
 	];

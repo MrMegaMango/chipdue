@@ -1,6 +1,6 @@
 # Deploy a private Vercel instance
 
-This guide deploys CardDue's one supported hosted topology: one owner, one reviewed Vercel production project, one exact production hostname, and one Neon production database. The production URL is reachable from the internet. CardDue's selected single-owner authentication mode and server-side request guards protect the records; obscurity and Vercel preview protection do not.
+This guide deploys ChipDue's one supported hosted topology: one owner, one reviewed Vercel production project, one exact production hostname, and one Neon production database. The production URL is reachable from the internet. ChipDue's selected single-owner authentication mode and server-side request guards protect the records; obscurity and Vercel preview protection do not.
 
 Use [local mode](../README.md#start-locally) instead if you do not want Vercel to hold the decryption key or do not want an internet-facing login.
 
@@ -9,10 +9,10 @@ Use [local mode](../README.md#start-locally) instead if you do not want Vercel t
 - The browser sends authenticated requests to a Vercel Function over HTTPS.
 - The Function holds the AES key and decrypts records after login.
 - Neon stores AES-256-GCM ciphertext plus limited operational metadata.
-- The Neon runtime role connects through a direct, unpooled TLS URL. It can read and change CardDue table rows but cannot migrate the schema.
+- The Neon runtime role connects through a direct, unpooled TLS URL. It can read and change ChipDue's compatibility-stable `carddue_*` table rows but cannot migrate the schema.
 - An owner-capable direct, unpooled Neon TLS URL is used only for explicit migration from a trusted local environment.
 - Vercel Preview and Development receive no real database, key, authentication verifier, recovery bundle, Google secret, or Plaid credentials.
-- Google is optional in password mode or can be the sole login in an explicitly bootstrapped Google-only mode. Google receives no card fields from CardDue.
+- Google is optional in password mode or can be the sole login in an explicitly bootstrapped Google-only mode. Google receives no card fields from ChipDue.
 - Plaid is optional. Manual entry works without any Plaid environment variables.
 
 This design limits a Neon-only disclosure. It does not protect data from someone who controls the Vercel project, production build, Function runtime, owner session, or recovery bundle.
@@ -42,7 +42,7 @@ The script refuses relative paths, linked ancestors, Git worktrees, existing out
 
 The JSON bundle contains four independent fields:
 
-- `loginPassword`: enter this only in CardDue's login form in password mode; Google-only mode does not configure or accept it.
+- `loginPassword`: enter this only in ChipDue's login form in password mode; Google-only mode does not configure or accept it.
 - `masterKey`: configure this as `CARDDUE_MASTER_KEY` in Vercel Production.
 - `ownerPasswordHash`: configure this as `CARDDUE_OWNER_PASSWORD_HASH` only in password mode. Keep it out of Google-only Vercel configuration.
 - `databaseRolePassword`: give this to the migration process as `CARDDUE_DATABASE_PASSWORD` and use it inside the restricted runtime `DATABASE_URL`.
@@ -51,9 +51,9 @@ Do not upload the entire bundle to Vercel. Keep an encrypted offline copy after 
 
 ## 2. Create the Neon project
 
-Create one production Neon project directly. Do not enable automatic production-data branches for Vercel previews. Record the database name privately. Every CardDue database URL must use Neon's direct, unpooled endpoint and exactly one `sslmode=require` or `sslmode=verify-full` parameter. A hostname whose endpoint label ends in `-pooler` is rejected even when it requires TLS; do not use a pooled URL for migration, verification, or runtime traffic.
+Create one production Neon project directly. Do not enable automatic production-data branches for Vercel previews. Record the database name privately. Every ChipDue database URL must use Neon's direct, unpooled endpoint and exactly one `sslmode=require` or `sslmode=verify-full` parameter. A hostname whose endpoint label ends in `-pooler` is rejected even when it requires TLS; do not use a pooled URL for migration, verification, or runtime traffic.
 
-Neon roles created through its Console role-creation control, CLI, or API can inherit `neon_superuser`. Do not create the CardDue runtime role with any of them. The reviewed CardDue migration connects through the separate owner URL and creates or rotates the role directly with restricted SQL. It then verifies the result before granting table access.
+Neon roles created through its Console role-creation control, CLI, or API can inherit `neon_superuser`. Do not create the ChipDue runtime role with any of them. The reviewed ChipDue migration connects through the separate owner URL and creates or rotates the role directly with restricted SQL. It then verifies the result before granting table access.
 
 Keep two distinct direct, unpooled TLS connection strings:
 
@@ -152,23 +152,23 @@ Never configure these in Vercel:
 - The recovery bundle itself
 - `googleBootstrapToken` or the Google bootstrap bundle
 
-Do not give Preview or Development a synthetic copy of production secrets. In this design they get no CardDue cloud variables at all, so a preview cannot connect to, decrypt, or imitate the real instance. The stable production hostname is allowlisted; generated, preview, old, and unexpected deployment hosts are intentionally rejected even if a deployment still exists.
+Do not give Preview or Development a synthetic copy of production secrets. In this design they get no ChipDue cloud variables at all, so a preview cannot connect to, decrypt, or imitate the real instance. The stable production hostname is allowlisted; generated, preview, old, and unexpected deployment hosts are intentionally rejected even if a deployment still exists.
 
 Environment variables are available to production build and runtime code. Review the exact production commit, lockfile, dependencies, install scripts, and Vercel integrations before redeploying. A malicious production build can exfiltrate the same secrets as the running Function.
 
 ## 6. Optionally configure Google authentication
 
-Skip this section if the password is the only desired login. CardDue supports two mutually exclusive cloud authentication configurations: the default password mode can optionally link Google, while Google-only mode removes the password endpoint and uses Google for every login.
+Skip this section if the password is the only desired login. ChipDue supports two mutually exclusive cloud authentication configurations: the default password mode can optionally link Google, while Google-only mode removes the password endpoint and uses Google for every login.
 
-1. Create a dedicated, non-personal, monitored support alias or Google Group. If it is a group, hide its membership and restrict posting appropriately. Google requires a **User Support Email** and displays it on a consent screen that anyone can reach through the public login start; selecting a personal address would disclose it even though CardDue never stores it.
-2. Open Google Auth Platform in a dedicated Google Cloud project. Configure an External audience and request only the basic Sign in with Google identity scope used by CardDue (`openid`). Select the dedicated address as User Support Email and keep developer-contact details private inside the provider account.
+1. Create a dedicated, non-personal, monitored support alias or Google Group. If it is a group, hide its membership and restrict posting appropriately. Google requires a **User Support Email** and displays it on a consent screen that anyone can reach through the public login start; selecting a personal address would disclose it even though ChipDue never stores it.
+2. Open Google Auth Platform in a dedicated Google Cloud project. Configure an External audience and request only the basic Sign in with Google identity scope used by ChipDue (`openid`). Select the dedicated address as User Support Email and keep developer-contact details private inside the provider account.
 3. Create an OAuth client of type **Web application**.
 4. Register exactly `https://YOUR_CANONICAL_HOST/api/auth/google/callback` as its authorized redirect URI. The scheme, case, host, path, port, and trailing slash must match exactly. Add no Preview, Development, wildcard, immutable-deployment, or alternate-host callback.
 5. Put the client ID in `CARDDUE_GOOGLE_CLIENT_ID` and the client secret in `CARDDUE_GOOGLE_CLIENT_SECRET`, both Production-only. Mark the secret Sensitive. Never use `PUBLIC_` or `VITE_`, put the values in `.env*`, commit them, pass them in a command argument, or copy them into the recovery bundle.
 6. For password mode, redeploy, sign in with the password, choose **Link Google account**, carefully complete the account chooser, then verify both login methods independently.
 7. For Google-only mode, follow the complete generation, one-attempt bootstrap, immediate verifier decommission, and recovery procedure in [GOOGLE_ONLY_AUTH.md](GOOGLE_ONLY_AUTH.md). Do not improvise a first-visitor claim or place its setup token in a URL.
 
-In password mode, both Google variables absent means disabled; exactly one present makes cloud configuration fail closed. Google-only mode requires both and forbids a configured owner-password hash. CardDue uses authorization code plus PKCE S256, one-time state and nonce values, Google's signed ID token, and an encrypted short-lived host-only callback cookie. It stores only a master-keyed fingerprint of Google's normalized issuer and stable `sub`; it requests or retains no email, name, picture, profile, ID token, access token, or refresh token. Google still observes each authentication request, including its time, source IP, and the CardDue hostname.
+In password mode, both Google variables absent means disabled; exactly one present makes cloud configuration fail closed. Google-only mode requires both and forbids a configured owner-password hash. ChipDue uses authorization code plus PKCE S256, one-time state and nonce values, Google's signed ID token, and an encrypted short-lived host-only callback cookie. It stores only a master-keyed fingerprint of Google's normalized issuer and stable `sub`; it requests or retains no email, name, picture, profile, ID token, access token, or refresh token. Google still observes each authentication request, including its time, source IP, and the ChipDue hostname.
 
 This release deliberately provides no unlink or rebind control. The first linked fingerprint is immutable through the application, even from another authenticated session. If that Google account is lost or compromised, remove both Google variables from Vercel Production and redeploy. Password mode stays available and can rotate its password to revoke sessions. Google-only mode instead makes the whole app fail closed with `503` until a reviewed recovery configuration is deployed; it has no password fallback. Follow [GOOGLE_ONLY_AUTH.md](GOOGLE_ONLY_AUTH.md), and never change only a database fingerprint because that does not revoke existing sessions.
 
@@ -178,11 +178,11 @@ References: [Google OpenID Connect](https://developers.google.com/identity/openi
 
 ## 7. Optionally configure Plaid
 
-Skip this section for manual-only CardDue. Plaid is not required for deployment or login.
+Skip this section for manual-only ChipDue. Plaid is not required for deployment or login.
 
 After manual cloud mode is verified, add `PLAID_CLIENT_ID`, `PLAID_SECRET`, and `PLAID_ENV` as Sensitive, Production-only values. Start with Plaid Sandbox. Move to Production only after reviewing Plaid's current access, pricing, redirect, and data-retention settings.
 
-Never add Plaid credentials to Preview, Development, a browser-exposed variable, or the recovery bundle. The browser receives only Plaid's short-lived Link token. CardDue asks for Liabilities, maps the allowlisted reminder fields, encrypts the long-lived access token server-side, and discards the raw response.
+Never add Plaid credentials to Preview, Development, a browser-exposed variable, or the recovery bundle. The browser receives only Plaid's short-lived Link token. ChipDue asks for Liabilities, maps the allowlisted reminder fields, encrypts the long-lived access token server-side, and discards the raw response.
 
 ## 8. Deploy and verify before entering real data
 
@@ -201,14 +201,14 @@ Create a new production deployment after setting the variables. Changes to Verce
 - A logged-out request to every card, Plaid, sync, disconnect, update, and calendar API receives `401`; only health and authentication endpoints are public.
 - In password mode, a wrong password returns a generic failure and repeated failures trigger throttling without revealing whether configuration or records exist. In Google-only mode every request method to the password-login route returns `404` before parsing a body or touching authentication storage.
 - A successful login sets only the `__Host-carddue_session` cookie with Secure, HTTP-only, SameSite Strict, root-path semantics, and no Domain attribute.
-- In password mode, a logged-out Google start cannot create or claim an owner, and a link start without the exact CardDue session is rejected. In Google-only mode, only the one-time manually pasted setup token can create an initial OAuth transaction; the token never appears in a URL, cookie, database row, log, or provider request.
+- In password mode, a logged-out Google start cannot create or claim an owner, and a link start without the exact ChipDue session is rejected. In Google-only mode, only the one-time manually pasted setup token can create an initial OAuth transaction; the token never appears in a URL, cookie, database row, log, or provider request.
 - Google linking sets only a short-lived encrypted `__Host-` transaction cookie with Secure, HTTP-only, SameSite Lax, root-path semantics, and no Domain attribute. State, nonce, PKCE, response issuer, ID-token signature/algorithm/issuer/audience/expiry, and the exact linked subject are validated; the one-time transaction cannot be replayed.
-- Google's rendered consent screen contains no personal name, email, logo metadata, or link other than the deliberately created support alias and canonical CardDue domain.
+- Google's rendered consent screen contains no personal name, email, logo metadata, or link other than the deliberately created support alias and canonical ChipDue domain.
 - Logging out before a pending password-mode link callback invalidates that link. Replacing or removing a Google-only bootstrap verifier invalidates its pending flow. Selecting a different Google account after an identity is linked returns a generic error and issues no session.
-- After a successful link or bootstrap, Google login issues CardDue's opaque server-side session. The password continues to work independently only in password mode.
+- After a successful link or bootstrap, Google login issues ChipDue's opaque server-side session. The password continues to work independently only in password mode.
 - Mutations without the exact production Origin, with cross-site Fetch Metadata, or without JSON where JSON is required are rejected.
 - Logout revokes the server-side session. Reloading and direct API requests remain logged out.
-- CardDue logout does not sign the browser out of Google. On a shared device, also sign out of Google and lock the operating-system or browser profile so ambient Google SSO cannot immediately create another CardDue session.
+- ChipDue logout does not sign the browser out of Google. On a shared device, also sign out of Google and lock the operating-system or browser profile so ambient Google SSO cannot immediately create another ChipDue session.
 - Browser storage contains no financial records in localStorage, sessionStorage, IndexedDB, Cache Storage, or a service worker. User data is absent from page URLs and history.
 
 ### Storage and disclosure checks
@@ -231,7 +231,7 @@ Neon point-in-time recovery is useful but is not the only backup. Provider reten
 4. Test restoration into an isolated, non-production Neon project that is not connected to Vercel.
 5. Destroy the test database and any temporary secrets after recording only the nonsensitive result.
 
-After any restore or database-credential incident, verify every due date and amount against the issuer before relying on CardDue. A restricted database credential can still delete rows, change operational fields, or replay an older valid ciphertext for the same record even though it cannot decrypt fields or mint a keyed session.
+After any restore or database-credential incident, verify every due date and amount against the issuer before relying on ChipDue. A restricted database credential can still delete rows, change operational fields, or replay an older valid ciphertext for the same record even though it cannot decrypt fields or mint a keyed session.
 
 A database backup without `masterKey` cannot restore readable records. The recovery bundle without a database backup cannot reconstruct lost rows. Changing `CARDDUE_MASTER_KEY` is not a rotation procedure; all existing ciphertext immediately becomes unreadable. Design and test a versioned re-encryption migration before any key change.
 
@@ -262,13 +262,13 @@ Never use the secret generator's newly generated `masterKey` as an ad hoc replac
 
 ## Delete or retire the instance
 
-1. While CardDue and Plaid credentials still work, disconnect each Plaid Item so CardDue calls Plaid's removal endpoint.
-2. Delete live CardDue records and verify no active session remains.
-3. Remove CardDue from the linked Google account's third-party connections and delete or rotate its OAuth client.
+1. While ChipDue and Plaid credentials still work, disconnect each Plaid Item so ChipDue calls Plaid's removal endpoint.
+2. Delete live ChipDue records and verify no active session remains.
+3. Remove ChipDue from the linked Google account's third-party connections and delete or rotate its OAuth client.
 4. Remove the Vercel domain and production environment variables, then delete deployments and the project.
-5. Delete every Neon branch and the Neon project. Historical restore points expire under Neon's retention rules rather than immediately through CardDue.
+5. Delete every Neon branch and the Neon project. Historical restore points expire under Neon's retention rules rather than immediately through ChipDue.
 6. Revoke Plaid credentials or delete the Plaid team if it is no longer used.
 7. Destroy every recovery bundle, temporary migration file, database backup, calendar export, and local provider export according to its storage system's secure-deletion capabilities.
 8. Remove saved credentials and recovery codes only after confirming no other service depends on them.
 
-Provider infrastructure logs and backups may persist until their documented retention periods expire. CardDue cannot accelerate provider-side deletion.
+Provider infrastructure logs and backups may persist until their documented retention periods expire. ChipDue cannot accelerate provider-side deletion.

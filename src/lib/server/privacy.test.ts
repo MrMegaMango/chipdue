@@ -25,7 +25,7 @@ describe.sequential('private local persistence', () => {
 	beforeEach(() => {
 		previousDataDirectory = process.env.CARDDUE_DATA_DIR;
 		previousMasterKeyPath = process.env.CARDDUE_MASTER_KEY_PATH;
-		temporaryDirectory = mkdtempSync(join(tmpdir(), 'carddue-test-'));
+		temporaryDirectory = mkdtempSync(join(tmpdir(), 'chipdue-test-'));
 		process.env.CARDDUE_DATA_DIR = temporaryDirectory;
 		delete process.env.CARDDUE_MASTER_KEY_PATH;
 		closeDatabaseForTests();

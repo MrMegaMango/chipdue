@@ -27,7 +27,7 @@ Thumbs.db
 .env.*
 !.env.example
 
-# Private runtime data (CardDue stores outside the checkout by default)
+# Private runtime data (ChipDue stores outside the checkout by default)
 /data/
 /runtime/
 /exports/

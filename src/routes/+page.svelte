@@ -361,7 +361,7 @@
 		} catch (error) {
 			authMode = null;
 			authenticated = false;
-			authError = readableError(error, 'CardDue could not verify this private session.');
+			authError = readableError(error, 'ChipDue could not verify this private session.');
 		} finally {
 			authChecking = false;
 		}
@@ -439,7 +439,7 @@
 			authErrorKind = 'general';
 			const message = googleOnlyMode
 				? 'Google sign-in could not be completed. Try again.'
-				: 'Google sign-in could not be completed. Try again or use your CardDue password.';
+				: 'Google sign-in could not be completed. Try again or use your ChipDue password.';
 			if (authenticated) showNotice(message, 'error');
 			else authError = message;
 			return;
@@ -449,7 +449,7 @@
 			result === 'linked'
 				? googleOnlyMode
 					? 'Google sign-in is ready.'
-					: 'Google sign-in is ready. Your CardDue password remains available for recovery.'
+					: 'Google sign-in is ready. Your ChipDue password remains available for recovery.'
 				: 'Signed in with Google.'
 		);
 	}
@@ -469,7 +469,7 @@
 		authErrorKind = 'password';
 		authNotice = '';
 		if (!password) {
-			authError = 'Enter your CardDue password.';
+			authError = 'Enter your ChipDue password.';
 			passwordInput?.focus();
 			return;
 		}
@@ -583,7 +583,7 @@
 			lockCloudSession('You are safely logged out.');
 		} catch (error) {
 			if (authenticated) {
-				showNotice(readableError(error, 'CardDue could not log out. Try again.'), 'error');
+				showNotice(readableError(error, 'ChipDue could not log out. Try again.'), 'error');
 			}
 		} finally {
 			authBusy = null;
@@ -680,7 +680,7 @@
 			return true;
 		} catch (error) {
 			if (!isPrivateEpochCurrent(expectedEpoch)) return false;
-			loadError = readableError(error, 'CardDue could not read its private database.');
+			loadError = readableError(error, 'ChipDue could not read its private database.');
 			return false;
 		} finally {
 			if (isPrivateEpochCurrent(expectedEpoch)) loading = false;
@@ -978,7 +978,7 @@
 		if (card.source !== 'manual' || busyAction) return;
 		const epoch = privateStateEpoch;
 		if (!isPrivateEpochCurrent(epoch)) return;
-		if (!window.confirm(`Delete “${card.nickname}”? This only removes it from CardDue.`)) return;
+		if (!window.confirm(`Delete “${card.nickname}”? This only removes it from ChipDue.`)) return;
 
 		busyAction = 'delete';
 		deletingId = card.id;
@@ -1059,7 +1059,7 @@
 		const epoch = privateStateEpoch;
 		if (!isPrivateEpochCurrent(epoch)) return;
 		if (!plaid.configured) {
-			showNotice('Plaid is not configured on this CardDue installation.', 'error');
+			showNotice('Plaid is not configured on this ChipDue installation.', 'error');
 			return;
 		}
 
@@ -1197,7 +1197,7 @@
 		if (!isPrivateEpochCurrent(epoch)) return;
 		const label = connectionLabel(connection);
 		const confirmed = window.confirm(
-			`Disconnect “${label}”?\n\nCardDue will ask Plaid to revoke access, then erase this connection and its locally synced cards. This cannot be undone.`
+			`Disconnect “${label}”?\n\nChipDue will ask Plaid to revoke access, then erase this connection and its locally synced cards. This cannot be undone.`
 		);
 		if (!confirmed) return;
 
@@ -1345,7 +1345,7 @@
 
 {#if authChecking}
 	<main class="auth-shell auth-loading" aria-busy="true">
-		<div class="auth-brand" aria-label="CardDue">
+		<div class="auth-brand" aria-label="ChipDue">
 			<span class="brand-mark" aria-hidden="true">
 				<svg viewBox="0 0 32 32">
 					<rect x="6" y="8" width="20" height="18" rx="4"></rect>
@@ -1353,7 +1353,7 @@
 					<circle cx="21" cy="21" r="2.5"></circle>
 				</svg>
 			</span>
-			<span>CardDue</span>
+			<span>ChipDue</span>
 		</div>
 		<div class="auth-spinner" aria-hidden="true"></div>
 		<p role="status">Checking your private session…</p>
@@ -1369,11 +1369,11 @@
 						<circle cx="21" cy="21" r="2.5"></circle>
 					</svg>
 				</span>
-				<span>CardDue</span>
+				<span>ChipDue</span>
 			</div>
 			<div class="auth-lock error-lock" aria-hidden="true">!</div>
 			<h1 id="session-error-title">Private session unavailable</h1>
-			<p>{authError || 'CardDue could not verify this session.'}</p>
+			<p>{authError || 'ChipDue could not verify this session.'}</p>
 			<button class="button button-primary" type="button" onclick={initializeAuth}>Try again</button
 			>
 		</section>
@@ -1389,7 +1389,7 @@
 						<circle cx="21" cy="21" r="2.5"></circle>
 					</svg>
 				</span>
-				<span>CardDue</span>
+				<span>ChipDue</span>
 			</div>
 
 			<div class="auth-lock" aria-hidden="true">
@@ -1404,8 +1404,8 @@
 				{googleOnlyMode
 					? 'Sign in with Google to continue. Google is the only sign-in method for this server.'
 					: googleLoginAvailable
-						? 'Continue with the Google account linked to this server. Your CardDue password remains available for recovery and first-time linking.'
-						: 'Enter the password for this CardDue server.'}
+						? 'Continue with the Google account linked to this server. Your ChipDue password remains available for recovery and first-time linking.'
+						: 'Enter the password for this ChipDue server.'}
 			</p>
 
 			{#if authNotice}
@@ -1443,7 +1443,7 @@
 
 			{#if passwordLoginAvailable}
 				<form class="login-form" onsubmit={login}>
-					<label for="cloud-password">CardDue password</label>
+					<label for="cloud-password">ChipDue password</label>
 					<div class="password-field">
 						<input
 							bind:this={passwordInput}
@@ -1482,7 +1482,7 @@
 							? 'Unlocking…'
 							: googleLoginAvailable
 								? 'Unlock with password'
-								: 'Unlock CardDue'}
+								: 'Unlock ChipDue'}
 					</button>
 				</form>
 			{/if}
@@ -1493,7 +1493,7 @@
 					<div class="bootstrap-content">
 						<p id="setup-guidance">
 							Use this only once on a new server. Paste the private setup code created by the
-							deployment owner; CardDue will bind the Google account that completes sign-in first.
+							deployment owner; ChipDue will bind the Google account that completes sign-in first.
 						</p>
 						<form class="bootstrap-form" autocomplete="off" onsubmit={bootstrapGoogle}>
 							<label for="one-time-setup-code">One-time setup code</label>
@@ -1527,7 +1527,7 @@
 							<p id="setup-error" class="setup-error" role="alert">{setupError}</p>
 						{/if}
 						<p id="setup-clipboard-warning" class="setup-warning">
-							<strong>Keep it private.</strong> CardDue holds the code only for this submission, but clipboard
+							<strong>Keep it private.</strong> ChipDue holds the code only for this submission, but clipboard
 							managers may retain it. Clear your clipboard after setup starts. A started code cannot be
 							reused.
 						</p>
@@ -1547,11 +1547,11 @@
 				<p>
 					{#if googleOnlyMode || googleLoginAvailable}
 						<strong>Google never receives your card data.</strong> Choosing Google reveals this site’s
-						domain, your IP address, and sign-in timing. CardDue requests no email or profile details,
+						domain, your IP address, and sign-in timing. ChipDue requests no email or profile details,
 						keeps no Google access token, and stores no card data in browser storage.
 					{:else}
-						<strong>Know where your data lives.</strong> Cloud mode stores card data on the private CardDue
-						server you chose, not solely on this device. Use a deployment you trust over HTTPS. CardDue
+						<strong>Know where your data lives.</strong> Cloud mode stores card data on the private ChipDue
+						server you chose, not solely on this device. Use a deployment you trust over HTTPS. ChipDue
 						keeps neither this password nor card data in browser storage; your server maintains the session
 						with an HttpOnly cookie.
 					{/if}
@@ -1565,7 +1565,7 @@
 
 	<div class="app-shell" inert={authBusy === 'logout'} aria-busy={authBusy === 'logout'}>
 		<header class="site-header">
-			<a class="brand" href={resolve('/')} aria-label="CardDue home">
+			<a class="brand" href={resolve('/')} aria-label="ChipDue home">
 				<span class="brand-mark" aria-hidden="true">
 					<svg viewBox="0 0 32 32">
 						<rect x="6" y="8" width="20" height="18" rx="4"></rect>
@@ -1573,12 +1573,12 @@
 						<circle cx="21" cy="21" r="2.5"></circle>
 					</svg>
 				</span>
-				<span>CardDue</span>
+				<span>ChipDue</span>
 			</a>
 			<div class="header-controls">
 				<div
 					class="header-status"
-					title="CardDue does not keep card data in persistent browser storage"
+					title="ChipDue does not keep card data in persistent browser storage"
 				>
 					<span class="status-dot"></span>
 					<span>{authMode === 'cloud' ? 'Private cloud' : 'Private by default'}</span>
@@ -1604,7 +1604,7 @@
 					<h1 id="page-title">Never miss a card due date.</h1>
 					<p class="hero-description">
 						Balances and deadlines in one calm, private dashboard—{authMode === 'cloud'
-							? 'served by your private CardDue cloud.'
+							? 'served by your private ChipDue cloud.'
 							: 'stored on your machine.'}
 					</p>
 				</div>
@@ -1765,7 +1765,7 @@
 					<div class="empty-state unavailable-state">
 						<h3>Dashboard data is unavailable</h3>
 						<p>
-							CardDue has not shown any balances or dates. Use “Try again” above after checking the
+							ChipDue has not shown any balances or dates. Use “Try again” above after checking the
 							local server.
 						</p>
 					</div>
@@ -1893,7 +1893,7 @@
 								: 'Local first. Always.'}
 						</h2>
 						<p>
-							CardDue adds no analytics and stores no card details in persistent browser storage.
+							ChipDue adds no analytics and stores no card details in persistent browser storage.
 							{authMode === 'cloud'
 								? ' Your private server holds the encrypted database and controls this session.'
 								: ''}
@@ -1918,7 +1918,7 @@
 											{googleLinked === true
 												? googleOnlyMode
 													? 'Ready to use. Google is this server’s sign-in method.'
-													: 'Ready to use. Your CardDue password remains available for recovery.'
+													: 'Ready to use. Your ChipDue password remains available for recovery.'
 												: googleLinked === false
 													? googleOnlyMode
 														? 'Initial Google setup has not completed.'
@@ -1946,7 +1946,7 @@
 								</div>
 								<p id="google-link-privacy" class="google-privacy-note">
 									Google sees this site’s domain, your IP address, and sign-in timing when you use
-									it, but receives no card data from CardDue. CardDue requests no email or profile
+									it, but receives no card data from ChipDue. ChipDue requests no email or profile
 									details and does not keep Google tokens.
 								</p>
 								{#if googleLinked === false && authenticationMode === 'password'}
@@ -1961,7 +1961,7 @@
 							<li>
 								<span class="check-mark">✓</span><span
 									>{authMode === 'cloud'
-										? 'Card details are encrypted on your private CardDue server'
+										? 'Card details are encrypted on your private ChipDue server'
 										: 'Card details are encrypted in a local database outside this source checkout'}</span
 								>
 							</li>
@@ -2095,7 +2095,7 @@
 		</main>
 
 		<footer class="site-footer">
-			<span>CardDue</span>
+			<span>ChipDue</span>
 			<span
 				>Open source · {authMode === 'cloud' ? 'Private cloud' : 'Local first'} · No analytics</span
 			>
@@ -2119,8 +2119,8 @@
 						<h2 id="card-dialog-title">{dialogMode === 'edit' ? 'Edit card' : 'Add a card'}</h2>
 						<p id="card-dialog-description">
 							{authMode === 'cloud'
-								? 'Saved to your private CardDue server.'
-								: 'Saved only to CardDue’s local database.'}
+								? 'Saved to your private ChipDue server.'
+								: 'Saved only to ChipDue’s local database.'}
 							Enter just what you need.
 						</p>
 					</div>
@@ -2225,7 +2225,7 @@
 						<input bind:checked={form.autopayEnabled} name="autopayEnabled" type="checkbox" />
 						<span>
 							<strong>Autopay is enabled</strong>
-							<small>This is a reminder only—CardDue never initiates payments.</small>
+							<small>This is a reminder only—ChipDue never initiates payments.</small>
 						</span>
 					</label>
 

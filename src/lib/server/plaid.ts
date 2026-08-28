@@ -96,7 +96,7 @@ async function sanitizedPlaidError(error: unknown, itemId?: string): Promise<App
 async function baseLinkTokenRequest(): Promise<Omit<LinkTokenCreateRequest, 'products'>> {
 	const redirectUri = process.env.PLAID_REDIRECT_URI?.trim();
 	return {
-		client_name: 'CardDue',
+		client_name: 'ChipDue',
 		country_codes: [CountryCode.Us],
 		language: 'en',
 		user: { client_user_id: await getInstallId() },

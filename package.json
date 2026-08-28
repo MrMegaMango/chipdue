@@ -1,5 +1,5 @@
 {
-	"name": "carddue",
+	"name": "chipdue",
 	"private": true,
 	"version": "0.0.1",
 	"description": "A privacy-first credit card due-date tracker with local and single-owner cloud modes.",

@@ -58,7 +58,7 @@ describe.sequential('cloud request guard', () => {
 		delete process.env.CARDDUE_AUTH_MODE;
 		process.env.DATABASE_URL = [
 			'postgresql://carddue_runtime:secret',
-			'ep-carddue-test.us-west-2.aws.neon.tech/carddue?sslmode=require'
+			'ep-chipdue-test.us-west-2.aws.neon.tech/carddue?sslmode=require'
 		].join('@');
 		process.env.CARDDUE_MASTER_KEY = Buffer.alloc(32, 4).toString('base64url');
 		process.env.CARDDUE_OWNER_PASSWORD_HASH = `scrypt$16384$8$1$${Buffer.alloc(16, 2).toString('base64url')}$${Buffer.alloc(32, 3).toString('base64url')}`;
@@ -128,7 +128,7 @@ describe.sequential('cloud request guard', () => {
 		process.env.CARDDUE_AUTH_MODE = 'google';
 		delete process.env.CARDDUE_OWNER_PASSWORD_HASH;
 		process.env.CARDDUE_GOOGLE_CLIENT_ID = [
-			'synthetic-carddue',
+			'synthetic-chipdue',
 			'client.apps.googleusercontent.com'
 		].join('-');
 		process.env.CARDDUE_GOOGLE_CLIENT_SECRET = ['synthetic', 'client', 'secret'].join('-');

@@ -28,7 +28,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 				!isLocalAuthority(event.request.headers.get('host'))
 			) {
 				return secureHeaders(
-					new Response('CardDue accepts local connections only.', {
+					new Response('ChipDue accepts local connections only.', {
 						status: 403,
 						headers: { 'content-type': 'text/plain; charset=utf-8' }
 					})

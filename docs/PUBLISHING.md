@@ -20,7 +20,7 @@ Run this checklist before making any repository public or pushing a release.
 1. Keep the recovery bundle and every temporary migration environment file outside every Git checkout, synced source folder, CI workspace, and Vercel project.
 2. Confirm source and documentation contain environment-variable names and invalid placeholders only. They must not contain a usable connection string, password hash, AES key, Google or Plaid credential, session or OAuth token, or production hostname.
 3. Inspect generated browser assets and source maps for server environment values. No financial data or credential may use a `PUBLIC_` or `VITE_` variable.
-4. Verify Preview and Development have no Neon, CardDue authentication, AES, migration, Google, or Plaid secrets. Pull requests and previews must build without access to real data.
+4. Verify Preview and Development have no Neon, ChipDue authentication, AES, migration, Google, or Plaid secrets. Pull requests and previews must build without access to real data.
 5. Confirm the owner-capable Neon migration URL is absent from Vercel, GitHub Actions, repository secrets, local checked-out files, and shell history. Only the restricted runtime URL belongs in Vercel Production.
 6. Confirm no workflow uploads databases, logs, screenshots, environment snapshots, Vercel output, or other private artifacts.
 7. Review dependency and workflow changes for install scripts, unexpected network activity, artifact upload, or environment-variable access before allowing a build to receive any secret.

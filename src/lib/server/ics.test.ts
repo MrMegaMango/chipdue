@@ -24,6 +24,8 @@ const card: Card = {
 describe('calendar export', () => {
 	it('exports an all-day reminder without amounts by default', () => {
 		const calendar = createCalendar([card], new Date('2027-01-01T00:00:00.000Z'));
+		expect(calendar).toContain('PRODID:-//ChipDue//Payment reminders//EN');
+		expect(calendar).toContain(`UID:${card.id}@carddue.local`);
 		expect(calendar).toContain('DTSTART;VALUE=DATE:20270228');
 		expect(calendar).toContain('DTEND;VALUE=DATE:20270301');
 		expect(calendar).toContain('SUMMARY:Daily\\, card payment due');

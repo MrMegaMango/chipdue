@@ -3,7 +3,7 @@ import { isCloudRuntimeRoleName } from './cloud-role.js';
 import { isDirectNeonDatabaseHost } from './neon-url.js';
 import { parseScryptPasswordHash } from './password-hash';
 
-export type CardDueMode = 'local' | 'cloud';
+export type ChipDueMode = 'local' | 'cloud';
 export type CloudAuthMode = 'password' | 'google';
 export type RuntimeAuthMode = 'local' | CloudAuthMode;
 
@@ -178,7 +178,7 @@ function parseGoogleBootstrapHash(authMode: CloudAuthMode): string | null {
 	return value;
 }
 
-export function getRuntimeMode(): CardDueMode {
+export function getRuntimeMode(): ChipDueMode {
 	const mode = process.env.CARDDUE_MODE?.trim().toLowerCase();
 	if (!mode || mode === 'local') {
 		if (process.env.DATABASE_URL?.trim() || process.env.VERCEL === '1') {
@@ -187,7 +187,7 @@ export function getRuntimeMode(): CardDueMode {
 		return 'local';
 	}
 	if (mode !== 'cloud') {
-		throw new AppError('CLOUD_MISCONFIGURED', 'The CardDue mode is invalid.', 503);
+		throw new AppError('CLOUD_MISCONFIGURED', 'The ChipDue mode is invalid.', 503);
 	}
 	return 'cloud';
 }
