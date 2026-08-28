@@ -28,10 +28,12 @@ const CLOUD_ENV_KEYS = [
 	'DATABASE_URL',
 	'CARDDUE_MASTER_KEY',
 	'CARDDUE_OWNER_PASSWORD_HASH',
+	'CARDDUE_AUTH_MODE',
 	'CARDDUE_ALLOWED_HOSTS',
 	'CARDDUE_SESSION_TTL_HOURS',
 	'CARDDUE_GOOGLE_CLIENT_ID',
 	'CARDDUE_GOOGLE_CLIENT_SECRET',
+	'CARDDUE_GOOGLE_BOOTSTRAP_HASH',
 	'VERCEL'
 ] as const;
 
@@ -48,6 +50,7 @@ function passwordHash(password: string, saltByte = 3): string {
 
 function setValidCloudEnvironment(): void {
 	process.env.CARDDUE_MODE = 'cloud';
+	delete process.env.CARDDUE_AUTH_MODE;
 	process.env.DATABASE_URL = [
 		'postgresql://carddue_runtime:secret',
 		'ep-carddue-test.us-west-2.aws.neon.tech/carddue?sslmode=require'
@@ -58,6 +61,7 @@ function setValidCloudEnvironment(): void {
 	delete process.env.CARDDUE_SESSION_TTL_HOURS;
 	delete process.env.CARDDUE_GOOGLE_CLIENT_ID;
 	delete process.env.CARDDUE_GOOGLE_CLIENT_SECRET;
+	delete process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH;
 	delete process.env.VERCEL;
 }
 
@@ -247,6 +251,18 @@ describe.sequential('cloud mode privacy and authentication', () => {
 		expect(() => getRuntimeMode()).toThrow(/explicitly enabled/);
 	});
 
+	it('preserves the unauthenticated-free local session contract', async () => {
+		process.env.CARDDUE_MODE = 'local';
+		delete process.env.DATABASE_URL;
+		const response = await sessionEndpoint({ cookies: { get: () => undefined } } as never);
+		expect(await response.json()).toEqual({
+			mode: 'local',
+			authMode: 'local',
+			authenticated: true,
+			google: { configured: false, linked: false, bootstrapAvailable: false }
+		});
+	});
+
 	it('keeps cloud schema free of plaintext financial fields and runtime DDL', () => {
 		const migration = CLOUD_MIGRATION_STATEMENTS.join('\n').toLowerCase();
 		expect(CLOUD_SCHEMA_VERSION).toBe(1);
@@ -407,8 +423,9 @@ describe.sequential('cloud mode privacy and authentication', () => {
 		expect(session.status).toBe(200);
 		expect(await session.json()).toEqual({
 			mode: 'cloud',
+			authMode: 'password',
 			authenticated: true,
-			google: { configured: false, linked: false }
+			google: { configured: false, linked: false, bootstrapAvailable: false }
 		});
 
 		const logoutRequest = new Request('https://cards.example.test/api/auth/logout', {
@@ -425,8 +442,9 @@ describe.sequential('cloud mode privacy and authentication', () => {
 		const signedOutSession = await sessionEndpoint({ cookies } as never);
 		expect(await signedOutSession.json()).toEqual({
 			mode: 'cloud',
+			authMode: 'password',
 			authenticated: false,
-			google: { configured: false, linked: null }
+			google: { configured: false, linked: null, bootstrapAvailable: false }
 		});
 	});
 });

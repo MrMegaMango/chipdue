@@ -17,6 +17,8 @@ const GOOGLE_RATE_WINDOW_MS = 15 * 60 * 1000;
 const GOOGLE_RATE_BLOCK_MS = 15 * 60 * 1000;
 const GOOGLE_SOURCE_MAX_ATTEMPTS = 5;
 const GOOGLE_GLOBAL_MAX_ATTEMPTS = 100;
+const GOOGLE_BOOTSTRAP_SOURCE_MAX_ATTEMPTS = 3;
+const GOOGLE_BOOTSTRAP_GLOBAL_MAX_ATTEMPTS = 25;
 const MAX_PASSWORD_BYTES = 1024;
 const SESSION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 let lastRateLimitPruneAt = 0;
@@ -52,8 +54,18 @@ function sessionTokenHash(token: string): string {
 	return privateFingerprint(token, 'auth-session-token-v1');
 }
 
-function passwordConfigReference(): string {
-	return privateFingerprint(getCloudRuntimeConfig().ownerPasswordHash, 'auth-password-config-v1');
+function authConfigReference(): string {
+	const config = getCloudRuntimeConfig();
+	if (config.authMode === 'password') {
+		if (!config.ownerPasswordHash) {
+			throw new AppError('CLOUD_MISCONFIGURED', 'Cloud mode is not securely configured.', 503);
+		}
+		return privateFingerprint(config.ownerPasswordHash, 'auth-password-config-v1');
+	}
+	if (!config.googleOidc) {
+		throw new AppError('CLOUD_MISCONFIGURED', 'Cloud mode is not securely configured.', 503);
+	}
+	return privateFingerprint(`google\0${config.googleOidc.clientId}`, 'auth-google-config-v1');
 }
 
 function rateLimitInput(request: Request): string {
@@ -136,7 +148,7 @@ async function issueSession(bucketRef: string | undefined, now: number): Promise
 	const config = getCloudRuntimeConfig();
 	const token = randomBytes(32).toString('base64url');
 	const tokenHash = sessionTokenHash(token);
-	const passwordRef = passwordConfigReference();
+	const passwordRef = authConfigReference();
 	const expiresAt = now + config.sessionTtlSeconds * 1000;
 	const statements = [
 		{
@@ -188,6 +200,27 @@ export async function consumeGoogleOidcStartRateLimit(
 	await consumeRateLimit(globalBucket, now, options);
 }
 
+export async function consumeGoogleOidcBootstrapRateLimit(request: Request): Promise<void> {
+	const now = Date.now();
+	await pruneStaleRateLimits(now);
+	const globalBucket = privateFingerprint('global', 'google-oidc-bootstrap-global-rate-limit-v1');
+	await assertRateLimitNotBlocked(globalBucket, now);
+	await consumeRateLimit(
+		rateLimitReference(request, 'google-oidc-bootstrap-source-rate-limit-v1'),
+		now,
+		{
+			windowMs: GOOGLE_RATE_WINDOW_MS,
+			maxAttempts: GOOGLE_BOOTSTRAP_SOURCE_MAX_ATTEMPTS,
+			blockMs: GOOGLE_RATE_BLOCK_MS
+		}
+	);
+	await consumeRateLimit(globalBucket, now, {
+		windowMs: GOOGLE_RATE_WINDOW_MS,
+		maxAttempts: GOOGLE_BOOTSTRAP_GLOBAL_MAX_ATTEMPTS,
+		blockMs: GOOGLE_RATE_BLOCK_MS
+	});
+}
+
 export async function issueGoogleOidcSession(): Promise<string> {
 	return issueSession(undefined, Date.now());
 }
@@ -201,6 +234,9 @@ export async function loginWithPassword(request: Request, password: string): Pro
 		);
 	}
 	const config = getCloudRuntimeConfig();
+	if (config.authMode !== 'password' || !config.ownerPasswordHash) {
+		throw new AppError('NOT_FOUND', 'The requested endpoint is unavailable.', 404);
+	}
 	const now = Date.now();
 	const bucketRef = rateLimitReference(request);
 	await pruneStaleRateLimits(now);
@@ -229,7 +265,7 @@ export async function authenticateSession(token: string | undefined): Promise<bo
 	const row = rows[0];
 	if (!row) return false;
 	const now = Date.now();
-	const passwordRef = passwordConfigReference();
+	const passwordRef = authConfigReference();
 	const referenceMatches =
 		row.password_config_ref.length === passwordRef.length &&
 		timingSafeEqual(Buffer.from(row.password_config_ref), Buffer.from(passwordRef));

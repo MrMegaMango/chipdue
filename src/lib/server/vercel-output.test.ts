@@ -12,14 +12,17 @@ describe.sequential('Vercel output privacy verification', () => {
 	let output: string;
 	let checkout: string;
 	let previousMasterKey: string | undefined;
+	let previousGoogleBootstrapHash: string | undefined;
 	let previousVercelToken: string | undefined;
 	let previousHome: string | undefined;
 
 	beforeEach(() => {
 		previousMasterKey = process.env.CARDDUE_MASTER_KEY;
+		previousGoogleBootstrapHash = process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH;
 		previousVercelToken = process.env.VERCEL_TOKEN;
 		previousHome = process.env.HOME;
 		delete process.env.CARDDUE_MASTER_KEY;
+		delete process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH;
 		delete process.env.VERCEL_TOKEN;
 		output = mkdtempSync(join(tmpdir(), 'carddue-vercel-output-test-'));
 		checkout = mkdtempSync(join(tmpdir(), 'carddue-vercel-checkout-test-'));
@@ -35,6 +38,11 @@ describe.sequential('Vercel output privacy verification', () => {
 	afterEach(() => {
 		if (previousMasterKey === undefined) delete process.env.CARDDUE_MASTER_KEY;
 		else process.env.CARDDUE_MASTER_KEY = previousMasterKey;
+		if (previousGoogleBootstrapHash === undefined) {
+			delete process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH;
+		} else {
+			process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH = previousGoogleBootstrapHash;
+		}
 		if (previousVercelToken === undefined) delete process.env.VERCEL_TOKEN;
 		else process.env.VERCEL_TOKEN = previousVercelToken;
 		if (previousHome === undefined) delete process.env.HOME;
@@ -82,6 +90,18 @@ describe.sequential('Vercel output privacy verification', () => {
 			`const leaked = "${process.env.CARDDUE_MASTER_KEY}";`
 		);
 		expect(() => verifyVercelOutput(output)).toThrow(/CARDDUE_MASTER_KEY/);
+	});
+
+	it('blocks the configured Google bootstrap verifier embedded in output', () => {
+		process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH = [
+			'sha256$',
+			Buffer.alloc(32, 18).toString('base64url')
+		].join('');
+		writeFileSync(
+			join(output, 'static', 'app.js'),
+			`const leaked = "${process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH}";`
+		);
+		expect(() => verifyVercelOutput(output)).toThrow(/CARDDUE_GOOGLE_BOOTSTRAP_HASH/);
 	});
 
 	it('blocks conservative token environment values embedded in output', () => {

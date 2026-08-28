@@ -25,18 +25,20 @@ Browser memory -> Vercel edge and authenticated Function -> ciphertext in Neon
                                       +-> Plaid when configured and invoked
                                       +-> Google during optional authentication
 
-Offline recovery bundle -> login password, password hash, AES key, and runtime DB password
+Offline recovery material -> AES key and runtime DB password
+                         +-> password/hash in password mode
+                         +-> temporary token/verifier during Google-only bootstrap
 ```
 
 The Vercel Function is inside the confidentiality boundary. It receives the AES key and decrypts records after authentication. Neon is outside that plaintext boundary: it stores encrypted payloads and limited operational metadata. A database-only attacker should not recover encrypted fields, but a Vercel runtime or owner-account attacker can obtain the key and data.
 
-The hosted model has one recovery password, at most one pre-linked Google identity, one production hostname, one Vercel project, and one Neon production database. It has no per-user accounts, sharing, delegated access, or public API clients. Preview builds are nonfunctional for real data because they receive no cloud, Google, or Plaid secrets.
+The hosted model has one password or one explicitly bootstrapped Google-only identity, one production hostname, one Vercel project, and one Neon production database. Password mode may also link that one Google identity. It has no per-user accounts, sharing, delegated access, or public API clients. Preview builds are nonfunctional for real data because they receive no cloud, Google, bootstrap, or Plaid secrets.
 
 ## Assets
 
 - Card nicknames, optional issuer names and suffixes, balances, dates, and autopay settings
 - Plaid access tokens, Item IDs, institution names, and derived account references
-- The cloud AES key, owner login password and hash, session and OAuth transaction cookies, and recovery bundle
+- The cloud AES key, mode-specific password hash or temporary bootstrap token/verifier, session and OAuth transaction cookies, and recovery bundles
 - Neon runtime and migration database credentials
 - Optional Google OAuth client secret and linked-identity fingerprint
 - The Google OAuth consent screen's public support contact and branding metadata
@@ -48,7 +50,7 @@ The hosted model has one recovery password, at most one pre-linked Google identi
 - Accidental commits of credentials, databases, exports, logs, screenshots, and personal metadata
 - Client-side exposure of server credentials or provider tokens
 - Excessive collection or retention from Plaid responses
-- Public-internet password guessing, session theft, host-header abuse, and cross-origin requests
+- Public-internet password guessing where enabled, bootstrap-token theft/racing, session theft, host-header abuse, and cross-origin requests
 - Google account substitution, authorization-response mix-up, callback CSRF, code interception, and replay
 - Accidental publication of the owner's personal email or identity through Google OAuth consent branding
 - Preview, pull-request, build, or CI code gaining production secrets
@@ -74,32 +76,32 @@ The hosted model has one recovery password, at most one pre-linked Google identi
 
 ## Controls
 
-| Risk                                     | Control                                                                                                                                                                    |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Runtime files enter Git                  | Local data and cloud recovery material live outside the checkout; broad ignore rules; filename, content, and full-history scanning                                         |
-| Git identity reveals a private email     | Repository-local noreply identity and privacy checks                                                                                                                       |
-| Production secrets reach a preview       | Every secret is scoped to Vercel Production; previews receive no real database, AES key, password hash, Google secret, or Plaid credentials                                |
-| A client bundle contains credentials     | Server-only modules and environment access; no credential uses a `PUBLIC_` or `VITE_` prefix; generated bundles are inspected                                              |
-| Neon is disclosed                        | AES-256-GCM payload encryption with random nonces and purpose/record-bound authenticated data; key remains in Vercel and offline recovery storage                          |
-| Neon metadata reveals too much           | Plaintext schema is limited to opaque keyed IDs, source/status, schema version, and operational timestamps; raw financial fields stay in encrypted payloads                |
-| Runtime DB credentials can change schema | Cold-start identity, role, exact privilege, public/column grant, unrelated-access, and schema-catalog verification; explicit DML only for CardDue tables                   |
-| Migration authority reaches the app      | Owner migration URL exists only in a temporary protected local environment and is never configured in Vercel or CI                                                         |
-| Public requests bypass authentication    | Every private cloud API is authorized server-side; sessions are random, stored only as hashes, password-bound, expiring, revocable, Secure, HTTP-only, and SameSite Strict |
-| Password guessing                        | Memory-hard password hash, generic failures, persistent keyed rate-limit buckets, and bounded lockout window                                                               |
-| Google flow claims or links an owner     | Google can be linked only from an existing exact CardDue session; the first visitor can never provision or replace the owner                                               |
-| OAuth callback is injected or replayed   | Exact redirect and response issuer; PKCE S256; random nonce/state; encrypted short-lived host-only cookie; atomic one-time server marker; strict claim and subject checks  |
-| Google identity leaks through storage    | Only a master-keyed fingerprint of normalized issuer and `sub` is stored; email/profile/provider tokens are neither requested nor retained                                 |
-| OAuth branding identifies the owner      | Use a dedicated non-personal monitored support alias/group with private membership; review the publicly reachable consent screen before linking                            |
-| Host-header or stale deployment access   | Exact lower-case production authority allowlist; generated, preview, old, and unexpected hosts fail closed                                                                 |
-| Transport downgrade                      | Cloud requests require HTTPS as reported by the Vercel proxy; Vercel terminates public TLS; Neon URLs must require TLS                                                     |
-| Cross-site mutation                      | Exact Origin validation, Fetch Metadata rejection, same-origin requests, JSON-only bounded bodies, and no CORS                                                             |
-| Browser or CDN retains data              | Global `no-store` responses; no localStorage, sessionStorage, IndexedDB, service worker, or user-data prerendering                                                         |
-| Raw provider data expands exposure       | Google uses `openid` only and tokens are discarded; Plaid uses Liabilities-only allowlisted mapping; raw responses/errors are neither stored nor logged                    |
-| Logs reveal secrets or records           | Sanitized error envelopes; no intentional request bodies, cookies, query parameters, SQL values, decrypted fields, or raw provider errors in logs                          |
-| CI or releases publish private artifacts | Synthetic fixtures, no production secrets, no private artifact upload, privacy scan, clean build, full-history scan, and mandatory verified Vercel build wrapper           |
-| Calendar export expands disclosure       | Authentication in cloud mode; amounts opt-in and omitted by default; downloaded files documented as private                                                                |
-| Local service becomes network-accessible | Development and production commands bind to loopback; raw authorities are validated; remote override is explicitly unsupported as a security boundary                      |
-| Backup or key is lost                    | Offline recovery bundle plus independent encrypted database backup; restore is tested away from production                                                                 |
+| Risk                                     | Control                                                                                                                                                                             |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Runtime files enter Git                  | Local data and cloud recovery material live outside the checkout; broad ignore rules; filename, content, and full-history scanning                                                  |
+| Git identity reveals a private email     | Repository-local noreply identity and privacy checks                                                                                                                                |
+| Production secrets reach a preview       | Every secret is scoped to Vercel Production; previews receive no real database, AES key, auth verifier, Google secret, or Plaid credentials                                         |
+| A client bundle contains credentials     | Server-only modules and environment access; no credential uses a `PUBLIC_` or `VITE_` prefix; generated bundles are inspected                                                       |
+| Neon is disclosed                        | AES-256-GCM payload encryption with random nonces and purpose/record-bound authenticated data; key remains in Vercel and offline recovery storage                                   |
+| Neon metadata reveals too much           | Plaintext schema is limited to opaque keyed IDs, source/status, schema version, and operational timestamps; raw financial fields stay in encrypted payloads                         |
+| Runtime DB credentials can change schema | Cold-start identity, role, exact privilege, public/column grant, unrelated-access, and schema-catalog verification; explicit DML only for CardDue tables                            |
+| Migration authority reaches the app      | Owner migration URL exists only in a temporary protected local environment and is never configured in Vercel or CI                                                                  |
+| Public requests bypass authentication    | Every private cloud API is authorized server-side; sessions are random, stored only as keyed hashes, auth-config-bound, expiring, revocable, Secure, HTTP-only, and SameSite Strict |
+| Password guessing                        | Password mode uses a memory-hard hash, generic failures, persistent keyed rate-limit buckets, and a bounded lockout window                                                          |
+| Google flow claims or links an owner     | Password mode requires an exact CardDue session; Google-only bootstrap requires a one-start 256-bit operator token, serialized opaque claim, and atomic first-subject bind          |
+| OAuth callback is injected or replayed   | Exact redirect and response issuer; PKCE S256; random nonce/state; encrypted short-lived host-only cookie; atomic one-time server marker; strict claim and subject checks           |
+| Google identity leaks through storage    | Only a master-keyed fingerprint of normalized issuer and `sub` is stored; email/profile/provider tokens are neither requested nor retained                                          |
+| OAuth branding identifies the owner      | Use a dedicated non-personal monitored support alias/group with private membership; review the publicly reachable consent screen before linking                                     |
+| Host-header or stale deployment access   | Exact lower-case production authority allowlist; generated, preview, old, and unexpected hosts fail closed                                                                          |
+| Transport downgrade                      | Cloud requests require HTTPS as reported by the Vercel proxy; Vercel terminates public TLS; Neon URLs must require TLS                                                              |
+| Cross-site mutation                      | Exact Origin validation, Fetch Metadata rejection, same-origin requests, JSON-only bounded bodies, and no CORS                                                                      |
+| Browser or CDN retains data              | Global `no-store` responses; no localStorage, sessionStorage, IndexedDB, service worker, or user-data prerendering                                                                  |
+| Raw provider data expands exposure       | Google uses `openid` only and tokens are discarded; Plaid uses Liabilities-only allowlisted mapping; raw responses/errors are neither stored nor logged                             |
+| Logs reveal secrets or records           | Sanitized error envelopes; no intentional request bodies, cookies, query parameters, SQL values, decrypted fields, or raw provider errors in logs                                   |
+| CI or releases publish private artifacts | Synthetic fixtures, no production secrets, no private artifact upload, privacy scan, clean build, full-history scan, and mandatory verified Vercel build wrapper                    |
+| Calendar export expands disclosure       | Authentication in cloud mode; amounts opt-in and omitted by default; downloaded files documented as private                                                                         |
+| Local service becomes network-accessible | Development and production commands bind to loopback; raw authorities are validated; remote override is explicitly unsupported as a security boundary                               |
+| Backup or key is lost                    | Offline recovery bundle plus independent encrypted database backup; restore is tested away from production                                                                          |
 
 ## Residual risk and explicit limitations
 
@@ -108,9 +110,9 @@ The hosted model has one recovery password, at most one pre-linked Google identi
 - A compromised Vercel owner account, Function runtime, build supplied with Production secrets, or recovery bundle; each can access the cloud AES key
 - Simultaneous compromise of Neon ciphertext and the Vercel or recovery copy of the AES key
 - Compromise, malicious behavior, outage, suspension, or retention failures by Vercel, Neon, Google, Plaid, or a connected institution
-- A compromised linked Google account authenticating to CardDue; the independent recovery password remains available if Google is unavailable
+- A compromised linked Google account authenticating to CardDue; password mode retains an independent recovery password, while Google-only mode intentionally does not
 - An unlocked browser with an active Google session can reuse ambient Google SSO after CardDue logout; shared-device containment also requires signing out of Google and locking the browser or operating-system profile
-- No in-application Google unlink or rebind flow; incident containment requires disabling both Google variables and redeploying before password/session recovery
+- No in-application Google unlink or rebind flow; incident containment requires disabling both Google variables, redeploying, and explicitly invalidating sessions before any reviewed identity reset
 - Immediate deletion from provider restore points, infrastructure logs, or already-created independent backups
 - Recovery after losing both the Neon data and all backups, or after losing every copy of the AES key
 - Transparent master-key rotation; changing the configured key makes existing ciphertext unreadable

@@ -1,6 +1,6 @@
 # Deploy a private Vercel instance
 
-This guide deploys CardDue's one supported hosted topology: one owner, one reviewed Vercel production project, one exact production hostname, and one Neon production database. The production URL is reachable from the internet. CardDue's recovery password, optional pre-linked Google identity, and server-side request guards protect the records; obscurity and Vercel preview protection do not.
+This guide deploys CardDue's one supported hosted topology: one owner, one reviewed Vercel production project, one exact production hostname, and one Neon production database. The production URL is reachable from the internet. CardDue's selected single-owner authentication mode and server-side request guards protect the records; obscurity and Vercel preview protection do not.
 
 Use [local mode](../README.md#start-locally) instead if you do not want Vercel to hold the decryption key or do not want an internet-facing login.
 
@@ -11,8 +11,8 @@ Use [local mode](../README.md#start-locally) instead if you do not want Vercel t
 - Neon stores AES-256-GCM ciphertext plus limited operational metadata.
 - The Neon runtime role connects through a direct, unpooled TLS URL. It can read and change CardDue table rows but cannot migrate the schema.
 - An owner-capable direct, unpooled Neon TLS URL is used only for explicit migration from a trusted local environment.
-- Vercel Preview and Development receive no real database, key, password hash, recovery bundle, Google secret, or Plaid credentials.
-- Google sign-in is optional and can be linked only after recovery-password authentication. Google receives no card fields from CardDue.
+- Vercel Preview and Development receive no real database, key, authentication verifier, recovery bundle, Google secret, or Plaid credentials.
+- Google is optional in password mode or can be the sole login in an explicitly bootstrapped Google-only mode. Google receives no card fields from CardDue.
 - Plaid is optional. Manual entry works without any Plaid environment variables.
 
 This design limits a Neon-only disclosure. It does not protect data from someone who controls the Vercel project, production build, Function runtime, owner session, or recovery bundle.
@@ -42,9 +42,9 @@ The script refuses relative paths, linked ancestors, Git worktrees, existing out
 
 The JSON bundle contains four independent fields:
 
-- `loginPassword`: enter this only in CardDue's login form and store it in the password manager.
+- `loginPassword`: enter this only in CardDue's login form in password mode; Google-only mode does not configure or accept it.
 - `masterKey`: configure this as `CARDDUE_MASTER_KEY` in Vercel Production.
-- `ownerPasswordHash`: configure this as `CARDDUE_OWNER_PASSWORD_HASH` in Vercel Production.
+- `ownerPasswordHash`: configure this as `CARDDUE_OWNER_PASSWORD_HASH` only in password mode. Keep it out of Google-only Vercel configuration.
 - `databaseRolePassword`: give this to the migration process as `CARDDUE_DATABASE_PASSWORD` and use it inside the restricted runtime `DATABASE_URL`.
 
 Do not upload the entire bundle to Vercel. Keep an encrypted offline copy after the deployment is verified. Anyone with the bundle and a database copy can decrypt records and impersonate the owner. Losing every copy of `masterKey` makes existing data unrecoverable.
@@ -126,18 +126,20 @@ Both the committed Vercel command and an ordinary `npm run build` when `VERCEL=1
 
 ## 5. Add Production-only environment variables
 
-Use the Vercel dashboard's protected input rather than CLI arguments. Scope every item below to **Production only**. Mark the database URL, AES key, password hash, optional Google client secret, and Plaid credentials as **Sensitive**.
+Use the Vercel dashboard's protected input rather than CLI arguments. Scope every item below to **Production only**. Mark the database URL, AES key, password hash or bootstrap verifier, Google client secret, and Plaid credentials as **Sensitive**.
 
-| Name                           | Value and rule                                                                                  |
-| ------------------------------ | ----------------------------------------------------------------------------------------------- |
-| `CARDDUE_MODE`                 | Exactly `cloud`                                                                                 |
-| `DATABASE_URL`                 | Restricted direct, unpooled `carddue_runtime` URL; exactly one supported TLS mode               |
-| `CARDDUE_MASTER_KEY`           | `masterKey` from the recovery bundle                                                            |
-| `CARDDUE_OWNER_PASSWORD_HASH`  | `ownerPasswordHash` from the recovery bundle                                                    |
-| `CARDDUE_ALLOWED_HOSTS`        | The one canonical lowercase authority only; no scheme, path, wildcard, comma, or trailing slash |
-| `CARDDUE_SESSION_TTL_HOURS`    | Optional integer from 1 through 720; default is 24                                              |
-| `CARDDUE_GOOGLE_CLIENT_ID`     | Optional Google Web OAuth client ID; configure only together with its secret                    |
-| `CARDDUE_GOOGLE_CLIENT_SECRET` | Optional Google Web OAuth client secret; configure only together with its ID                    |
+| Name                            | Value and rule                                                                                  |
+| ------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `CARDDUE_MODE`                  | Exactly `cloud`                                                                                 |
+| `DATABASE_URL`                  | Restricted direct, unpooled `carddue_runtime` URL; exactly one supported TLS mode               |
+| `CARDDUE_MASTER_KEY`            | `masterKey` from the recovery bundle                                                            |
+| `CARDDUE_AUTH_MODE`             | Optional `password` default, or explicit `google`; never another value                          |
+| `CARDDUE_OWNER_PASSWORD_HASH`   | Required only in password mode; forbidden in Google-only mode                                   |
+| `CARDDUE_ALLOWED_HOSTS`         | The one canonical lowercase authority only; no scheme, path, wildcard, comma, or trailing slash |
+| `CARDDUE_SESSION_TTL_HOURS`     | Optional integer from 1 through 720; default is 24                                              |
+| `CARDDUE_GOOGLE_CLIENT_ID`      | Optional Google Web OAuth client ID; configure only together with its secret                    |
+| `CARDDUE_GOOGLE_CLIENT_SECRET`  | Optional Google Web OAuth client secret; configure only together with its ID                    |
+| `CARDDUE_GOOGLE_BOOTSTRAP_HASH` | Temporary Google-only first-owner verifier; remove immediately after successful setup           |
 
 Never configure these in Vercel:
 
@@ -148,26 +150,27 @@ Never configure these in Vercel:
 - `CARDDUE_ALLOW_REMOTE`
 - `loginPassword`
 - The recovery bundle itself
+- `googleBootstrapToken` or the Google bootstrap bundle
 
 Do not give Preview or Development a synthetic copy of production secrets. In this design they get no CardDue cloud variables at all, so a preview cannot connect to, decrypt, or imitate the real instance. The stable production hostname is allowlisted; generated, preview, old, and unexpected deployment hosts are intentionally rejected even if a deployment still exists.
 
 Environment variables are available to production build and runtime code. Review the exact production commit, lockfile, dependencies, install scripts, and Vercel integrations before redeploying. A malicious production build can exfiltrate the same secrets as the running Function.
 
-## 6. Optionally configure Google sign-in
+## 6. Optionally configure Google authentication
 
-Skip this section if the recovery password is the only desired login. Google is never required for CardDue, and the password must remain available for recovery after Google is linked.
+Skip this section if the password is the only desired login. CardDue supports two mutually exclusive cloud authentication configurations: the default password mode can optionally link Google, while Google-only mode removes the password endpoint and uses Google for every login.
 
 1. Create a dedicated, non-personal, monitored support alias or Google Group. If it is a group, hide its membership and restrict posting appropriately. Google requires a **User Support Email** and displays it on a consent screen that anyone can reach through the public login start; selecting a personal address would disclose it even though CardDue never stores it.
 2. Open Google Auth Platform in a dedicated Google Cloud project. Configure an External audience and request only the basic Sign in with Google identity scope used by CardDue (`openid`). Select the dedicated address as User Support Email and keep developer-contact details private inside the provider account.
 3. Create an OAuth client of type **Web application**.
 4. Register exactly `https://YOUR_CANONICAL_HOST/api/auth/google/callback` as its authorized redirect URI. The scheme, case, host, path, port, and trailing slash must match exactly. Add no Preview, Development, wildcard, immutable-deployment, or alternate-host callback.
 5. Put the client ID in `CARDDUE_GOOGLE_CLIENT_ID` and the client secret in `CARDDUE_GOOGLE_CLIENT_SECRET`, both Production-only. Mark the secret Sensitive. Never use `PUBLIC_` or `VITE_`, put the values in `.env*`, commit them, pass them in a command argument, or copy them into the recovery bundle.
-6. Redeploy. Sign in with the recovery password and choose **Link Google account** from the authenticated dashboard. Complete the account chooser carefully.
-7. Log out, verify Google sign-in, then verify the recovery password still works independently.
+6. For password mode, redeploy, sign in with the password, choose **Link Google account**, carefully complete the account chooser, then verify both login methods independently.
+7. For Google-only mode, follow the complete generation, one-attempt bootstrap, immediate verifier decommission, and recovery procedure in [GOOGLE_ONLY_AUTH.md](GOOGLE_ONLY_AUTH.md). Do not improvise a first-visitor claim or place its setup token in a URL.
 
-Both variables absent means disabled; exactly one present makes cloud configuration fail closed. CardDue uses authorization code plus PKCE S256, one-time state and nonce values, Google's signed ID token, and an encrypted short-lived host-only callback cookie. It stores only a master-keyed fingerprint of Google's normalized issuer and stable `sub`; it requests or retains no email, name, picture, profile, ID token, access token, or refresh token. Google still observes each authentication request, including its time, source IP, and the CardDue hostname.
+In password mode, both Google variables absent means disabled; exactly one present makes cloud configuration fail closed. Google-only mode requires both and forbids a configured owner-password hash. CardDue uses authorization code plus PKCE S256, one-time state and nonce values, Google's signed ID token, and an encrypted short-lived host-only callback cookie. It stores only a master-keyed fingerprint of Google's normalized issuer and stable `sub`; it requests or retains no email, name, picture, profile, ID token, access token, or refresh token. Google still observes each authentication request, including its time, source IP, and the CardDue hostname.
 
-This release deliberately provides no unlink or rebind control. The first linked fingerprint is immutable through the application, even from another authenticated session. If that Google account is lost or compromised, remove both Google variables from Vercel Production, redeploy and verify Google is disabled, then use the recovery password and rotate it to revoke existing CardDue sessions. Re-enabling or replacing the binding requires a separately reviewed recovery procedure; changing the password alone does not disable Google login.
+This release deliberately provides no unlink or rebind control. The first linked fingerprint is immutable through the application, even from another authenticated session. If that Google account is lost or compromised, remove both Google variables from Vercel Production and redeploy. Password mode stays available and can rotate its password to revoke sessions. Google-only mode instead makes the whole app fail closed with `503` until a reviewed recovery configuration is deployed; it has no password fallback. Follow [GOOGLE_ONLY_AUTH.md](GOOGLE_ONLY_AUTH.md), and never change only a database fingerprint because that does not revoke existing sessions.
 
 Google's current Audience rules exempt projects using only basic Sign in with Google scopes from Testing-mode test-user warnings and seven-day authorization expiry. This keeps a personal instance on its generated `vercel.app` host functional without a paid domain. The shared Vercel domain cannot pass Google's owned-domain brand-verification process, however; use a stable custom domain if verified production branding is required. Recheck Google's rules before changing scopes or audience.
 
@@ -196,13 +199,13 @@ Create a new production deployment after setting the variables. Changes to Verce
 ### Authentication and browser checks
 
 - A logged-out request to every card, Plaid, sync, disconnect, update, and calendar API receives `401`; only health and authentication endpoints are public.
-- A wrong password returns a generic failure and repeated failures trigger throttling without revealing whether configuration or records exist.
+- In password mode, a wrong password returns a generic failure and repeated failures trigger throttling without revealing whether configuration or records exist. In Google-only mode every request method to the password-login route returns `404` before parsing a body or touching authentication storage.
 - A successful login sets only the `__Host-carddue_session` cookie with Secure, HTTP-only, SameSite Strict, root-path semantics, and no Domain attribute.
-- Before linking, a logged-out Google start cannot create or claim an owner. A link start without the exact CardDue session is rejected.
+- In password mode, a logged-out Google start cannot create or claim an owner, and a link start without the exact CardDue session is rejected. In Google-only mode, only the one-time manually pasted setup token can create an initial OAuth transaction; the token never appears in a URL, cookie, database row, log, or provider request.
 - Google linking sets only a short-lived encrypted `__Host-` transaction cookie with Secure, HTTP-only, SameSite Lax, root-path semantics, and no Domain attribute. State, nonce, PKCE, response issuer, ID-token signature/algorithm/issuer/audience/expiry, and the exact linked subject are validated; the one-time transaction cannot be replayed.
 - Google's rendered consent screen contains no personal name, email, logo metadata, or link other than the deliberately created support alias and canonical CardDue domain.
-- Logging out before a pending link callback invalidates that link. Selecting a different Google account after an identity is linked returns a generic error and issues no session.
-- After a successful link, Google login issues the same opaque CardDue session used by password login. The recovery password continues to work independently.
+- Logging out before a pending password-mode link callback invalidates that link. Replacing or removing a Google-only bootstrap verifier invalidates its pending flow. Selecting a different Google account after an identity is linked returns a generic error and issues no session.
+- After a successful link or bootstrap, Google login issues CardDue's opaque server-side session. The password continues to work independently only in password mode.
 - Mutations without the exact production Origin, with cross-site Fetch Metadata, or without JSON where JSON is required are rejected.
 - Logout revokes the server-side session. Reloading and direct API requests remain logged out.
 - CardDue logout does not sign the browser out of Google. On a shared device, also sign out of Google and lock the operating-system or browser profile so ambient Google SSO cannot immediately create another CardDue session.
@@ -210,7 +213,7 @@ Create a new production deployment after setting the variables. Changes to Verce
 
 ### Storage and disclosure checks
 
-- Neon tables contain encrypted card payloads, encrypted Plaid secrets, and only a keyed Google identity fingerprint—not plaintext nicknames, institutions, suffixes, balances, dates, provider tokens, Google email/profile, or raw responses.
+- Neon tables contain encrypted card payloads, encrypted Plaid secrets, and only keyed Google identity/bootstrap references—not plaintext nicknames, institutions, suffixes, balances, dates, setup tokens, provider tokens, Google email/profile, or raw responses.
 - The runtime role and exact schema catalog pass both `cloud:verify` and the application's cold-start verification; the role can perform required row operations but cannot create, alter, or drop schema objects, grant privileges, assume another role, or access unrelated non-system schemas.
 - Vercel build and runtime logs contain no request bodies, cookies, database URLs, SQL parameters, card values, Google or Plaid identifiers, provider tokens, raw provider errors, or recovery values.
 - Generated browser assets contain none of the Production environment values.
@@ -232,14 +235,16 @@ After any restore or database-credential incident, verify every due date and amo
 
 A database backup without `masterKey` cannot restore readable records. The recovery bundle without a database backup cannot reconstruct lost rows. Changing `CARDDUE_MASTER_KEY` is not a rotation procedure; all existing ciphertext immediately becomes unreadable. Design and test a versioned re-encryption migration before any key change.
 
+For Google-only mode, never restore the database to a pre-link or pre-consumption state while a reachable deployment retains the matching bootstrap verifier. Treat database state and deployed authentication environment as a pair: remove or host-deny stale deployments before restoring, and generate a fresh reviewed token and verifier for any authorized re-bootstrap.
+
 ## Updates, secret changes, and incidents
 
 - Run `npm run ci`, repeat the publishing checklist, and review dependency changes before every production deploy.
 - Run schema migrations with temporary owner authority before deploying code that requires the new schema. An existing-role migration requires the protected old/current password and a distinct desired password; never grant migration authority to the runtime.
 - Environment changes require a new production deployment. Old deployments retain their old environment values; keep their hosts denied, remove unneeded deployments, and revoke the old provider credential after the replacement is verified.
-- Changing `CARDDUE_OWNER_PASSWORD_HASH` invalidates sessions bound to the previous hash. Preserve the actual AES key when changing a login password.
-- If the login password or session is exposed, revoke sessions and replace the password hash using a reviewed recovery procedure.
-- If the Google client secret is exposed, rotate it in Google and Vercel, redeploy, and remove old deployments. If the linked Google account is compromised, first remove both Google variables and redeploy to disable that path; then use the recovery password, replace its hash to revoke CardDue sessions, secure the Google account, and do not re-enable Google without a reviewed binding-reset procedure.
+- Changing `CARDDUE_OWNER_PASSWORD_HASH` in password mode invalidates sessions bound to the previous hash. Changing `CARDDUE_AUTH_MODE` also invalidates sessions from the other mode. Preserve the actual AES key during every authentication recovery.
+- If the login password or session is exposed, revoke sessions and replace the password hash using a reviewed recovery procedure. Google-only mode has no login password.
+- If the Google client secret is exposed, rotate it in Google and Vercel, redeploy, and remove old deployments. If the linked Google account is compromised, first remove both Google variables and redeploy. Password mode stays available and should replace its password hash to revoke sessions. Google-only mode intentionally becomes unavailable with `503` and must follow [the no-password recovery boundary](GOOGLE_ONLY_AUTH.md#recovery-and-identity-changes). Before changing the subject or returning to Google with the same client, either complete a successful fresh password-mode login that globally prunes old auth-config sessions, or delete every session row with owner authority and verify zero remain. A mode switch alone is insufficient.
 - If the AES key or complete recovery bundle is exposed, assume every obtainable database copy and Plaid token can be decrypted. Disconnect Plaid, preserve evidence without copying private payloads, and perform a reviewed decrypt-and-re-encrypt migration or destroy the instance.
 - If the owner migration URL is exposed, rotate it immediately and re-audit the runtime role and schema grants.
 

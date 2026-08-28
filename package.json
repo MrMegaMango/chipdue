@@ -27,6 +27,7 @@
 		"cloud:migrate": "node scripts/migrate-cloud.mjs",
 		"cloud:secrets": "node scripts/generate-cloud-secrets.mjs",
 		"cloud:verify": "node scripts/verify-cloud-runtime.mjs",
+		"google:bootstrap": "node scripts/generate-google-bootstrap.mjs",
 		"privacy:init": "node scripts/init-privacy-denylist.mjs",
 		"privacy:check": "node scripts/privacy-check.mjs",
 		"ci": "npm run privacy:check && npm run lint && npm run check && npm test && npm run build && npm run build:vercel"

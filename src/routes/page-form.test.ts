@@ -1,9 +1,16 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
 	authorizeGoogleCallbackResult,
 	canOfferGoogleLogin,
+	canShowGoogleBootstrap,
+	canShowPasswordLogin,
+	GOOGLE_BOOTSTRAP_CONTINUE_TO,
 	inputToCents,
+	isApprovedBootstrapContinuation,
+	isGoogleOnlyCloudMode,
 	isValidOptionalAmount,
+	isValidSetupToken,
 	LAST_FOUR_PATTERN,
 	parseGoogleCallbackResult
 } from './+page.svelte';
@@ -66,5 +73,48 @@ describe('Google callback marker parsing', () => {
 		expect(authorizeGoogleCallbackResult('login', false, true)).toBe('error');
 		expect(authorizeGoogleCallbackResult('linked', true, false)).toBe('error');
 		expect(authorizeGoogleCallbackResult('error', false, false)).toBe('error');
+	});
+});
+
+describe('Google-only setup privacy contract', () => {
+	it('never offers password login in Google-only cloud mode', () => {
+		expect(isGoogleOnlyCloudMode('cloud', 'google')).toBe(true);
+		expect(canShowPasswordLogin('cloud', 'google')).toBe(false);
+		expect(canShowPasswordLogin('cloud', 'password')).toBe(true);
+		expect(canShowPasswordLogin('local', 'password')).toBe(false);
+	});
+
+	it('shows one-time setup only when the backend says bootstrap is available', () => {
+		expect(canShowGoogleBootstrap('cloud', 'google', true)).toBe(true);
+		expect(canShowGoogleBootstrap('cloud', 'google', false)).toBe(false);
+		expect(canShowGoogleBootstrap('cloud', 'password', true)).toBe(false);
+		expect(canShowGoogleBootstrap('local', 'local', true)).toBe(false);
+	});
+
+	it('accepts only the fixed-size one-time setup token format', () => {
+		expect(isValidSetupToken('a'.repeat(43))).toBe(true);
+		expect(isValidSetupToken(`${'a'.repeat(42)}+`)).toBe(false);
+		expect(isValidSetupToken('a'.repeat(42))).toBe(false);
+		expect(isValidSetupToken('a'.repeat(44))).toBe(false);
+	});
+
+	it('allows only the compile-time same-origin continuation path', () => {
+		expect(isApprovedBootstrapContinuation(GOOGLE_BOOTSTRAP_CONTINUE_TO)).toBe(true);
+		expect(isApprovedBootstrapContinuation('https://accounts.google.com/')).toBe(false);
+		expect(
+			isApprovedBootstrapContinuation('/api/auth/google/bootstrap/continue?token=example')
+		).toBe(false);
+		expect(isApprovedBootstrapContinuation(null)).toBe(false);
+	});
+
+	it('does not read setup codes from URLs, storage, or the clipboard', () => {
+		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+		expect(source).not.toContain("searchParams.get('setup')");
+		expect(source).not.toContain('#setup=');
+		expect(source).not.toContain('localStorage');
+		expect(source).not.toContain('sessionStorage');
+		expect(source).not.toContain('navigator.clipboard');
+		expect(source).not.toMatch(/location\.(?:assign|replace)\([^)]*setupToken/);
+		expect(source).toContain('window.location.assign(resolve(GOOGLE_BOOTSTRAP_CONTINUE_TO))');
 	});
 });

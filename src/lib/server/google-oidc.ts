@@ -4,6 +4,7 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { z } from 'zod';
 import {
 	authenticateSession,
+	consumeGoogleOidcBootstrapRateLimit,
 	consumeGoogleOidcStartRateLimit,
 	issueGoogleOidcSession,
 	SESSION_COOKIE_NAME
@@ -16,6 +17,7 @@ import { getCloudRuntimeConfig, getRuntimeMode, type GoogleOidcConfig } from './
 
 export const GOOGLE_TRANSACTION_COOKIE_NAME = '__Host-carddue_google_tx';
 export const GOOGLE_CALLBACK_PATH = '/api/auth/google/callback';
+export const GOOGLE_BOOTSTRAP_CONTINUE_PATH = '/api/auth/google/bootstrap/continue';
 export const GOOGLE_ISSUER = 'https://accounts.google.com';
 
 const GOOGLE_BARE_ISSUER = 'accounts.google.com';
@@ -23,9 +25,15 @@ const GOOGLE_AUTHORIZATION_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GOOGLE_JWKS_URL = 'https://www.googleapis.com/oauth2/v3/certs';
 const GOOGLE_LINK_METADATA_KEY = 'google_oidc_subject_ref_v1';
+const GOOGLE_BOOTSTRAP_CLAIM_METADATA_KEY = 'google_oidc_bootstrap_claim_ref_v1';
 const TRANSACTION_COOKIE_PURPOSE = 'google-oidc-transaction-cookie-v1';
 const TRANSACTION_REFERENCE_PURPOSE = 'google-oidc-transaction-reference-v1';
 const GOOGLE_SUBJECT_PURPOSE = 'google-oidc-subject-v1';
+const GOOGLE_BOOTSTRAP_CLAIM_PURPOSE = 'google-oidc-bootstrap-claim-v1';
+const GOOGLE_BOOTSTRAP_CONSUMED_PURPOSE = 'google-oidc-bootstrap-consumed-v1';
+const GOOGLE_BOOTSTRAP_TOKEN_DOMAIN = 'carddue:google-oidc-bootstrap-token:v1\0';
+const ACTIVE_BOOTSTRAP_CLAIM_PREFIX = 'active:v1:';
+const CONSUMED_BOOTSTRAP_CLAIM_PREFIX = 'consumed:v1:';
 const TRANSACTION_TTL_SECONDS = 10 * 60;
 const MAX_CALLBACK_QUERY_BYTES = 8 * 1024;
 const MAX_TOKEN_RESPONSE_BYTES = 64 * 1024;
@@ -35,17 +43,19 @@ const OPAQUE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const SUBJECT_PATTERN = /^[A-Za-z0-9_-]{1,255}$/;
 
 export type GoogleOidcIntent = 'login' | 'link';
+type GoogleTransactionIntent = GoogleOidcIntent | 'bootstrap';
 
 interface GoogleTransaction {
-	version: 1;
+	version: 2;
 	transactionToken: string;
-	intent: GoogleOidcIntent;
+	intent: GoogleTransactionIntent;
 	state: string;
 	nonce: string;
 	codeVerifier: string;
 	redirectUri: string;
 	expiresAt: number;
 	linkSessionToken: string | null;
+	bootstrapClaimRef: string | null;
 }
 
 interface MetadataRow extends Record<string, unknown> {
@@ -58,15 +68,16 @@ interface TransactionRow extends Record<string, unknown> {
 
 const transactionSchema = z
 	.object({
-		version: z.literal(1),
+		version: z.literal(2),
 		transactionToken: z.string().regex(OPAQUE_TOKEN_PATTERN),
-		intent: z.enum(['login', 'link']),
+		intent: z.enum(['login', 'link', 'bootstrap']),
 		state: z.string().regex(OPAQUE_TOKEN_PATTERN),
 		nonce: z.string().regex(OPAQUE_TOKEN_PATTERN),
 		codeVerifier: z.string().regex(OPAQUE_TOKEN_PATTERN),
 		redirectUri: z.string().url().max(512),
 		expiresAt: z.number().int().positive(),
-		linkSessionToken: z.string().regex(OPAQUE_TOKEN_PATTERN).nullable()
+		linkSessionToken: z.string().regex(OPAQUE_TOKEN_PATTERN).nullable(),
+		bootstrapClaimRef: z.string().regex(OPAQUE_TOKEN_PATTERN).nullable()
 	})
 	.strict();
 
@@ -91,6 +102,51 @@ function googleConfig(): GoogleOidcConfig {
 
 function randomOpaqueToken(): string {
 	return randomBytes(32).toString('base64url');
+}
+
+function isCanonicalOpaqueToken(value: string): boolean {
+	if (!OPAQUE_TOKEN_PATTERN.test(value)) return false;
+	const decoded = Buffer.from(value, 'base64url');
+	return decoded.length === 32 && decoded.toString('base64url') === value;
+}
+
+function bootstrapHashForToken(token: string): string {
+	return `sha256$${createHash('sha256')
+		.update(GOOGLE_BOOTSTRAP_TOKEN_DOMAIN, 'utf8')
+		.update(token, 'ascii')
+		.digest('base64url')}`;
+}
+
+function currentBootstrapClaimReference(): string {
+	const config = getCloudRuntimeConfig();
+	if (config.authMode !== 'google' || !config.googleBootstrapHash) {
+		throw new AppError('GOOGLE_AUTH_FAILED', 'Google authentication could not be completed.', 401);
+	}
+	return privateFingerprint(config.googleBootstrapHash, GOOGLE_BOOTSTRAP_CLAIM_PURPOSE);
+}
+
+function verifyBootstrapToken(token: string): string {
+	const config = getCloudRuntimeConfig();
+	if (
+		config.authMode !== 'google' ||
+		!config.googleBootstrapHash ||
+		!isCanonicalOpaqueToken(token) ||
+		!secretsEqual(bootstrapHashForToken(token), config.googleBootstrapHash)
+	) {
+		throw new AppError('GOOGLE_BOOTSTRAP_FAILED', 'Google setup could not be started.', 401);
+	}
+	return currentBootstrapClaimReference();
+}
+
+function activeBootstrapClaimValue(claimReference: string): string {
+	return `${ACTIVE_BOOTSTRAP_CLAIM_PREFIX}${claimReference}`;
+}
+
+function consumedBootstrapClaimValue(claimReference: string): string {
+	return `${CONSUMED_BOOTSTRAP_CLAIM_PREFIX}${privateFingerprint(
+		claimReference,
+		GOOGLE_BOOTSTRAP_CONSUMED_PURPOSE
+	)}`;
 }
 
 function transactionReference(transactionToken: string): string {
@@ -131,7 +187,31 @@ async function readLinkedSubjectReference(): Promise<string | null> {
 		`SELECT value FROM public.carddue_metadata WHERE key = $1`,
 		[GOOGLE_LINK_METADATA_KEY]
 	);
-	return rows.length === 1 && OPAQUE_TOKEN_PATTERN.test(rows[0].value) ? rows[0].value : null;
+	return rows.length === 1 && isCanonicalOpaqueToken(rows[0].value) ? rows[0].value : null;
+}
+
+async function readBootstrapClaimReference(): Promise<string | null> {
+	const rows = await cloudQuery<MetadataRow>(
+		`SELECT value FROM public.carddue_metadata WHERE key = $1`,
+		[GOOGLE_BOOTSTRAP_CLAIM_METADATA_KEY]
+	);
+	if (rows.length !== 1 || !rows[0].value.startsWith(ACTIVE_BOOTSTRAP_CLAIM_PREFIX)) {
+		return null;
+	}
+	const reference = rows[0].value.slice(ACTIVE_BOOTSTRAP_CLAIM_PREFIX.length);
+	return isCanonicalOpaqueToken(reference) ? reference : null;
+}
+
+async function requireCurrentBootstrapClaim(expectedClaimReference: string): Promise<void> {
+	const current = currentBootstrapClaimReference();
+	const stored = await readBootstrapClaimReference();
+	if (
+		!secretsEqual(current, expectedClaimReference) ||
+		!stored ||
+		!secretsEqual(stored, expectedClaimReference)
+	) {
+		throw new AppError('GOOGLE_AUTH_FAILED', 'Google authentication could not be completed.', 401);
+	}
 }
 
 async function requireMatchingLinkedSubject(subjectReference: string): Promise<void> {
@@ -160,6 +240,63 @@ async function linkSubject(subjectReference: string): Promise<void> {
 			'A different Google identity is already linked.',
 			409
 		);
+	}
+}
+
+async function claimBootstrap(claimReference: string): Promise<void> {
+	const activeClaim = activeBootstrapClaimValue(claimReference);
+	const rows = await cloudQuery<MetadataRow>(
+		`INSERT INTO public.carddue_metadata AS bootstrap_claim (key, value)
+		 SELECT $1, $2
+		 WHERE NOT EXISTS (
+		   SELECT 1 FROM public.carddue_metadata WHERE key = $3
+		 )
+		 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+		 WHERE bootstrap_claim.value LIKE 'active:v1:%'
+		   AND bootstrap_claim.value <> EXCLUDED.value
+		   AND NOT EXISTS (
+		     SELECT 1 FROM public.carddue_metadata WHERE key = $3
+		   )
+		 RETURNING value`,
+		[GOOGLE_BOOTSTRAP_CLAIM_METADATA_KEY, activeClaim, GOOGLE_LINK_METADATA_KEY]
+	);
+	if (
+		rows.length !== 1 ||
+		typeof rows[0].value !== 'string' ||
+		!secretsEqual(rows[0].value, activeClaim)
+	) {
+		throw new AppError('GOOGLE_BOOTSTRAP_FAILED', 'Google setup could not be started.', 401);
+	}
+}
+
+async function bootstrapSubject(subjectReference: string, claimReference: string): Promise<void> {
+	const rows = await cloudQuery<MetadataRow>(
+		`WITH consumed_claim AS (
+		   UPDATE public.carddue_metadata
+		   SET value = $5
+		   WHERE key = $3 AND value = $4
+		   RETURNING value
+		 ), inserted_identity AS (
+		   INSERT INTO public.carddue_metadata (key, value)
+		   SELECT $1, $2 FROM consumed_claim
+		   ON CONFLICT (key) DO NOTHING
+		   RETURNING value
+		 )
+		 SELECT value FROM inserted_identity`,
+		[
+			GOOGLE_LINK_METADATA_KEY,
+			subjectReference,
+			GOOGLE_BOOTSTRAP_CLAIM_METADATA_KEY,
+			activeBootstrapClaimValue(claimReference),
+			consumedBootstrapClaimValue(claimReference)
+		]
+	);
+	if (
+		rows.length !== 1 ||
+		typeof rows[0].value !== 'string' ||
+		!secretsEqual(rows[0].value, subjectReference)
+	) {
+		throw new AppError('GOOGLE_AUTH_FAILED', 'Google authentication could not be completed.', 401);
 	}
 }
 
@@ -201,6 +338,20 @@ async function consumeTransaction(transaction: GoogleTransaction, now: number): 
 	}
 }
 
+async function requireActiveTransaction(
+	transaction: GoogleTransaction,
+	now: number
+): Promise<void> {
+	const rows = await cloudQuery<TransactionRow>(
+		`SELECT bucket_ref FROM public.carddue_auth_rate_limits
+		 WHERE bucket_ref = $1 AND attempts = 0 AND blocked_until >= $2`,
+		[transactionReference(transaction.transactionToken), now]
+	);
+	if (rows.length !== 1) {
+		throw new AppError('GOOGLE_AUTH_FAILED', 'Google authentication could not be completed.', 401);
+	}
+}
+
 function setTransactionCookie(cookies: Cookies, transaction: GoogleTransaction): void {
 	cookies.set(
 		GOOGLE_TRANSACTION_COOKIE_NAME,
@@ -234,6 +385,8 @@ function readTransactionCookie(cookies: Cookies): GoogleTransaction {
 	);
 	if (
 		(transaction.intent === 'link') !== Boolean(transaction.linkSessionToken) ||
+		(transaction.intent === 'bootstrap') !== Boolean(transaction.bootstrapClaimRef) ||
+		(transaction.intent !== 'bootstrap' && transaction.bootstrapClaimRef !== null) ||
 		transaction.expiresAt <= Date.now()
 	) {
 		throw new AppError('GOOGLE_AUTH_FAILED', 'Google authentication could not be completed.', 401);
@@ -255,20 +408,29 @@ function authorizationUrl(config: GoogleOidcConfig, transaction: GoogleTransacti
 	authorization.searchParams.set('nonce', transaction.nonce);
 	authorization.searchParams.set('code_challenge', challenge);
 	authorization.searchParams.set('code_challenge_method', 'S256');
-	if (transaction.intent === 'link') authorization.searchParams.set('prompt', 'select_account');
+	if (transaction.intent === 'link' || transaction.intent === 'bootstrap') {
+		authorization.searchParams.set('prompt', 'select_account');
+	}
 	return authorization.toString();
 }
 
 export async function getGoogleAuthStatus(authenticated: boolean): Promise<{
 	configured: boolean;
 	linked: boolean | null;
+	bootstrapAvailable: boolean;
 }> {
-	if (getRuntimeMode() !== 'cloud') return { configured: false, linked: false };
-	const configured = Boolean(getCloudRuntimeConfig().googleOidc);
-	if (!authenticated) return { configured, linked: null };
+	if (getRuntimeMode() !== 'cloud') {
+		return { configured: false, linked: false, bootstrapAvailable: false };
+	}
+	const runtimeConfig = getCloudRuntimeConfig();
+	const configured = Boolean(runtimeConfig.googleOidc);
+	const bootstrapAvailable =
+		runtimeConfig.authMode === 'google' && Boolean(runtimeConfig.googleBootstrapHash);
+	if (!authenticated) return { configured, linked: null, bootstrapAvailable };
 	return {
 		configured,
-		linked: configured && Boolean(await readLinkedSubjectReference())
+		linked: configured && Boolean(await readLinkedSubjectReference()),
+		bootstrapAvailable
 	};
 }
 
@@ -279,11 +441,15 @@ export async function beginGoogleOidc(
 	intent: GoogleOidcIntent
 ): Promise<string> {
 	const config = googleConfig();
+	const runtimeConfig = getCloudRuntimeConfig();
 	assertStartRequestOrigin(request, url);
 	const redirectUri = callbackUri(request, url);
 	let linkSessionToken: string | null = null;
 
 	if (intent === 'link') {
+		if (runtimeConfig.authMode !== 'password') {
+			throw new AppError('GOOGLE_AUTH_UNAVAILABLE', 'Google sign-in is not available.', 409);
+		}
 		linkSessionToken = cookies.get(SESSION_COOKIE_NAME) ?? null;
 		if (!(await authenticateSession(linkSessionToken ?? undefined))) {
 			throw new AppError('AUTH_REQUIRED', 'Authentication is required.', 401);
@@ -298,7 +464,7 @@ export async function beginGoogleOidc(
 	const now = Date.now();
 	await pruneExpiredTransactions(now);
 	const transaction: GoogleTransaction = {
-		version: 1,
+		version: 2,
 		transactionToken: randomOpaqueToken(),
 		intent,
 		state: randomOpaqueToken(),
@@ -306,10 +472,69 @@ export async function beginGoogleOidc(
 		codeVerifier: randomOpaqueToken(),
 		redirectUri,
 		expiresAt: now + TRANSACTION_TTL_SECONDS * 1000,
-		linkSessionToken
+		linkSessionToken,
+		bootstrapClaimRef: null
 	};
 	await saveTransaction(transaction, now);
 	setTransactionCookie(cookies, transaction);
+	return authorizationUrl(config, transaction);
+}
+
+export async function beginGoogleOidcBootstrap(
+	request: Request,
+	url: URL,
+	cookies: Cookies,
+	setupToken: string
+): Promise<typeof GOOGLE_BOOTSTRAP_CONTINUE_PATH> {
+	googleConfig();
+	if (getCloudRuntimeConfig().authMode !== 'google') {
+		throw new AppError('GOOGLE_BOOTSTRAP_FAILED', 'Google setup could not be started.', 401);
+	}
+	assertStartRequestOrigin(request, url);
+	const redirectUri = callbackUri(request, url);
+	const claimReference = verifyBootstrapToken(setupToken);
+	await consumeGoogleOidcBootstrapRateLimit(request);
+	await claimBootstrap(claimReference);
+
+	const now = Date.now();
+	await pruneExpiredTransactions(now);
+	const transaction: GoogleTransaction = {
+		version: 2,
+		transactionToken: randomOpaqueToken(),
+		intent: 'bootstrap',
+		state: randomOpaqueToken(),
+		nonce: randomOpaqueToken(),
+		codeVerifier: randomOpaqueToken(),
+		redirectUri,
+		expiresAt: now + TRANSACTION_TTL_SECONDS * 1000,
+		linkSessionToken: null,
+		bootstrapClaimRef: claimReference
+	};
+	await saveTransaction(transaction, now);
+	setTransactionCookie(cookies, transaction);
+	return GOOGLE_BOOTSTRAP_CONTINUE_PATH;
+}
+
+export async function continueGoogleOidcBootstrap(
+	request: Request,
+	url: URL,
+	cookies: Cookies
+): Promise<string> {
+	const config = googleConfig();
+	if (getCloudRuntimeConfig().authMode !== 'google') {
+		throw new AppError('GOOGLE_AUTH_UNAVAILABLE', 'Google sign-in is not available.', 409);
+	}
+	assertStartRequestOrigin(request, url);
+	const transaction = readTransactionCookie(cookies);
+	if (
+		transaction.intent !== 'bootstrap' ||
+		!transaction.bootstrapClaimRef ||
+		!secretsEqual(callbackUri(request, url), transaction.redirectUri)
+	) {
+		throw new AppError('GOOGLE_AUTH_FAILED', 'Google authentication could not be completed.', 401);
+	}
+	await requireCurrentBootstrapClaim(transaction.bootstrapClaimRef);
+	await requireActiveTransaction(transaction, Date.now());
 	return authorizationUrl(config, transaction);
 }
 
@@ -477,14 +702,33 @@ export async function completeGoogleOidc(
 	request: Request,
 	url: URL,
 	cookies: Cookies
-): Promise<{ outcome: 'login'; sessionToken: string } | { outcome: 'linked' }> {
+): Promise<
+	{ outcome: 'login'; sessionToken: string } | { outcome: 'linked'; sessionToken?: string }
+> {
 	const config = googleConfig();
+	const runtimeConfig = getCloudRuntimeConfig();
 	const transaction = readTransactionCookie(cookies);
+	if (
+		(transaction.intent === 'link' && runtimeConfig.authMode !== 'password') ||
+		(transaction.intent === 'bootstrap' && runtimeConfig.authMode !== 'google')
+	) {
+		throw new AppError('GOOGLE_AUTH_FAILED', 'Google authentication could not be completed.', 401);
+	}
 	const currentCallbackUri = callbackUri(request, url);
 	if (!secretsEqual(currentCallbackUri, transaction.redirectUri)) {
 		throw new AppError('GOOGLE_AUTH_FAILED', 'Google authentication could not be completed.', 401);
 	}
 	const callback = validateCallbackQuery(url, transaction);
+	if (transaction.intent === 'bootstrap') {
+		if (!transaction.bootstrapClaimRef) {
+			throw new AppError(
+				'GOOGLE_AUTH_FAILED',
+				'Google authentication could not be completed.',
+				401
+			);
+		}
+		await requireCurrentBootstrapClaim(transaction.bootstrapClaimRef);
+	}
 	const now = Date.now();
 	await consumeTransaction(transaction, now);
 	if (callback.providerError || !callback.code) {
@@ -506,6 +750,18 @@ export async function completeGoogleOidc(
 		}
 		await linkSubject(subjectReference);
 		return { outcome: 'linked' };
+	}
+	if (transaction.intent === 'bootstrap') {
+		if (!transaction.bootstrapClaimRef) {
+			throw new AppError(
+				'GOOGLE_AUTH_FAILED',
+				'Google authentication could not be completed.',
+				401
+			);
+		}
+		await requireCurrentBootstrapClaim(transaction.bootstrapClaimRef);
+		await bootstrapSubject(subjectReference, transaction.bootstrapClaimRef);
+		return { outcome: 'linked', sessionToken: await issueGoogleOidcSession() };
 	}
 
 	await requireMatchingLinkedSubject(subjectReference);

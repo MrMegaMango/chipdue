@@ -9,6 +9,15 @@ export const googleCredentialRules = Object.freeze([
 	[
 		'configured-google-client-secret',
 		/CARDDUE_GOOGLE_CLIENT_SECRET["']?\s*(?:=|:)\s*["']?(?!(?:replace|example|your|<))(?:GOCSPX-)?[A-Za-z0-9_-]{16,}/i
+	],
+	[
+		'configured-google-bootstrap-hash',
+		/CARDDUE_GOOGLE_BOOTSTRAP_HASH["']?\s*(?:=|:)\s*["']?(?!(?:replace|example|your|<))sha256\$[A-Za-z0-9_-]{43}/i
+	],
+	['google-bootstrap-bundle-token', /["']googleBootstrapToken["']\s*:\s*["'][A-Za-z0-9_-]{43}["']/],
+	[
+		'google-bootstrap-bundle-hash',
+		/["']googleBootstrapHash["']\s*:\s*["']sha256\$[A-Za-z0-9_-]{43}["']/
 	]
 ]);
 

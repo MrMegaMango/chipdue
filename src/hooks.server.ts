@@ -2,7 +2,7 @@ import type { Handle, HandleServerError } from '@sveltejs/kit';
 import { authenticateSession, SESSION_COOKIE_NAME } from '$lib/server/auth';
 import { apiError, apiJson } from '$lib/server/http';
 import { assertSecureCloudRequest, isLocalAuthority } from '$lib/server/request-security';
-import { getRuntimeMode } from '$lib/server/runtime';
+import { getRuntimeAuthMode, getRuntimeMode } from '$lib/server/runtime';
 
 function secureHeaders(response: Response): Response {
 	response.headers.set('cache-control', 'no-store, max-age=0');
@@ -38,13 +38,28 @@ export const handle: Handle = async ({ event, resolve }) => {
 			assertSecureCloudRequest(event.request, event.url);
 			const path = event.url.pathname.replace(/\/+$/, '') || '/';
 			const matchedPath = event.route?.id?.replace(/\/+$/, '') || path;
+			if (matchedPath === '/api/auth/login' && getRuntimeAuthMode() === 'google') {
+				return secureHeaders(
+					apiJson(
+						{
+							error: {
+								code: 'NOT_FOUND',
+								message: 'The requested endpoint is unavailable.'
+							}
+						},
+						404
+					)
+				);
+			}
 			const publicApi =
 				matchedPath === '/api/health' ||
 				matchedPath === '/api/auth/session' ||
 				matchedPath === '/api/auth/login' ||
 				matchedPath === '/api/auth/logout' ||
 				matchedPath === '/api/auth/google/start' ||
-				matchedPath === '/api/auth/google/callback';
+				matchedPath === '/api/auth/google/callback' ||
+				matchedPath === '/api/auth/google/bootstrap' ||
+				matchedPath === '/api/auth/google/bootstrap/continue';
 			if (matchedPath.startsWith('/api/') && !publicApi) {
 				const authenticated = await authenticateSession(event.cookies.get(SESSION_COOKIE_NAME));
 				if (!authenticated) {

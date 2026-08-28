@@ -7,7 +7,7 @@ export const GET: RequestHandler = async ({ cookies, request, url }) => {
 	let marker: 'login' | 'linked' | 'error' = 'error';
 	try {
 		const result = await completeGoogleOidc(request, url, cookies);
-		if (result.outcome === 'login') setSessionCookie(cookies, result.sessionToken);
+		if (result.sessionToken) setSessionCookie(cookies, result.sessionToken);
 		marker = result.outcome;
 	} catch {
 		// Provider and validation failures deliberately collapse to one fixed local redirect.

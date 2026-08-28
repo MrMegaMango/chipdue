@@ -46,19 +46,23 @@ export function assertSameOrigin(request: Request, url: URL): void {
 	}
 }
 
-export async function readJson<T>(request: Request, schema: ZodType<T>): Promise<T> {
+export async function readJson<T>(
+	request: Request,
+	schema: ZodType<T>,
+	maximumBytes = JSON_BODY_LIMIT
+): Promise<T> {
 	const contentType = request.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
 	if (contentType !== 'application/json' && !contentType?.endsWith('+json')) {
 		throw new AppError('INVALID_CONTENT_TYPE', 'A JSON request body is required.', 415);
 	}
 
 	const declaredLength = Number(request.headers.get('content-length') ?? 0);
-	if (Number.isFinite(declaredLength) && declaredLength > JSON_BODY_LIMIT) {
+	if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
 		throw new AppError('REQUEST_TOO_LARGE', 'The request body is too large.', 413);
 	}
 
 	const body = await request.text();
-	if (Buffer.byteLength(body, 'utf8') > JSON_BODY_LIMIT) {
+	if (Buffer.byteLength(body, 'utf8') > maximumBytes) {
 		throw new AppError('REQUEST_TOO_LARGE', 'The request body is too large.', 413);
 	}
 

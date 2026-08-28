@@ -12,6 +12,7 @@ function matchingRules(value) {
 
 const clientIdName = ['CARDDUE', 'GOOGLE', 'CLIENT', 'ID'].join('_');
 const clientSecretName = ['CARDDUE', 'GOOGLE', 'CLIENT', 'SECRET'].join('_');
+const bootstrapHashName = ['CARDDUE', 'GOOGLE', 'BOOTSTRAP', 'HASH'].join('_');
 
 describe('Google credential privacy rules', () => {
 	it('rejects configured client identifiers and secrets', () => {
@@ -29,6 +30,20 @@ describe('Google credential privacy rules', () => {
 		expect(matchingRules(`${clientIdName}=replace_with_google_web_client_id`)).toEqual([]);
 		expect(matchingRules(`${clientSecretName}=<google-client-secret>`)).toEqual([]);
 		expect(matchingRules(`${clientSecretName}=example_google_client_secret`)).toEqual([]);
+	});
+
+	it('rejects configured bootstrap verifiers and labeled recovery values', () => {
+		const encoded = ['A'.repeat(21), 'B'.repeat(22)].join('');
+		expect(matchingRules(`${bootstrapHashName}=sha256$${encoded}`)).toContain(
+			'configured-google-bootstrap-hash'
+		);
+		expect(matchingRules(`"googleBootstrapToken": "${encoded}"`)).toContain(
+			'google-bootstrap-bundle-token'
+		);
+		expect(matchingRules(`"googleBootstrapHash": "sha256$${encoded}"`)).toContain(
+			'google-bootstrap-bundle-hash'
+		);
+		expect(matchingRules(`${bootstrapHashName}=replace_with_generated_hash`)).toEqual([]);
 	});
 
 	it('exempts only the byte-exact reviewed Google asset from card-number heuristics', () => {

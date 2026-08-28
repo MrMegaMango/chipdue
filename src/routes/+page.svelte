@@ -1,6 +1,9 @@
 <script module lang="ts">
 	export type GoogleCallbackResult = 'login' | 'linked' | 'error';
+	export type AuthenticationMode = 'local' | 'password' | 'google';
 	export const LAST_FOUR_PATTERN = '[0-9][0-9][0-9][0-9]';
+	export const GOOGLE_BOOTSTRAP_CONTINUE_TO = '/api/auth/google/bootstrap/continue';
+	export const SETUP_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 	export function inputToCents(value: string | number | undefined): number | null {
 		if (value === undefined || (typeof value === 'string' && !value.trim())) return null;
@@ -36,6 +39,36 @@
 	): boolean {
 		return authMode === 'cloud' && configured;
 	}
+
+	export function isGoogleOnlyCloudMode(
+		runtimeMode: 'local' | 'cloud' | null,
+		authenticationMode: AuthenticationMode | null
+	): boolean {
+		return runtimeMode === 'cloud' && authenticationMode === 'google';
+	}
+
+	export function canShowPasswordLogin(
+		runtimeMode: 'local' | 'cloud' | null,
+		authenticationMode: AuthenticationMode | null
+	): boolean {
+		return runtimeMode === 'cloud' && authenticationMode === 'password';
+	}
+
+	export function canShowGoogleBootstrap(
+		runtimeMode: 'local' | 'cloud' | null,
+		authenticationMode: AuthenticationMode | null,
+		bootstrapAvailable: boolean
+	): boolean {
+		return isGoogleOnlyCloudMode(runtimeMode, authenticationMode) && bootstrapAvailable;
+	}
+
+	export function isValidSetupToken(value: string): boolean {
+		return SETUP_TOKEN_PATTERN.test(value);
+	}
+
+	export function isApprovedBootstrapContinuation(value: unknown): boolean {
+		return value === GOOGLE_BOOTSTRAP_CONTINUE_TO;
+	}
 </script>
 
 <script lang="ts">
@@ -47,9 +80,14 @@
 	type DialogMode = 'add' | 'edit' | null;
 	type NoticeKind = 'success' | 'error';
 	type AuthMode = 'local' | 'cloud';
-	type GoogleAuthStatus = { configured: boolean; linked: boolean | null };
+	type GoogleAuthStatus = {
+		configured: boolean;
+		linked: boolean | null;
+		bootstrapAvailable: boolean;
+	};
 	type AuthSession = {
 		mode: AuthMode;
+		authMode: AuthenticationMode;
 		authenticated: boolean;
 		google: GoogleAuthStatus;
 	};
@@ -143,6 +181,7 @@
 	});
 
 	let authMode = $state<AuthMode | null>(null);
+	let authenticationMode = $state<AuthenticationMode | null>(null);
 	let authenticated = $state(false);
 	let authChecking = $state(true);
 	let authBusy = $state<'login' | 'logout' | null>(null);
@@ -151,12 +190,17 @@
 	let authNotice = $state('');
 	let googleConfigured = $state(false);
 	let googleLinked = $state<boolean | null>(null);
+	let googleBootstrapAvailable = $state(false);
 	let googleCallbackResult: GoogleCallbackResult | null = null;
 	let googleNavigationPending = $state<'login' | 'link' | null>(null);
 	let password = $state('');
 	let showPassword = $state(false);
 	let passwordInput = $state<HTMLInputElement>();
 	let googleLoginLink = $state<HTMLAnchorElement>();
+	let setupToken = $state('');
+	let setupBusy = $state(false);
+	let setupError = $state('');
+	let setupTokenInput = $state<HTMLInputElement>();
 	let cards = $state<CardView[]>([]);
 	let plaid = $state<PlaidStatus>({ ...emptyPlaid });
 	let loading = $state(true);
@@ -184,10 +228,17 @@
 	let clockTimer: ReturnType<typeof setInterval> | undefined;
 	let plaidScriptPromise: Promise<void> | null = null;
 	let activePlaidHandler: PlaidHandler | null = null;
+	let setupAbortController: AbortController | null = null;
+	let pageMounted = false;
 	let sessionCheckInFlight = false;
 	let privateStateEpoch = 0;
 	let nowTick = $state(Date.now());
 	const googleLoginAvailable = $derived(canOfferGoogleLogin(authMode, googleConfigured));
+	const googleOnlyMode = $derived(isGoogleOnlyCloudMode(authMode, authenticationMode));
+	const passwordLoginAvailable = $derived(canShowPasswordLogin(authMode, authenticationMode));
+	const googleBootstrapVisible = $derived(
+		canShowGoogleBootstrap(authMode, authenticationMode, googleBootstrapAvailable)
+	);
 
 	const totalStatementCents = $derived(
 		cards.reduce((total, card) => total + (card.statementBalanceCents ?? 0), 0)
@@ -202,6 +253,7 @@
 			.toSorted((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''))[0] ?? null
 	);
 	onMount(() => {
+		pageMounted = true;
 		googleCallbackResult = consumeGoogleCallbackResult();
 		void initializeAuth();
 		document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -210,6 +262,10 @@
 		}, 60_000);
 
 		return () => {
+			pageMounted = false;
+			setupAbortController?.abort();
+			setupAbortController = null;
+			setupToken = '';
 			if (noticeTimer) clearTimeout(noticeTimer);
 			if (clockTimer) clearInterval(clockTimer);
 			if (dialogMode) document.body.style.overflow = previousBodyOverflow;
@@ -283,13 +339,15 @@
 				{ handleUnauthorized: false }
 			);
 			authMode = session.mode;
+			authenticationMode = session.authMode;
 			googleConfigured = session.google.configured;
 			googleLinked = session.google.linked;
+			googleBootstrapAvailable = session.google.bootstrapAvailable;
 			authenticated = session.mode === 'local' || session.authenticated;
 			if (session.mode === 'cloud' && !session.authenticated) {
 				void tick().then(() => {
 					if (googleLoginAvailable) googleLoginLink?.focus();
-					else passwordInput?.focus();
+					else if (passwordLoginAvailable) passwordInput?.focus();
 				});
 			} else {
 				loadDashboardData();
@@ -317,6 +375,8 @@
 			if (!isPrivateEpochCurrent(epoch)) return;
 			googleConfigured = session.google.configured;
 			googleLinked = session.google.linked;
+			googleBootstrapAvailable = session.google.bootstrapAvailable;
+			authenticationMode = session.authMode;
 			if (session.mode === 'cloud' && !session.authenticated) {
 				lockCloudSession('Your session expired. Sign in to continue.');
 			}
@@ -332,6 +392,12 @@
 	}
 
 	function beginGoogleNavigation(event: MouseEvent, intent: 'login' | 'link'): void {
+		if (setupBusy) {
+			event.preventDefault();
+			return;
+		}
+		setupToken = '';
+		setupError = '';
 		if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
 			return;
 		if (googleNavigationPending) {
@@ -342,14 +408,18 @@
 	}
 
 	function handleWindowPageShow(event: PageTransitionEvent): void {
-		if (event.persisted) googleNavigationPending = null;
+		if (event.persisted) {
+			googleNavigationPending = null;
+			setupToken = '';
+			setupBusy = false;
+		}
 	}
 
 	function consumeGoogleCallbackResult(): GoogleCallbackResult | null {
 		const url = new URL(window.location.href);
 		const marker = url.searchParams.get('google');
 		const result = parseGoogleCallbackResult(marker);
-		if (marker !== null) {
+		if (url.search || url.hash) {
 			replaceState(resolve('/'), {});
 		}
 		return result;
@@ -366,8 +436,9 @@
 
 		if (result === 'error') {
 			authErrorKind = 'general';
-			const message =
-				'Google sign-in could not be completed. Try again or use your CardDue password.';
+			const message = googleOnlyMode
+				? 'Google sign-in could not be completed. Try again.'
+				: 'Google sign-in could not be completed. Try again or use your CardDue password.';
 			if (authenticated) showNotice(message, 'error');
 			else authError = message;
 			return;
@@ -375,7 +446,9 @@
 
 		showNotice(
 			result === 'linked'
-				? 'Google sign-in is ready. Your CardDue password remains available for recovery.'
+				? googleOnlyMode
+					? 'Google sign-in is ready.'
+					: 'Google sign-in is ready. Your CardDue password remains available for recovery.'
 				: 'Signed in with Google.'
 		);
 	}
@@ -390,7 +463,7 @@
 
 	async function login(event: SubmitEvent): Promise<void> {
 		event.preventDefault();
-		if (authMode !== 'cloud' || authBusy) return;
+		if (authMode !== 'cloud' || authenticationMode !== 'password' || authBusy) return;
 		authError = '';
 		authErrorKind = 'password';
 		authNotice = '';
@@ -421,8 +494,10 @@
 					{ handleUnauthorized: false }
 				);
 				if (session.mode === 'cloud' && session.authenticated) {
+					authenticationMode = session.authMode;
 					googleConfigured = session.google.configured;
 					googleLinked = session.google.linked;
+					googleBootstrapAvailable = session.google.bootstrapAvailable;
 				}
 			} catch {
 				// The password session remains valid; status is retried when this window regains focus.
@@ -436,6 +511,65 @@
 			});
 		} finally {
 			authBusy = null;
+		}
+	}
+
+	async function bootstrapGoogle(event: SubmitEvent): Promise<void> {
+		event.preventDefault();
+		if (!googleBootstrapVisible || authenticated || setupBusy || googleNavigationPending) return;
+		setupError = '';
+
+		if (!isValidSetupToken(setupToken)) {
+			setupToken = '';
+			setupError = 'Setup could not be completed. Use a fresh one-time setup code and try again.';
+			void tick().then(() => setupTokenInput?.focus());
+			return;
+		}
+
+		setupBusy = true;
+		const abortController = new AbortController();
+		setupAbortController = abortController;
+		const requestPayload = { setupToken };
+		let shouldContinue = false;
+		setupToken = '';
+
+		try {
+			const payload = await requestJson<{ continueTo?: unknown }>(
+				resolve('/api/auth/google/bootstrap'),
+				{
+					method: 'POST',
+					body: JSON.stringify(requestPayload),
+					signal: abortController.signal
+				},
+				{ handleUnauthorized: false }
+			);
+			if (!isApprovedBootstrapContinuation(payload.continueTo)) {
+				throw new Error('Invalid setup continuation.');
+			}
+			shouldContinue = true;
+		} catch {
+			if (pageMounted) {
+				setupError = 'Setup could not be completed. Use a fresh one-time setup code and try again.';
+			}
+		} finally {
+			if (setupAbortController === abortController) setupAbortController = null;
+			requestPayload.setupToken = '';
+			setupToken = '';
+		}
+
+		if (!pageMounted) return;
+		if (shouldContinue) {
+			window.location.assign(resolve(GOOGLE_BOOTSTRAP_CONTINUE_TO));
+			return;
+		}
+
+		setupBusy = false;
+		void tick().then(() => setupTokenInput?.focus());
+	}
+
+	function handleSetupToggle(event: Event): void {
+		if (event.currentTarget instanceof HTMLDetailsElement && event.currentTarget.open) {
+			void tick().then(() => setupTokenInput?.focus());
 		}
 	}
 
@@ -468,7 +602,7 @@
 		clearPrivateUiState();
 		void tick().then(() => {
 			if (googleLoginAvailable) googleLoginLink?.focus();
-			else passwordInput?.focus();
+			else if (passwordLoginAvailable) passwordInput?.focus();
 		});
 	}
 
@@ -488,6 +622,9 @@
 		busyAction = null;
 		deletingId = null;
 		plaidItemActionId = null;
+		setupToken = '';
+		setupBusy = false;
+		setupError = '';
 		notice = '';
 		firstField = undefined;
 		dialogElement = undefined;
@@ -1263,9 +1400,11 @@
 			<p class="section-kicker">Private cloud</p>
 			<h1 id="login-title">Unlock your dashboard</h1>
 			<p class="auth-intro">
-				{googleLoginAvailable
-					? 'Continue with the Google account linked to this server. Your CardDue password remains available for recovery and first-time linking.'
-					: 'Enter the password for this CardDue server.'}
+				{googleOnlyMode
+					? 'Sign in with Google to continue. Google is the only sign-in method for this server.'
+					: googleLoginAvailable
+						? 'Continue with the Google account linked to this server. Your CardDue password remains available for recovery and first-time linking.'
+						: 'Enter the password for this CardDue server.'}
 			</p>
 
 			{#if authNotice}
@@ -1282,7 +1421,7 @@
 					href={resolve('/api/auth/google/start?intent=login')}
 					onclick={(event) => beginGoogleNavigation(event, 'login')}
 					aria-busy={googleNavigationPending === 'login'}
-					aria-disabled={googleNavigationPending !== null ? 'true' : undefined}
+					aria-disabled={googleNavigationPending !== null || setupBusy ? 'true' : undefined}
 					aria-describedby="cloud-privacy-copy"
 					data-sveltekit-reload
 				>
@@ -1296,52 +1435,108 @@
 						<span class="google-login-pending">Opening Google…</span>
 					{/if}
 				</a>
-				<div class="auth-divider" aria-hidden="true"><span>or use recovery password</span></div>
+				{#if passwordLoginAvailable}
+					<div class="auth-divider" aria-hidden="true"><span>or use recovery password</span></div>
+				{/if}
 			{/if}
 
-			<form class="login-form" onsubmit={login}>
-				<label for="cloud-password">CardDue password</label>
-				<div class="password-field">
-					<input
-						bind:this={passwordInput}
-						bind:value={password}
-						id="cloud-password"
-						name="password"
-						type={showPassword ? 'text' : 'password'}
-						autocomplete="current-password"
-						autocapitalize="none"
-						maxlength="1024"
-						spellcheck="false"
-						aria-invalid={authError && authErrorKind === 'password' ? 'true' : undefined}
-						aria-describedby={authError && authErrorKind === 'password'
-							? 'login-error cloud-privacy-copy'
-							: 'cloud-privacy-copy'}
-						required
-					/>
+			{#if passwordLoginAvailable}
+				<form class="login-form" onsubmit={login}>
+					<label for="cloud-password">CardDue password</label>
+					<div class="password-field">
+						<input
+							bind:this={passwordInput}
+							bind:value={password}
+							id="cloud-password"
+							name="password"
+							type={showPassword ? 'text' : 'password'}
+							autocomplete="current-password"
+							autocapitalize="none"
+							maxlength="1024"
+							spellcheck="false"
+							aria-invalid={authError && authErrorKind === 'password' ? 'true' : undefined}
+							aria-describedby={authError && authErrorKind === 'password'
+								? 'login-error cloud-privacy-copy'
+								: 'cloud-privacy-copy'}
+							required
+						/>
+						<button
+							type="button"
+							onclick={() => (showPassword = !showPassword)}
+							aria-pressed={showPassword}
+							aria-label={showPassword ? 'Hide password' : 'Show password'}
+						>
+							{showPassword ? 'Hide' : 'Show'}
+						</button>
+					</div>
 					<button
-						type="button"
-						onclick={() => (showPassword = !showPassword)}
-						aria-pressed={showPassword}
-						aria-label={showPassword ? 'Hide password' : 'Show password'}
+						class="button login-button"
+						class:button-primary={!googleLoginAvailable}
+						class:button-secondary={googleLoginAvailable}
+						type="submit"
+						disabled={authBusy === 'login' || !password}
+						aria-busy={authBusy === 'login'}
 					>
-						{showPassword ? 'Hide' : 'Show'}
+						{authBusy === 'login'
+							? 'Unlocking…'
+							: googleLoginAvailable
+								? 'Unlock with password'
+								: 'Unlock CardDue'}
 					</button>
-				</div>
-				<button
-					class="button login-button"
-					class:button-primary={!googleLoginAvailable}
-					class:button-secondary={googleLoginAvailable}
-					type="submit"
-					disabled={authBusy === 'login' || !password}
-					aria-busy={authBusy === 'login'}
-				>
-					{authBusy === 'login'
-						? 'Unlocking…'
-						: googleLoginAvailable
-							? 'Unlock with password'
-							: 'Unlock CardDue'}
-				</button>
-			</form>
+				</form>
+			{/if}
+
+			{#if googleBootstrapVisible}
+				<details class="bootstrap-setup" ontoggle={handleSetupToggle}>
+					<summary>Set up the first Google account</summary>
+					<div class="bootstrap-content">
+						<p id="setup-guidance">
+							Use this only once on a new server. Paste the private setup code created by the
+							deployment owner; CardDue will bind the Google account that completes sign-in first.
+						</p>
+						<form class="bootstrap-form" autocomplete="off" onsubmit={bootstrapGoogle}>
+							<label for="one-time-setup-code">One-time setup code</label>
+							<input
+								bind:this={setupTokenInput}
+								bind:value={setupToken}
+								id="one-time-setup-code"
+								type="password"
+								autocomplete="off"
+								autocapitalize="none"
+								autocorrect="off"
+								spellcheck="false"
+								maxlength="128"
+								aria-invalid={setupError ? 'true' : undefined}
+								aria-describedby={setupError
+									? 'setup-guidance setup-clipboard-warning setup-error'
+									: 'setup-guidance setup-clipboard-warning'}
+								disabled={setupBusy || googleNavigationPending !== null}
+								required
+							/>
+							<button
+								class="button button-secondary"
+								type="submit"
+								disabled={setupBusy || googleNavigationPending !== null || !setupToken}
+								aria-busy={setupBusy}
+							>
+								{setupBusy ? 'Starting secure setup…' : 'Continue setup'}
+							</button>
+						</form>
+						{#if setupError}
+							<p id="setup-error" class="setup-error" role="alert">{setupError}</p>
+						{/if}
+						<p id="setup-clipboard-warning" class="setup-warning">
+							<strong>Keep it private.</strong> CardDue holds the code only for this submission, but clipboard
+							managers may retain it. Clear your clipboard after setup starts. A started code cannot be
+							reused.
+						</p>
+						<p class="setup-lockout-warning">
+							<strong>Recovery warning:</strong> Losing access to the bound Google account can lock you
+							out. Keep that Google account’s own recovery methods current.
+						</p>
+					</div>
+				</details>
+			{/if}
 
 			<div id="cloud-privacy-copy" class="cloud-privacy">
 				<svg aria-hidden="true" viewBox="0 0 20 20">
@@ -1349,7 +1544,7 @@
 					<path d="m7.5 10 1.7 1.7 3.5-4"></path>
 				</svg>
 				<p>
-					{#if googleLoginAvailable}
+					{#if googleOnlyMode || googleLoginAvailable}
 						<strong>Google never receives your card data.</strong> Choosing Google reveals this site’s
 						domain, your IP address, and sign-in timing. CardDue requests no email or profile details,
 						keeps no Google access token, and stores no card data in browser storage.
@@ -1720,15 +1915,19 @@
 										<h3 id="google-access-title">Google sign-in</h3>
 										<p>
 											{googleLinked === true
-												? 'Ready to use. Your CardDue password remains available for recovery.'
+												? googleOnlyMode
+													? 'Ready to use. Google is this server’s sign-in method.'
+													: 'Ready to use. Your CardDue password remains available for recovery.'
 												: googleLinked === false
-													? 'Link your account while this password-authenticated session is open.'
+													? googleOnlyMode
+														? 'Initial Google setup has not completed.'
+														: 'Link your account while this password-authenticated session is open.'
 													: 'Checking account status…'}
 										</p>
 									</div>
 									{#if googleLinked === true}
 										<span class="google-ready"><span aria-hidden="true">✓</span> Ready</span>
-									{:else if googleLinked === false}
+									{:else if googleLinked === false && authenticationMode === 'password'}
 										<a
 											class="button google-link-button"
 											href={resolve('/api/auth/google/start?intent=link')}
@@ -1749,7 +1948,7 @@
 									it, but receives no card data from CardDue. CardDue requests no email or profile
 									details and does not keep Google tokens.
 								</p>
-								{#if googleLinked === false}
+								{#if googleLinked === false && authenticationMode === 'password'}
 									<p class="google-setup-note">
 										<strong>Deployment note:</strong> Google displays the OAuth support address publicly.
 										Use a monitored, non-personal alias or Google Group instead of a personal inbox.
@@ -2338,6 +2537,124 @@
 	.login-button {
 		width: 100%;
 		margin-top: 0.65rem;
+	}
+
+	.bootstrap-setup {
+		margin-top: 1.25rem;
+		border-top: 1px solid var(--line);
+	}
+
+	.bootstrap-setup summary {
+		display: flex;
+		min-height: 44px;
+		align-items: center;
+		justify-content: center;
+		padding: 0.65rem 0;
+		color: var(--green);
+		font-size: 0.69rem;
+		font-weight: 720;
+		text-align: center;
+		cursor: pointer;
+		list-style-position: inside;
+	}
+
+	.bootstrap-setup summary:focus-visible {
+		border-radius: 8px;
+		outline: 3px solid rgba(23, 107, 73, 0.2);
+		outline-offset: 2px;
+	}
+
+	.bootstrap-content {
+		padding: 0.85rem;
+		border: 1px solid var(--line);
+		border-radius: 10px;
+		background: var(--paper-soft);
+	}
+
+	.bootstrap-content > p,
+	.bootstrap-form {
+		margin: 0;
+	}
+
+	.bootstrap-content > #setup-guidance {
+		color: var(--muted);
+		font-size: 0.65rem;
+		line-height: 1.55;
+	}
+
+	.bootstrap-form {
+		display: grid;
+		gap: 0.5rem;
+		margin-top: 0.8rem;
+	}
+
+	.bootstrap-form label {
+		color: #3e4b43;
+		font-size: 0.68rem;
+		font-weight: 690;
+	}
+
+	.bootstrap-form input {
+		width: 100%;
+		min-width: 0;
+		min-height: 44px;
+		padding: 0.65rem 0.75rem;
+		border: 1px solid var(--line-strong);
+		border-radius: 9px;
+		font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+		font-size: 0.78rem;
+		background: white;
+	}
+
+	.bootstrap-form input:focus {
+		border-color: var(--green);
+		outline: 0;
+		box-shadow: 0 0 0 3px rgba(23, 107, 73, 0.1);
+	}
+
+	.bootstrap-form input[aria-invalid='true'] {
+		border-color: #c67e78;
+	}
+
+	.bootstrap-form .button {
+		width: 100%;
+		margin-top: 0.15rem;
+	}
+
+	.bootstrap-content > .setup-error {
+		margin-top: 0.65rem;
+		padding: 0.6rem 0.65rem;
+		border-radius: 7px;
+		color: #8b3030;
+		font-size: 0.65rem;
+		line-height: 1.45;
+		background: var(--red-soft);
+	}
+
+	.bootstrap-content > .setup-warning,
+	.bootstrap-content > .setup-lockout-warning {
+		margin-top: 0.7rem;
+		padding: 0.6rem 0.65rem;
+		border-left: 3px solid #d2a24c;
+		border-radius: 0 7px 7px 0;
+		color: #66553d;
+		font-size: 0.62rem;
+		line-height: 1.5;
+		background: #fff8e9;
+	}
+
+	.bootstrap-content > .setup-lockout-warning {
+		border-left-color: #c67e78;
+		color: #6f3b37;
+		background: var(--red-soft);
+	}
+
+	.setup-warning strong {
+		color: #6f4818;
+	}
+
+	.setup-lockout-warning strong {
+		color: #7c2d28;
 	}
 
 	.cloud-privacy {

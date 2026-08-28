@@ -13,9 +13,11 @@ const ENV_KEYS = [
 	'DATABASE_URL',
 	'CARDDUE_MASTER_KEY',
 	'CARDDUE_OWNER_PASSWORD_HASH',
+	'CARDDUE_AUTH_MODE',
 	'CARDDUE_ALLOWED_HOSTS',
 	'CARDDUE_GOOGLE_CLIENT_ID',
 	'CARDDUE_GOOGLE_CLIENT_SECRET',
+	'CARDDUE_GOOGLE_BOOTSTRAP_HASH',
 	'VERCEL'
 ] as const;
 
@@ -53,6 +55,7 @@ describe.sequential('cloud request guard', () => {
 	beforeEach(() => {
 		previous = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 		process.env.CARDDUE_MODE = 'cloud';
+		delete process.env.CARDDUE_AUTH_MODE;
 		process.env.DATABASE_URL = [
 			'postgresql://carddue_runtime:secret',
 			'ep-carddue-test.us-west-2.aws.neon.tech/carddue?sslmode=require'
@@ -62,6 +65,7 @@ describe.sequential('cloud request guard', () => {
 		process.env.CARDDUE_ALLOWED_HOSTS = 'cards.example.test';
 		delete process.env.CARDDUE_GOOGLE_CLIENT_ID;
 		delete process.env.CARDDUE_GOOGLE_CLIENT_SECRET;
+		delete process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH;
 		delete process.env.VERCEL;
 		setCloudDatabaseAdapterForTests(emptyAdapter);
 		resetCryptoStateForTests();
@@ -108,11 +112,31 @@ describe.sequential('cloud request guard', () => {
 	});
 
 	it('lets the Google start and callback routes perform their own intent validation', async () => {
-		for (const path of ['/api/auth/google/start', '/api/auth/google/callback']) {
+		for (const path of [
+			'/api/auth/google/start',
+			'/api/auth/google/callback',
+			'/api/auth/google/bootstrap',
+			'/api/auth/google/bootstrap/continue'
+		]) {
 			const response = await cloudRequest(path);
 			expect(response.status).toBe(200);
 			expect(await response.text()).toBe('resolved');
 		}
+	});
+
+	it('removes the password endpoint at the hook boundary in Google-only mode', async () => {
+		process.env.CARDDUE_AUTH_MODE = 'google';
+		delete process.env.CARDDUE_OWNER_PASSWORD_HASH;
+		process.env.CARDDUE_GOOGLE_CLIENT_ID = [
+			'synthetic-carddue',
+			'client.apps.googleusercontent.com'
+		].join('-');
+		process.env.CARDDUE_GOOGLE_CLIENT_SECRET = ['synthetic', 'client', 'secret'].join('-');
+		const response = await cloudRequest('/api/auth/login');
+		expect(response.status).toBe(404);
+		expect(await response.json()).toEqual({
+			error: { code: 'NOT_FOUND', message: 'The requested endpoint is unavailable.' }
+		});
 	});
 
 	it('refuses accidental local mode on Vercel', async () => {

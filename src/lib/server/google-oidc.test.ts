@@ -1,8 +1,11 @@
-import { scryptSync } from 'node:crypto';
+import { createHash, scryptSync } from 'node:crypto';
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT, type CryptoKey } from 'jose';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GET as callbackEndpoint } from '../../routes/api/auth/google/callback/+server';
+import { POST as bootstrapEndpoint } from '../../routes/api/auth/google/bootstrap/+server';
+import { GET as bootstrapContinueEndpoint } from '../../routes/api/auth/google/bootstrap/continue/+server';
 import { GET as startEndpoint } from '../../routes/api/auth/google/start/+server';
+import { POST as passwordLoginEndpoint } from '../../routes/api/auth/login/+server';
 import { GET as sessionEndpoint } from '../../routes/api/auth/session/+server';
 import {
 	authenticateSession,
@@ -21,6 +24,7 @@ import {
 import { decryptJson, privateFingerprint, resetCryptoStateForTests } from './crypto';
 import {
 	GOOGLE_CALLBACK_PATH,
+	GOOGLE_BOOTSTRAP_CONTINUE_PATH,
 	GOOGLE_ISSUER,
 	GOOGLE_TRANSACTION_COOKIE_NAME,
 	resetGoogleOidcStateForTests,
@@ -34,9 +38,11 @@ const GOOGLE_ENV_KEYS = [
 	'DATABASE_URL',
 	'CARDDUE_MASTER_KEY',
 	'CARDDUE_OWNER_PASSWORD_HASH',
+	'CARDDUE_AUTH_MODE',
 	'CARDDUE_ALLOWED_HOSTS',
 	'CARDDUE_GOOGLE_CLIENT_ID',
 	'CARDDUE_GOOGLE_CLIENT_SECRET',
+	'CARDDUE_GOOGLE_BOOTSTRAP_HASH',
 	'VERCEL'
 ] as const;
 
@@ -46,6 +52,8 @@ const TRANSACTION_COOKIE_PURPOSE = 'google-oidc-transaction-cookie-v1';
 const TRANSACTION_REFERENCE_PURPOSE = 'google-oidc-transaction-reference-v1';
 const GOOGLE_SUBJECT_PURPOSE = 'google-oidc-subject-v1';
 const LINK_METADATA_KEY = 'google_oidc_subject_ref_v1';
+const BOOTSTRAP_CLAIM_METADATA_KEY = 'google_oidc_bootstrap_claim_ref_v1';
+const BOOTSTRAP_TOKEN_DOMAIN = 'carddue:google-oidc-bootstrap-token:v1\0';
 
 interface StoredRate {
 	window_started_at: number;
@@ -62,13 +70,14 @@ interface StoredSession {
 
 interface GoogleTransaction {
 	transactionToken: string;
-	intent: 'login' | 'link';
+	intent: 'login' | 'link' | 'bootstrap';
 	state: string;
 	nonce: string;
 	codeVerifier: string;
 	redirectUri: string;
 	expiresAt: number;
 	linkSessionToken: string | null;
+	bootstrapClaimRef: string | null;
 }
 
 class GoogleMemoryAdapter implements CloudDatabaseAdapter {
@@ -76,9 +85,29 @@ class GoogleMemoryAdapter implements CloudDatabaseAdapter {
 	readonly rates = new Map<string, StoredRate>();
 	readonly sessions = new Map<string, StoredSession>();
 	readonly observedParameters: unknown[][] = [];
+	failBootstrapSubject = false;
+	beforeBootstrapSubject: (() => Promise<void>) | undefined;
 
 	async query<T extends CloudRow>(text: string, params: unknown[] = []): Promise<T[]> {
 		this.observedParameters.push(params);
+		if (text.includes('INSERT INTO public.carddue_metadata AS bootstrap_claim')) {
+			const [key, value, linkedKey] = params.map(String);
+			if (this.metadata.has(linkedKey)) return [];
+			const existing = this.metadata.get(key);
+			if (existing === value) return [];
+			if (existing !== undefined && !existing.startsWith('active:v1:')) return [];
+			this.metadata.set(key, value);
+			return [{ value }] as unknown as T[];
+		}
+		if (text.includes('WITH consumed_claim AS')) {
+			if (this.failBootstrapSubject) throw new Error('synthetic metadata failure');
+			await this.beforeBootstrapSubject?.();
+			const [key, value, claimKey, claimValue, consumedValue] = params.map(String);
+			if (this.metadata.has(key) || this.metadata.get(claimKey) !== claimValue) return [];
+			this.metadata.set(claimKey, consumedValue);
+			this.metadata.set(key, value);
+			return [{ value }] as unknown as T[];
+		}
 		if (text.includes('SELECT value FROM public.carddue_metadata')) {
 			const value = this.metadata.get(String(params[0]));
 			return (value === undefined ? [] : [{ value }]) as unknown as T[];
@@ -145,6 +174,16 @@ class GoogleMemoryAdapter implements CloudDatabaseAdapter {
 				updated_at: now
 			});
 			return [{ bucket_ref: bucket }] as unknown as T[];
+		}
+		if (
+			text.includes('SELECT bucket_ref FROM public.carddue_auth_rate_limits') &&
+			text.includes('attempts = 0 AND blocked_until >= $2')
+		) {
+			const [bucket, now] = params as [string, number];
+			const row = this.rates.get(bucket);
+			return (row && row.attempts === 0 && row.blocked_until >= now
+				? [{ bucket_ref: bucket }]
+				: []) as unknown as T[];
 		}
 		if (
 			text.includes('DELETE FROM public.carddue_auth_rate_limits') &&
@@ -236,6 +275,7 @@ function passwordHash(password: string): string {
 
 function setCloudEnvironment(): void {
 	process.env.CARDDUE_MODE = 'cloud';
+	delete process.env.CARDDUE_AUTH_MODE;
 	process.env.DATABASE_URL = [
 		'postgresql://carddue_runtime:synthetic-password',
 		'ep-carddue-test.us-west-2.aws.neon.tech/carddue?sslmode=require'
@@ -245,7 +285,22 @@ function setCloudEnvironment(): void {
 	process.env.CARDDUE_ALLOWED_HOSTS = 'cards.example.test';
 	process.env.CARDDUE_GOOGLE_CLIENT_ID = CLIENT_ID;
 	process.env.CARDDUE_GOOGLE_CLIENT_SECRET = CLIENT_SECRET;
+	delete process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH;
 	delete process.env.VERCEL;
+}
+
+function bootstrapHash(token: string): string {
+	return `sha256$${createHash('sha256')
+		.update(BOOTSTRAP_TOKEN_DOMAIN, 'utf8')
+		.update(token, 'ascii')
+		.digest('base64url')}`;
+}
+
+function setGoogleOnlyEnvironment(token: string): void {
+	setCloudEnvironment();
+	process.env.CARDDUE_AUTH_MODE = 'google';
+	delete process.env.CARDDUE_OWNER_PASSWORD_HASH;
+	process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH = bootstrapHash(token);
 }
 
 function startRequest(intent: 'login' | 'link', headers: Record<string, string> = {}): Request {
@@ -266,6 +321,30 @@ async function callStart(cookies: TestCookies, request: Request): Promise<Respon
 async function callCallback(cookies: TestCookies, callbackUrl: string): Promise<Response> {
 	const request = new Request(callbackUrl, { headers: { host: 'cards.example.test' } });
 	return callbackEndpoint({ cookies, request, url: new URL(request.url) } as never);
+}
+
+function bootstrapRequest(setupToken: string): Request {
+	return new Request('https://cards.example.test/api/auth/google/bootstrap', {
+		method: 'POST',
+		headers: {
+			'content-type': 'application/json',
+			host: 'cards.example.test',
+			origin: 'https://cards.example.test',
+			'sec-fetch-site': 'same-origin'
+		},
+		body: JSON.stringify({ setupToken })
+	});
+}
+
+async function callBootstrap(cookies: TestCookies, request: Request): Promise<Response> {
+	return bootstrapEndpoint({ cookies, request, url: new URL(request.url) } as never);
+}
+
+async function callBootstrapContinue(cookies: TestCookies): Promise<Response> {
+	const request = new Request(`https://cards.example.test${GOOGLE_BOOTSTRAP_CONTINUE_PATH}`, {
+		headers: { host: 'cards.example.test', 'sec-fetch-site': 'same-origin' }
+	});
+	return bootstrapContinueEndpoint({ cookies, request, url: new URL(request.url) } as never);
 }
 
 function readTransaction(cookies: TestCookies): GoogleTransaction {
@@ -396,13 +475,354 @@ describe.sequential('single-owner Google OIDC', () => {
 		expect(getCloudRuntimeConfig().googleOidc).toBeNull();
 	});
 
+	it('requires an exact Google-only configuration and canonical optional bootstrap hash', () => {
+		const setupToken = Buffer.alloc(32, 31).toString('base64url');
+		setGoogleOnlyEnvironment(setupToken);
+		expect(getCloudRuntimeConfig()).toMatchObject({
+			authMode: 'google',
+			ownerPasswordHash: null,
+			googleBootstrapHash: bootstrapHash(setupToken)
+		});
+
+		delete process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH;
+		expect(getCloudRuntimeConfig().googleBootstrapHash).toBeNull();
+		process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH = '';
+		expect(() => getCloudRuntimeConfig()).toThrow(/not securely configured/);
+		process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH = `sha256$${'A'.repeat(42)}B`;
+		expect(() => getCloudRuntimeConfig()).toThrow(/not securely configured/);
+
+		process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH = bootstrapHash(setupToken);
+		process.env.CARDDUE_OWNER_PASSWORD_HASH = passwordHash('must not remain configured');
+		expect(() => getCloudRuntimeConfig()).toThrow(/not securely configured/);
+		delete process.env.CARDDUE_OWNER_PASSWORD_HASH;
+		delete process.env.CARDDUE_GOOGLE_CLIENT_SECRET;
+		expect(() => getCloudRuntimeConfig()).toThrow(/not securely configured/);
+		delete process.env.CARDDUE_GOOGLE_CLIENT_ID;
+		expect(() => getCloudRuntimeConfig()).toThrow(/not securely configured/);
+
+		setCloudEnvironment();
+		process.env.CARDDUE_AUTH_MODE = '';
+		expect(() => getCloudRuntimeConfig()).toThrow(/not securely configured/);
+		process.env.CARDDUE_AUTH_MODE = ' password ';
+		expect(() => getCloudRuntimeConfig()).toThrow(/not securely configured/);
+		process.env.CARDDUE_AUTH_MODE = 'password';
+		process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH = bootstrapHash(setupToken);
+		expect(() => getCloudRuntimeConfig()).toThrow(/not securely configured/);
+	});
+
+	it('exposes Google-only mode without a public metadata read and removes password login', async () => {
+		const setupToken = Buffer.alloc(32, 32).toString('base64url');
+		setGoogleOnlyEnvironment(setupToken);
+		const cookies = new TestCookies();
+		const status = await sessionEndpoint({ cookies } as never);
+		expect(await status.json()).toEqual({
+			mode: 'cloud',
+			authMode: 'google',
+			authenticated: false,
+			google: { configured: true, linked: null, bootstrapAvailable: true }
+		});
+		expect(adapter.observedParameters).toEqual([]);
+
+		const malformedLogin = new Request('https://cards.example.test/api/auth/login', {
+			method: 'POST',
+			headers: { 'content-type': 'text/plain', origin: 'https://example.invalid' },
+			body: 'must not be parsed'
+		});
+		const response = await passwordLoginEndpoint({
+			cookies,
+			request: malformedLogin,
+			url: new URL(malformedLogin.url)
+		} as never);
+		expect(response.status).toBe(404);
+		expect(await response.json()).toEqual({
+			error: { code: 'NOT_FOUND', message: 'The requested endpoint is unavailable.' }
+		});
+		await expect(
+			loginWithPassword(
+				new Request('https://cards.example.test/api/auth/login'),
+				'recovery password'
+			)
+		).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 });
+		expect((await callStart(cookies, startRequest('link'))).headers.get('location')).toBe(
+			'/?google=error'
+		);
+		expect(adapter.observedParameters).toEqual([]);
+	});
+
+	it('rejects invalid bootstrap input before database access', async () => {
+		const setupToken = Buffer.alloc(32, 33).toString('base64url');
+		setGoogleOnlyEnvironment(setupToken);
+		const cookies = new TestCookies();
+		const wrongToken = Buffer.alloc(32, 34).toString('base64url');
+		const wrong = await callBootstrap(cookies, bootstrapRequest(wrongToken));
+		expect(wrong.status).toBe(401);
+		expect(await wrong.json()).toEqual({
+			error: {
+				code: 'GOOGLE_BOOTSTRAP_FAILED',
+				message: 'Google setup could not be started.'
+			}
+		});
+		expect(adapter.observedParameters).toEqual([]);
+
+		const sameSiteRequest = bootstrapRequest(setupToken);
+		sameSiteRequest.headers.set('sec-fetch-site', 'same-site');
+		expect((await callBootstrap(cookies, sameSiteRequest)).status).toBe(401);
+		expect(adapter.observedParameters).toEqual([]);
+
+		const missingOrigin = bootstrapRequest(setupToken);
+		missingOrigin.headers.delete('origin');
+		expect((await callBootstrap(cookies, missingOrigin)).status).toBe(401);
+		expect(adapter.observedParameters).toEqual([]);
+
+		const wrongType = bootstrapRequest(setupToken);
+		wrongType.headers.set('content-type', 'text/plain');
+		expect((await callBootstrap(cookies, wrongType)).status).toBe(401);
+		expect(adapter.observedParameters).toEqual([]);
+
+		const oversized = new Request('https://cards.example.test/api/auth/google/bootstrap', {
+			method: 'POST',
+			headers: {
+				'content-type': 'application/json',
+				host: 'cards.example.test',
+				origin: 'https://cards.example.test',
+				'content-length': '1000'
+			},
+			body: JSON.stringify({ setupToken })
+		});
+		expect((await callBootstrap(cookies, oversized)).status).toBe(401);
+		expect(adapter.observedParameters).toEqual([]);
+	});
+
+	it('burns one bootstrap verifier, binds the first subject, and creates an app session', async () => {
+		const setupToken = Buffer.alloc(32, 35).toString('base64url');
+		setGoogleOnlyEnvironment(setupToken);
+		const cookies = new TestCookies();
+		const started = await callBootstrap(cookies, bootstrapRequest(setupToken));
+		expect(started.status).toBe(200);
+		expect(started.headers.get('cache-control')).toContain('no-store');
+		expect(await started.json()).toEqual({ continueTo: GOOGLE_BOOTSTRAP_CONTINUE_PATH });
+		expect(started.headers.get('location')).toBeNull();
+
+		const transaction = readTransaction(cookies);
+		expect(transaction.intent).toBe('bootstrap');
+		expect(transaction.linkSessionToken).toBeNull();
+		expect(transaction.bootstrapClaimRef).toMatch(/^[A-Za-z0-9_-]{43}$/);
+		expect(transaction.bootstrapClaimRef).not.toBe(setupToken);
+		expect(cookies.values.get(GOOGLE_TRANSACTION_COOKIE_NAME)).not.toContain(setupToken);
+		expect(adapter.metadata.get(BOOTSTRAP_CLAIM_METADATA_KEY)).toBe(
+			`active:v1:${transaction.bootstrapClaimRef}`
+		);
+		expect(cookies.setOptions.get(GOOGLE_TRANSACTION_COOKIE_NAME)).toMatchObject({
+			path: '/',
+			secure: true,
+			httpOnly: true,
+			sameSite: 'lax',
+			maxAge: 600
+		});
+
+		const replayCookies = new TestCookies();
+		const replayStart = await callBootstrap(replayCookies, bootstrapRequest(setupToken));
+		expect(replayStart.status).toBe(401);
+		expect(replayCookies.values.has(GOOGLE_TRANSACTION_COOKIE_NAME)).toBe(false);
+
+		const continued = await callBootstrapContinue(cookies);
+		expect(continued.status).toBe(303);
+		const providerUrl = new URL(continued.headers.get('location')!);
+		expect(providerUrl.origin + providerUrl.pathname).toBe(
+			'https://accounts.google.com/o/oauth2/v2/auth'
+		);
+		expect(providerUrl.searchParams.get('prompt')).toBe('select_account');
+		expect(providerUrl.searchParams.get('scope')).toBe('openid');
+		expect(providerUrl.searchParams.get('code_challenge_method')).toBe('S256');
+		expect(providerUrl.toString()).not.toContain(setupToken);
+
+		const subject = 'google-only-owner';
+		const syntheticEmail = ['google-only-owner', 'example.test'].join('@');
+		const originalTransactionCookie = cookies.values.get(GOOGLE_TRANSACTION_COOKIE_NAME)!;
+		const fetchMock = installTokenResponse(
+			await signIdToken({ nonce: transaction.nonce, subject, email: syntheticEmail })
+		);
+		const completed = await callCallback(cookies, callbackUrl(transaction));
+		expect(completed.headers.get('location')).toBe('/?google=linked');
+		expect(adapter.metadata.get(LINK_METADATA_KEY)).toBe(linkedReference(subject));
+		const sessionToken = cookies.values.get(SESSION_COOKIE_NAME);
+		expect(sessionToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+		const callbackReplayCookies = new TestCookies();
+		callbackReplayCookies.values.set(GOOGLE_TRANSACTION_COOKIE_NAME, originalTransactionCookie);
+		const replay = await callCallback(callbackReplayCookies, callbackUrl(transaction));
+		expect(replay.headers.get('location')).toBe('/?google=error');
+		expect(callbackReplayCookies.values.has(SESSION_COOKIE_NAME)).toBe(false);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+
+		delete process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH;
+		expect(await authenticateSession(sessionToken)).toBe(true);
+		const loginCookies = new TestCookies();
+		const loginStart = await callStart(loginCookies, startRequest('login'));
+		expect(loginStart.headers.get('location')).toContain('accounts.google.com');
+		const loginTransaction = readTransaction(loginCookies);
+		installTokenResponse(await signIdToken({ nonce: loginTransaction.nonce, subject }));
+		const login = await callCallback(loginCookies, callbackUrl(loginTransaction));
+		expect(login.headers.get('location')).toBe('/?google=login');
+		expect(loginCookies.values.get(SESSION_COOKIE_NAME)).toMatch(/^[A-Za-z0-9_-]{43}$/);
+		const durable = JSON.stringify({
+			parameters: adapter.observedParameters,
+			metadata: [...adapter.metadata]
+		});
+		expect(durable).not.toContain(setupToken);
+		expect(durable).not.toContain(bootstrapHash(setupToken));
+		expect(durable).not.toContain(subject);
+		expect(durable).not.toContain(syntheticEmail);
+	});
+
+	it('revokes every pending bootstrap transaction when its configured verifier changes', async () => {
+		const setupToken = Buffer.alloc(32, 36).toString('base64url');
+		const replacementToken = Buffer.alloc(32, 37).toString('base64url');
+		setGoogleOnlyEnvironment(setupToken);
+		const cookies = new TestCookies();
+		expect((await callBootstrap(cookies, bootstrapRequest(setupToken))).status).toBe(200);
+		const originalCookie = cookies.values.get(GOOGLE_TRANSACTION_COOKIE_NAME)!;
+		const transaction = readTransaction(cookies);
+		const marker = privateFingerprint(transaction.transactionToken, TRANSACTION_REFERENCE_PURPOSE);
+
+		process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH = bootstrapHash(replacementToken);
+		const continued = await callBootstrapContinue(cookies);
+		expect(continued.headers.get('location')).toBe('/?google=error');
+		expect(adapter.rates.has(marker)).toBe(true);
+
+		cookies.values.set(GOOGLE_TRANSACTION_COOKIE_NAME, originalCookie);
+		const fetchMock = installTokenResponse(await signIdToken({ nonce: transaction.nonce }));
+		const callback = await callCallback(cookies, callbackUrl(transaction));
+		expect(callback.headers.get('location')).toBe('/?google=error');
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(adapter.rates.has(marker)).toBe(true);
+		expect(adapter.metadata.has(LINK_METADATA_KEY)).toBe(false);
+
+		const replacementCookies = new TestCookies();
+		expect(
+			(await callBootstrap(replacementCookies, bootstrapRequest(replacementToken))).status
+		).toBe(200);
+	});
+
+	it('revokes a pending bootstrap transaction when its verifier is removed', async () => {
+		const setupToken = Buffer.alloc(32, 42).toString('base64url');
+		setGoogleOnlyEnvironment(setupToken);
+		const cookies = new TestCookies();
+		expect((await callBootstrap(cookies, bootstrapRequest(setupToken))).status).toBe(200);
+		const transaction = readTransaction(cookies);
+		delete process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH;
+		const fetchMock = installTokenResponse(await signIdToken({ nonce: transaction.nonce }));
+		const callback = await callCallback(cookies, callbackUrl(transaction));
+		expect(callback.headers.get('location')).toBe('/?google=error');
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(adapter.metadata.has(LINK_METADATA_KEY)).toBe(false);
+		expect(cookies.values.has(SESSION_COOKIE_NAME)).toBe(false);
+	});
+
+	it.each(['subject-race', 'database-failure'] as const)(
+		'issues no session when bootstrap finalization encounters a %s',
+		async (failure) => {
+			const setupToken = Buffer.alloc(32, failure === 'subject-race' ? 39 : 40).toString(
+				'base64url'
+			);
+			setGoogleOnlyEnvironment(setupToken);
+			const cookies = new TestCookies();
+			expect((await callBootstrap(cookies, bootstrapRequest(setupToken))).status).toBe(200);
+			const transaction = readTransaction(cookies);
+			if (failure === 'subject-race') {
+				adapter.metadata.set(LINK_METADATA_KEY, linkedReference('race-winner'));
+			} else {
+				adapter.failBootstrapSubject = true;
+			}
+			installTokenResponse(
+				await signIdToken({ nonce: transaction.nonce, subject: 'late-bootstrap-subject' })
+			);
+			const response = await callCallback(cookies, callbackUrl(transaction));
+			expect(response.headers.get('location')).toBe('/?google=error');
+			expect(cookies.values.has(SESSION_COOKIE_NAME)).toBe(false);
+			if (failure === 'subject-race') {
+				expect(adapter.metadata.get(LINK_METADATA_KEY)).toBe(linkedReference('race-winner'));
+			} else {
+				expect(adapter.metadata.has(LINK_METADATA_KEY)).toBe(false);
+			}
+		}
+	);
+
+	it('allows only one concurrent start for the same bootstrap verifier', async () => {
+		const setupToken = Buffer.alloc(32, 41).toString('base64url');
+		setGoogleOnlyEnvironment(setupToken);
+		const cookies = [new TestCookies(), new TestCookies()];
+		const responses = await Promise.all(
+			cookies.map((cookieJar) => callBootstrap(cookieJar, bootstrapRequest(setupToken)))
+		);
+		expect(responses.map(({ status }) => status).sort()).toEqual([200, 401]);
+		expect(
+			cookies.filter((cookieJar) => cookieJar.values.has(GOOGLE_TRANSACTION_COOKIE_NAME))
+		).toHaveLength(1);
+	});
+
+	it('serializes verifier replacement ahead of an old callback finalization', async () => {
+		const setupToken = Buffer.alloc(32, 43).toString('base64url');
+		const replacementToken = Buffer.alloc(32, 44).toString('base64url');
+		setGoogleOnlyEnvironment(setupToken);
+		const oldCookies = new TestCookies();
+		expect((await callBootstrap(oldCookies, bootstrapRequest(setupToken))).status).toBe(200);
+		const transaction = readTransaction(oldCookies);
+		installTokenResponse(
+			await signIdToken({ nonce: transaction.nonce, subject: 'old-callback-subject' })
+		);
+
+		let signalFinalization!: () => void;
+		let releaseFinalization!: () => void;
+		const finalizationStarted = new Promise<void>((resolve) => {
+			signalFinalization = resolve;
+		});
+		const finalizationRelease = new Promise<void>((resolve) => {
+			releaseFinalization = resolve;
+		});
+		adapter.beforeBootstrapSubject = async () => {
+			signalFinalization();
+			await finalizationRelease;
+		};
+		const oldCallback = callCallback(oldCookies, callbackUrl(transaction));
+		await finalizationStarted;
+
+		process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH = bootstrapHash(replacementToken);
+		const replacementCookies = new TestCookies();
+		const replacementStart = await callBootstrap(
+			replacementCookies,
+			bootstrapRequest(replacementToken)
+		);
+		expect(replacementStart.status).toBe(200);
+		releaseFinalization();
+
+		const oldResult = await oldCallback;
+		expect(oldResult.headers.get('location')).toBe('/?google=error');
+		expect(oldCookies.values.has(SESSION_COOKIE_NAME)).toBe(false);
+		expect(adapter.metadata.has(LINK_METADATA_KEY)).toBe(false);
+		const replacementTransaction = readTransaction(replacementCookies);
+		expect(adapter.metadata.get(BOOTSTRAP_CLAIM_METADATA_KEY)).toBe(
+			`active:v1:${replacementTransaction.bootstrapClaimRef}`
+		);
+	});
+
+	it('invalidates password sessions when cloud authentication switches to Google-only', async () => {
+		const token = await loginWithPassword(
+			new Request('https://cards.example.test/api/auth/login'),
+			'recovery password'
+		);
+		setGoogleOnlyEnvironment(Buffer.alloc(32, 38).toString('base64url'));
+		expect(await authenticateSession(token)).toBe(false);
+		expect(adapter.sessions.size).toBe(0);
+	});
+
 	it('does not query linked metadata for an anonymous session status request', async () => {
 		const cookies = new TestCookies();
 		const response = await sessionEndpoint({ cookies } as never);
 		expect(await response.json()).toEqual({
 			mode: 'cloud',
+			authMode: 'password',
 			authenticated: false,
-			google: { configured: true, linked: null }
+			google: { configured: true, linked: null, bootstrapAvailable: false }
 		});
 		expect(adapter.observedParameters).toEqual([]);
 	});
@@ -418,8 +838,9 @@ describe.sequential('single-owner Google OIDC', () => {
 		const response = await sessionEndpoint({ cookies } as never);
 		expect(await response.json()).toEqual({
 			mode: 'cloud',
+			authMode: 'password',
 			authenticated: true,
-			google: { configured: true, linked: true }
+			google: { configured: true, linked: true, bootstrapAvailable: false }
 		});
 	});
 

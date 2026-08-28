@@ -4,15 +4,19 @@ import { isDirectNeonDatabaseHost } from './neon-url.js';
 import { parseScryptPasswordHash } from './password-hash';
 
 export type CardDueMode = 'local' | 'cloud';
+export type CloudAuthMode = 'password' | 'google';
+export type RuntimeAuthMode = 'local' | CloudAuthMode;
 
 export interface CloudRuntimeConfig {
 	databaseUrl: string;
 	databaseRole: string;
 	masterKey: Buffer;
-	ownerPasswordHash: string;
+	authMode: CloudAuthMode;
+	ownerPasswordHash: string | null;
 	allowedHosts: ReadonlySet<string>;
 	sessionTtlSeconds: number;
 	googleOidc: GoogleOidcConfig | null;
+	googleBootstrapHash: string | null;
 }
 
 export interface GoogleOidcConfig {
@@ -23,6 +27,7 @@ export interface GoogleOidcConfig {
 const DEFAULT_SESSION_TTL_HOURS = 24;
 const MIN_SESSION_TTL_HOURS = 1;
 const MAX_SESSION_TTL_HOURS = 24 * 30;
+const GOOGLE_BOOTSTRAP_HASH_PATTERN = /^sha256\$[A-Za-z0-9_-]{43}$/;
 
 function required(name: string): string {
 	const value = process.env[name]?.trim();
@@ -146,6 +151,33 @@ function parseGoogleOidcConfig(): GoogleOidcConfig | null {
 	return { clientId, clientSecret };
 }
 
+function parseAuthMode(): CloudAuthMode {
+	const value = process.env.CARDDUE_AUTH_MODE;
+	if (value === undefined || value === 'password') return 'password';
+	if (value === 'google') return 'google';
+	throw new AppError('CLOUD_MISCONFIGURED', 'Cloud mode is not securely configured.', 503);
+}
+
+function isCanonicalBase64Url32(value: string): boolean {
+	if (!/^[A-Za-z0-9_-]{43}$/.test(value)) return false;
+	const decoded = Buffer.from(value, 'base64url');
+	return decoded.length === 32 && decoded.toString('base64url') === value;
+}
+
+function parseGoogleBootstrapHash(authMode: CloudAuthMode): string | null {
+	const value = process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH;
+	if (value === undefined) return null;
+	const encoded = value.startsWith('sha256$') ? value.slice('sha256$'.length) : '';
+	if (
+		authMode !== 'google' ||
+		!GOOGLE_BOOTSTRAP_HASH_PATTERN.test(value) ||
+		!isCanonicalBase64Url32(encoded)
+	) {
+		throw new AppError('CLOUD_MISCONFIGURED', 'Cloud mode is not securely configured.', 503);
+	}
+	return value;
+}
+
 export function getRuntimeMode(): CardDueMode {
 	const mode = process.env.CARDDUE_MODE?.trim().toLowerCase();
 	if (!mode || mode === 'local') {
@@ -166,16 +198,31 @@ export function getCloudRuntimeConfig(): CloudRuntimeConfig {
 	}
 	const { databaseUrl, databaseRole } = parseDatabaseUrl(required('DATABASE_URL'));
 	const masterKey = parseMasterKey(required('CARDDUE_MASTER_KEY'));
-	const ownerPasswordHash = required('CARDDUE_OWNER_PASSWORD_HASH');
-	parseScryptPasswordHash(ownerPasswordHash);
+	const authMode = parseAuthMode();
+	const googleOidc = parseGoogleOidcConfig();
+	let ownerPasswordHash: string | null = null;
+	if (authMode === 'password') {
+		ownerPasswordHash = required('CARDDUE_OWNER_PASSWORD_HASH');
+		parseScryptPasswordHash(ownerPasswordHash);
+	} else {
+		if (process.env.CARDDUE_OWNER_PASSWORD_HASH !== undefined || !googleOidc) {
+			throw new AppError('CLOUD_MISCONFIGURED', 'Cloud mode is not securely configured.', 503);
+		}
+	}
 	const allowedHosts = parseAllowedHosts(required('CARDDUE_ALLOWED_HOSTS'));
 	return {
 		databaseUrl,
 		databaseRole,
 		masterKey,
+		authMode,
 		ownerPasswordHash,
 		allowedHosts,
 		sessionTtlSeconds: parseSessionTtl(),
-		googleOidc: parseGoogleOidcConfig()
+		googleOidc,
+		googleBootstrapHash: parseGoogleBootstrapHash(authMode)
 	};
+}
+
+export function getRuntimeAuthMode(): RuntimeAuthMode {
+	return getRuntimeMode() === 'local' ? 'local' : getCloudRuntimeConfig().authMode;
 }

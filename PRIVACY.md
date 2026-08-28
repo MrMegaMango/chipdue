@@ -10,11 +10,11 @@ Local mode is the default. CardDue runs as a loopback-only service for one trust
 
 ### Private cloud mode
 
-Private cloud mode is an opt-in, single-owner deployment on Vercel backed by Neon Postgres. It is not a shared account, family service, public SaaS, or multi-user authorization model. The production hostname is public on the internet, but CardDue requires either its recovery password or the one explicitly linked Google identity before returning financial APIs.
+Private cloud mode is an opt-in, single-owner deployment on Vercel backed by Neon Postgres. It is not a shared account, family service, public SaaS, or multi-user authorization model. The production hostname is public on the internet, but CardDue requires the configured password or the one explicitly bound Google identity before returning financial APIs. Explicit Google-only mode has no CardDue password endpoint.
 
-CardDue encrypts card payloads, Plaid access tokens, Plaid Item IDs, and institution names with AES-256-GCM inside the Vercel Function before sending them to Neon. Neon receives ciphertext plus limited operational metadata: opaque keyed identifiers, record source and status, schema version, timestamps, password-bound session-token hashes, keyed rate-limit buckets, short-lived keyed OAuth transaction markers, and—if Google is linked—one keyed Google identity fingerprint. It never receives the raw Google subject or email from CardDue. This metadata can still reveal approximate record counts, activity times, and whether records came from manual entry or Plaid.
+CardDue encrypts card payloads, Plaid access tokens, Plaid Item IDs, and institution names with AES-256-GCM inside the Vercel Function before sending them to Neon. Neon receives ciphertext plus limited operational metadata: opaque keyed identifiers, record source and status, schema version, timestamps, authentication-config-bound keyed session-token hashes, keyed rate-limit buckets, short-lived keyed OAuth transaction markers, an opaque Google-only bootstrap claim state when used, and—if Google is linked—one keyed Google identity fingerprint. It never receives the raw setup token, Google subject, or email from CardDue. This metadata can still reveal approximate record counts, activity times, and whether records came from manual entry or Plaid.
 
-The hosted design is not zero-knowledge or end-to-end encryption. Vercel stores the production database URL, encryption key, and password hash and supplies them to the running Function. That Function must decrypt records to display them or sync Plaid. A Neon-only database disclosure should not reveal the encrypted fields without the separate key; compromise of the Vercel project, runtime, owner account, or recovery bundle can expose them.
+The hosted design is not zero-knowledge or end-to-end encryption. Vercel stores the production database URL, encryption key, and the selected authentication configuration: a password hash in password mode, or Google credentials plus a temporary bootstrap verifier during Google-only setup. The Function must decrypt records to display them or sync Plaid. A Neon-only database disclosure should not reveal the encrypted fields without the separate key; compromise of the Vercel project, runtime, owner account, or recovery material can expose them.
 
 ## Data CardDue keeps
 
@@ -31,7 +31,7 @@ CardDue stores only the fields required for reminders:
 
 It does not store full account numbers, credentials entered into Plaid Link, identity profiles, addresses, transaction history, or raw Plaid responses. Plaid responses are mapped immediately to the allowlisted reminder fields and then discarded.
 
-When Google sign-in is enabled, CardDue does not request or store the Google email, name, picture, profile, access token, ID token, or refresh token. A short-lived encrypted browser cookie carries the OAuth state, nonce, PKCE verifier, intent, expiry, and—for linking only—the initiating CardDue session. The cookie is cleared at callback; a validated one-time database marker is atomically consumed, while abandoned markers expire and are pruned.
+When Google sign-in is enabled, CardDue does not request or store the Google email, name, picture, profile, access token, ID token, or refresh token. A short-lived encrypted browser cookie carries the OAuth state, nonce, PKCE verifier, intent, expiry, and either the initiating CardDue session or an opaque bootstrap-claim reference. The raw Google-only setup token is never stored in that cookie or in Neon. The cookie is cleared at callback; a validated one-time database marker is atomically consumed, while abandoned markers expire and are pruned.
 
 The linked fingerprint cannot be removed or replaced through the application in this release. Removing both Google OAuth environment variables and redeploying disables Google login but leaves that opaque fingerprint in Neon backups and the live metadata row. A reviewed database recovery procedure is required to erase or replace the binding.
 
@@ -47,7 +47,7 @@ Plaid is optional in both modes. When you explicitly start Plaid Link:
 - The server exchanges it and requests only Liabilities data from Plaid.
 - CardDue maps the response to its minimal fields and discards the raw payload.
 
-Google sign-in is optional in private cloud mode. It is first linked only from an existing password-authenticated CardDue session. During each Google flow, the browser contacts Google and Google necessarily receives network and service metadata such as the IP address, time, requested `openid` scope, and CardDue hostname. Google's consent screen also displays the User Support Email configured by the deployer and is reachable through the public login start; use a dedicated non-personal monitored alias or group whose membership is private. Google returns a short-lived authorization code to CardDue's exact callback. The server exchanges and validates it, keeps only a keyed issuer-and-subject fingerprint for the linked owner, issues CardDue's own opaque session, and discards the provider tokens.
+Google authentication is optional in private cloud mode. Password mode first links it only from an existing CardDue session. Google-only mode instead uses a temporary high-entropy operator setup token and has no password fallback. During each Google flow, the browser contacts Google and Google necessarily receives network and service metadata such as the IP address, time, requested `openid` scope, and CardDue hostname. Google's consent screen also displays the User Support Email configured by the deployer and is reachable through the public login start; use a dedicated non-personal monitored alias or group whose membership is private. Google returns a short-lived authorization code to CardDue's exact callback. The server exchanges and validates it, keeps only a keyed issuer-and-subject fingerprint for the linked owner, issues CardDue's own opaque session, and discards the provider tokens.
 
 The CardDue application contains no analytics, advertising, telemetry, crash-reporting SDK, remote font, or webhook relay. It does not load Google JavaScript; the optional flow is an ordinary full-page redirect. Hosting and identity providers may retain infrastructure or authentication logs according to their plans and policies.
 
@@ -59,7 +59,7 @@ Dashboard and API responses use `Cache-Control: no-store`. Local mode rejects no
 
 ## Recovery and backups
 
-The cloud secret generator writes a recovery bundle to a caller-selected private path outside every Git checkout. It contains the initial login password, AES key, password hash, and restricted database-role password. Treat the complete bundle as plaintext financial access: keep it in encrypted offline storage, never upload it to the repository or a CI artifact, and never give it to a preview deployment.
+The cloud secret generator writes a recovery bundle to a caller-selected private path outside every Git checkout. It contains the initial password-mode login value and hash, AES key, and restricted database-role password. Google-only deployments leave the password values unconfigured and use a separate temporary bootstrap bundle. Treat either complete bundle as authentication or financial access: keep it in encrypted offline storage, never upload it to the repository or a CI artifact, and never give it to a preview deployment.
 
 Neon backups and point-in-time recovery contain CardDue ciphertext and metadata. They remain dependent on the separate AES key. Conversely, the recovery bundle cannot reconstruct a lost database. Keep independently protected copies of both and periodically test a restore without using production.
 
@@ -72,7 +72,7 @@ Calendar files omit monetary amounts by default. Cloud exports require an authen
 ## Limits of protection
 
 - A compromised operating system, browser, browser extension, Vercel runtime, Vercel account, or recovery bundle can access data CardDue is able to display.
-- A compromised linked Google account can authenticate to CardDue. Protect it with phishing-resistant MFA and retain the independent recovery password.
+- A compromised linked Google account can authenticate to CardDue. Protect it with phishing-resistant MFA. Password mode retains an independent recovery password; Google-only mode deliberately does not.
 - Local encryption mainly reduces accidental disclosure and repository leakage because the key and database reside on the same computer.
 - Cloud application encryption protects against a database-only disclosure, not a simultaneous Vercel runtime and database compromise.
 - Plaid and connected institutions process information under their own terms and privacy policies.
