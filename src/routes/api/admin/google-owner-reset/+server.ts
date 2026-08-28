@@ -30,9 +30,12 @@ export const POST: RequestHandler = async ({ request, url }) => {
 		return new Response(null, { status: 404, headers: privateResponseHeaders });
 	}
 
+	const backupPrefix = `recovery_${createHash('sha256').update(token, 'ascii').digest('hex').slice(0, 16)}_`;
 	await cloudQuery(
-		`DELETE FROM public.carddue_metadata
-		 WHERE key IN ('google_oidc_subject_ref_v1', 'google_oidc_bootstrap_claim_ref_v1')`
+		`UPDATE public.carddue_metadata
+		 SET key = $1 || key
+		 WHERE key IN ('google_oidc_subject_ref_v1', 'google_oidc_bootstrap_claim_ref_v1')`,
+		[backupPrefix]
 	);
 	return new Response(null, { status: 204, headers: privateResponseHeaders });
 };
