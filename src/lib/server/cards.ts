@@ -135,8 +135,12 @@ function isStoredIssuerLogo(value: unknown): value is string | null | undefined 
 	);
 }
 
-function decodePayload(row: CardRow): CardPayload {
-	const payload = decryptJson<CardPayload>(row.payload_enc, `card:${row.id}`);
+function decodePayload(row: CardRow): CardPayload | null {
+	const payload = decryptJson<CardPayload & { recordType?: unknown }>(
+		row.payload_enc,
+		`card:${row.id}`
+	);
+	if (payload && (payload.recordType === 'account' || payload.recordType === 'bonus')) return null;
 	if (
 		!payload ||
 		typeof payload.nickname !== 'string' ||
@@ -157,8 +161,9 @@ function decodePayload(row: CardRow): CardPayload {
 	return payload;
 }
 
-function rowToCard(row: CardRow): Card {
+function rowToCard(row: CardRow): Card | null {
 	const payload = decodePayload(row);
+	if (!payload) return null;
 	return {
 		id: row.id,
 		source: row.source,
@@ -229,7 +234,7 @@ export async function listCards(): Promise<Card[]> {
 						 FROM cards`
 					)
 					.all() as CardRow[]);
-	return sortCards(rows.map(rowToCard));
+	return sortCards(rows.map(rowToCard).filter((card): card is Card => card !== null));
 }
 
 export async function getCard(id: string): Promise<Card> {
@@ -251,7 +256,9 @@ export async function getCard(id: string): Promise<Card> {
 					)
 					.get(id) as CardRow | undefined);
 	if (!row) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
-	return rowToCard(row);
+	const card = rowToCard(row);
+	if (!card) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
+	return card;
 }
 
 export async function createManualCard(input: CreateManualCardData): Promise<Card> {
@@ -327,7 +334,9 @@ export async function updateManualCard(id: string, changes: UpdateManualCardData
 			[encrypted, now, id]
 		);
 		if (!rows[0]) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
-		return rowToCard(rows[0]);
+		const card = rowToCard(rows[0]);
+		if (!card) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
+		return card;
 	}
 
 	const result = getDatabase()
@@ -481,7 +490,7 @@ export async function readPlaidTransactionState(
 					)
 					.all(plaidItemId) as CardRow[]);
 	const enabledRows = rows
-		.map((row) => ({ row, history: decodePayload(row).transactionHistory }))
+		.map((row) => ({ row, history: decodePayload(row)?.transactionHistory }))
 		.filter(
 			(value): value is { row: CardRow; history: StoredTransactionHistory } =>
 				value.history !== undefined
@@ -548,7 +557,7 @@ export async function listCardTransactions(
 			409
 		);
 	}
-	const history = decodePayload(row).transactionHistory;
+	const history = decodePayload(row)?.transactionHistory;
 	if (!history) {
 		throw new AppError(
 			'TRANSACTION_HISTORY_NOT_ENABLED',

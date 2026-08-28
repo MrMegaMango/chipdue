@@ -2,7 +2,7 @@
 	"name": "chipdue",
 	"private": true,
 	"version": "0.0.1",
-	"description": "A privacy-first credit card due-date tracker with local and single-owner cloud modes.",
+	"description": "A privacy-first financial workspace for accounts, bonuses, investments, and credit-card deadlines.",
 	"license": "MIT",
 	"type": "module",
 	"engines": {

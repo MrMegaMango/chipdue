@@ -6,10 +6,10 @@
 </script>
 
 <svelte:head>
-	<title>ChipDue — Credit card due dates, kept private</title>
+	<title>ChipDue — Your private financial command center</title>
 	<meta
 		name="description"
-		content="A private, local-first dashboard for credit card statement balances and due dates."
+		content="A private, local-first dashboard for financial accounts, signup bonuses, brokerage performance, and credit-card deadlines."
 	/>
 	<meta name="theme-color" content="#f7f6f1" />
 	<link rel="icon" href={asset('/favicon.svg')} />

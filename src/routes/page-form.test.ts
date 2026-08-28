@@ -226,14 +226,13 @@ describe('banking visual identity', () => {
 });
 
 describe('returning-user dashboard', () => {
-	it('replaces onboarding copy with a compact toolbar after a card is added', () => {
+	it('replaces onboarding copy with a compact toolbar after any financial record is added', () => {
 		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
-		expect(source).toContain(
-			'const showOnboardingHero = $derived(hasLoadedCards && cards.length === 0)'
-		);
+		expect(source).toContain('workspaceAccounts.length === 0');
+		expect(source).toContain('workspaceBonuses.length === 0');
 		expect(source).toContain('{#if showOnboardingHero}');
 		expect(source).toContain('class:dashboard-toolbar={!showOnboardingHero}');
-		expect(source).toContain('Cards &amp; deadlines');
+		expect(source).toContain('Financial command center');
 		expect(source).toContain('class:visually-hidden={!showOnboardingHero}');
 	});
 });

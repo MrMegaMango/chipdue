@@ -12,13 +12,17 @@ Local mode is the default. ChipDue runs as a loopback-only service for one trust
 
 Private cloud mode is an opt-in, single-owner deployment on Vercel backed by Neon Postgres. It is not a shared account, family service, public SaaS, or multi-user authorization model. The production hostname is public on the internet, but ChipDue requires the configured password or the one explicitly bound Google identity before returning financial APIs. Explicit Google-only mode has no ChipDue password endpoint.
 
-ChipDue encrypts card payloads, enabled transaction history, Plaid transaction cursors, access tokens, Plaid Item IDs, and institution names with AES-256-GCM inside the Vercel Function before sending them to Neon. Neon receives ciphertext plus limited operational metadata: opaque keyed identifiers, record source and status, schema version, timestamps, authentication-config-bound keyed session-token hashes, keyed rate-limit buckets, short-lived keyed OAuth transaction markers, an opaque Google-only bootstrap claim state when used, and—if Google is linked—one keyed Google identity fingerprint. It never receives the raw setup token, Google subject, or email from ChipDue. This metadata can still reveal approximate record counts, activity times, and whether records came from manual entry or Plaid.
+ChipDue encrypts account and bonus records, card payloads, enabled transaction history, Plaid transaction cursors, access tokens, Plaid Item IDs, and institution names with AES-256-GCM inside the Vercel Function before sending them to Neon. Neon receives ciphertext plus limited operational metadata: opaque keyed identifiers, record source and Plaid connection status, schema version, timestamps, authentication-config-bound keyed session-token hashes, keyed rate-limit buckets, short-lived keyed OAuth transaction markers, an opaque Google-only bootstrap claim state when used, and—if Google is linked—one keyed Google identity fingerprint. It never receives the raw setup token, Google subject, or email from ChipDue. This metadata can still reveal approximate record counts, activity times, and whether records came from manual entry or Plaid.
 
 The hosted design is not zero-knowledge or end-to-end encryption. Vercel stores the production database URL, encryption key, and the selected authentication configuration: a password hash in password mode, or Google credentials plus a temporary bootstrap verifier during Google-only setup. The Function must decrypt records to display them or sync Plaid. A Neon-only database disclosure should not reveal the encrypted fields without the separate key; compromise of the Vercel project, runtime, owner account, or recovery material can expose them.
 
 ## Data ChipDue keeps
 
-ChipDue stores only the fields required for reminders:
+ChipDue stores only the fields required for the private financial workspace:
+
+- A user-selected account nickname, optional institution, account type, personal or business classification, lifecycle status, and optional last four characters
+- Optional account balance, brokerage cost basis or contributions, opening date, and private notes
+- A user-selected bonus name, optional linked account and institution, reward value, lifecycle status, requirements checklist, opening date, requirement deadline, expected or actual payout dates, safe-to-close date, and private notes
 
 - A user-selected card nickname and optional issuer name
 - Optional last four digits
@@ -64,7 +68,7 @@ The cloud secret generator writes a recovery bundle to a caller-selected private
 
 Neon backups and point-in-time recovery contain ChipDue ciphertext and metadata. They remain dependent on the separate AES key. Conversely, the recovery bundle cannot reconstruct a lost database. Keep independently protected copies of both and periodically test a restore without using production.
 
-Losing the AES key makes existing encrypted card and Plaid records unrecoverable. Replacing `CARDDUE_MASTER_KEY` does not rotate existing ciphertext; this release has no automatic bulk re-encryption workflow. Provider free-tier retention and availability are not permanent guarantees.
+Losing the AES key makes existing encrypted account, bonus, card, and Plaid records unrecoverable. Replacing `CARDDUE_MASTER_KEY` does not rotate existing ciphertext; this release has no automatic bulk re-encryption workflow. Provider free-tier retention and availability are not permanent guarantees.
 
 ## Calendar exports
 

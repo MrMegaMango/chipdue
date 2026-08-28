@@ -2,7 +2,7 @@
 
 ## Goal
 
-Prevent ChipDue's source repository, Git history, CI, logs, browser storage, and normal runtime behavior from disclosing personal financial data or credentials.
+Prevent ChipDue's source repository, Git history, CI, logs, browser storage, and normal runtime behavior from disclosing account, bonus, investment, card, or credential data.
 
 ChipDue has two supported, single-owner deployments. Local and cloud mode do not share the same trust boundary.
 

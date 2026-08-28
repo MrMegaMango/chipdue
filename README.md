@@ -1,6 +1,6 @@
 # ChipDue
 
-ChipDue is a privacy-first dashboard for tracking credit-card statement balances, minimum payments, due dates, and opt-in transaction activity. It works entirely in manual mode and can optionally sync card details through Plaid Liabilities and Transactions.
+ChipDue is a privacy-first financial workspace for tracking bank and brokerage accounts, signup bonuses, investment performance, credit-card payments, and the deadlines that connect them. Accounts and bonuses work entirely in manual mode, while the credit-card module can optionally sync card details through Plaid Liabilities and Transactions.
 
 Choose one of two deployment modes:
 
@@ -11,10 +11,13 @@ Choose one of two deployment modes:
 
 ## Features
 
+- Keep a private inventory of personal and business checking, savings, cash-management, and brokerage accounts.
+- Track signup bonuses from opening through requirements, qualification, payout, and safe-to-close dates.
+- Record brokerage balances and cost basis to see simple performance without turning ChipDue into a trading terminal.
 - Track statement balance, minimum due, current balance, due date, statement date, and autopay status.
 - Optionally link one Google account for cloud sign-in without storing an email, profile, Google token, or refresh token.
 - Connect Plaid only when you explicitly choose to; manual mode never contacts Plaid.
-- Encrypt card payloads, transaction history, Plaid cursors, access tokens, Item IDs, and institution names with AES-256-GCM.
+- Encrypt account and bonus records, card payloads, transaction history, Plaid cursors, access tokens, Item IDs, and institution names with AES-256-GCM.
 - Request Plaid Liabilities and, with explicit consent, up to 24 months of card transactions—never identity or full account numbers.
 - Export due dates as an iCalendar file, with amounts omitted by default.
 - Keep financial data out of browser persistence, logs, source code, CI, and Git history.

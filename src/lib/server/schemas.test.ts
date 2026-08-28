@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { createManualCardSchema, isoDateSchema, updateManualCardSchema } from './schemas';
+import {
+	createBonusSchema,
+	createFinancialAccountSchema,
+	createManualCardSchema,
+	isoDateSchema,
+	updateBonusSchema,
+	updateFinancialAccountSchema,
+	updateManualCardSchema
+} from './schemas';
 
 describe('card request validation', () => {
 	it('rejects impossible calendar dates', () => {
@@ -19,5 +27,42 @@ describe('card request validation', () => {
 
 	it('requires at least one field for updates', () => {
 		expect(updateManualCardSchema.safeParse({}).success).toBe(false);
+	});
+});
+
+describe('financial workspace validation', () => {
+	it('accepts bank and brokerage accounts without full account numbers', () => {
+		expect(
+			createFinancialAccountSchema.safeParse({
+				nickname: 'Business checking',
+				accountType: 'checking',
+				ownerType: 'business',
+				last4: '1234'
+			}).success
+		).toBe(true);
+		expect(
+			createFinancialAccountSchema.safeParse({
+				nickname: 'Brokerage',
+				accountType: 'brokerage',
+				last4: '12345678'
+			}).success
+		).toBe(false);
+	});
+
+	it('validates bonus milestones and bounded requirements', () => {
+		expect(
+			createBonusSchema.safeParse({
+				name: 'New account bonus',
+				rewardCents: 50_000,
+				requirementDeadline: '2028-04-30',
+				requirements: [
+					{ label: 'Fund the account' },
+					{ label: 'Complete qualifying deposits', completed: true }
+				]
+			}).success
+		).toBe(true);
+		expect(createBonusSchema.safeParse({ name: 'Bonus', rewardCents: -1 }).success).toBe(false);
+		expect(updateFinancialAccountSchema.safeParse({}).success).toBe(false);
+		expect(updateBonusSchema.safeParse({}).success).toBe(false);
 	});
 });

@@ -56,6 +56,57 @@ export interface ManualCardInput {
 	autopayEnabled?: boolean;
 }
 
+export type FinancialAccountType =
+	'checking' | 'savings' | 'brokerage' | 'cash_management' | 'other';
+
+export type FinancialAccountOwner = 'personal' | 'business';
+export type FinancialAccountStatus = 'planned' | 'active' | 'closed';
+
+export interface FinancialAccount {
+	id: string;
+	nickname: string;
+	institution: string | null;
+	accountType: FinancialAccountType;
+	ownerType: FinancialAccountOwner;
+	status: FinancialAccountStatus;
+	last4: string | null;
+	currency: string;
+	currentBalanceCents: number | null;
+	costBasisCents: number | null;
+	openedDate: string | null;
+	notes: string | null;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export type BonusStatus =
+	'planned' | 'active' | 'qualified' | 'pending' | 'paid' | 'closed' | 'abandoned';
+
+export interface BonusRequirement {
+	id: string;
+	label: string;
+	completed: boolean;
+}
+
+export interface AccountBonus {
+	id: string;
+	accountId: string | null;
+	name: string;
+	institution: string | null;
+	rewardCents: number | null;
+	currency: string;
+	status: BonusStatus;
+	openedDate: string | null;
+	requirementDeadline: string | null;
+	expectedPayoutDate: string | null;
+	paidDate: string | null;
+	safeToCloseDate: string | null;
+	requirements: BonusRequirement[];
+	notes: string | null;
+	createdAt: string;
+	updatedAt: string;
+}
+
 export interface PlaidConnection {
 	id: string;
 	institutionName: string | null;

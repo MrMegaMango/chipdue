@@ -106,6 +106,7 @@
 	import { asset, resolve } from '$app/paths';
 	import { replaceState } from '$app/navigation';
 	import { onMount, tick } from 'svelte';
+	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
 
 	type CardSource = 'manual' | 'plaid';
 	type DialogMode = 'add' | 'edit' | null;
@@ -193,6 +194,15 @@
 		plaid?: PlaidStatus;
 	};
 
+	type WorkspaceAccount = { id: string };
+	type WorkspaceBonus = {
+		id: string;
+		name: string;
+		status: 'planned' | 'active' | 'qualified' | 'pending' | 'paid' | 'closed' | 'abandoned';
+		rewardCents: number | null;
+		requirementDeadline: string | null;
+	};
+
 	type CardForm = {
 		nickname: string;
 		issuer: string;
@@ -262,6 +272,9 @@
 	let setupError = $state('');
 	let setupTokenInput = $state<HTMLInputElement>();
 	let cards = $state<CardView[]>([]);
+	let workspaceAccounts = $state<WorkspaceAccount[]>([]);
+	let workspaceBonuses = $state<WorkspaceBonus[]>([]);
+	let hasLoadedWorkspace = $state(false);
 	let plaid = $state<PlaidStatus>({ ...emptyPlaid });
 	let loading = $state(true);
 	let hasLoadedCards = $state(false);
@@ -310,7 +323,21 @@
 	const googleBootstrapVisible = $derived(
 		canShowGoogleBootstrap(authMode, authenticationMode, googleBootstrapAvailable)
 	);
-	const showOnboardingHero = $derived(hasLoadedCards && cards.length === 0);
+	const showOnboardingHero = $derived(
+		hasLoadedCards &&
+			hasLoadedWorkspace &&
+			cards.length === 0 &&
+			workspaceAccounts.length === 0 &&
+			workspaceBonuses.length === 0
+	);
+	const activeWorkspaceBonuses = $derived(
+		workspaceBonuses.filter((bonus) =>
+			['planned', 'active', 'qualified', 'pending'].includes(bonus.status)
+		)
+	);
+	const activeBonusValueCents = $derived(
+		activeWorkspaceBonuses.reduce((total, bonus) => total + (bonus.rewardCents ?? 0), 0)
+	);
 
 	const interestSavingTargets = $derived(
 		cards.map((card) => interestSavingTarget(card.statementBalanceCents, card.currentBalanceCents))
@@ -330,6 +357,22 @@
 			.filter((card) => card.dueDate && daysUntil(card.dueDate) >= 0)
 			.toSorted((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''))[0] ?? null
 	);
+	const nextBonusDeadline = $derived(
+		activeWorkspaceBonuses
+			.filter((bonus) => bonus.requirementDeadline && daysUntil(bonus.requirementDeadline) >= 0)
+			.toSorted((left, right) =>
+				(left.requirementDeadline ?? '').localeCompare(right.requirementDeadline ?? '')
+			)[0] ?? null
+	);
+	const nextWorkspaceDeadline = $derived.by(() => {
+		const cardDate = nextCard?.dueDate ?? null;
+		const bonusDate = nextBonusDeadline?.requirementDeadline ?? null;
+		if (cardDate && (!bonusDate || cardDate <= bonusDate)) {
+			return { date: cardDate, label: `${nextCard?.nickname ?? 'Card'} payment` };
+		}
+		if (bonusDate) return { date: bonusDate, label: `${nextBonusDeadline?.name} requirement` };
+		return null;
+	});
 	onMount(() => {
 		pageMounted = true;
 		const shouldCleanCallbackUrl = Boolean(window.location.search || window.location.hash);
@@ -537,7 +580,36 @@
 		if (!isPrivateEpochCurrent(epoch)) return;
 		loading = true;
 		plaidStatusLoading = true;
-		void Promise.all([refreshCards(false, epoch), refreshPlaidStatus(false, epoch)]);
+		void Promise.all([
+			refreshCards(false, epoch),
+			refreshPlaidStatus(false, epoch),
+			refreshWorkspaceOverview(epoch)
+		]);
+	}
+
+	async function refreshWorkspaceOverview(expectedEpoch = privateStateEpoch): Promise<void> {
+		if (!isPrivateEpochCurrent(expectedEpoch)) return;
+		try {
+			const [accountPayload, bonusPayload] = await Promise.all([
+				requestJson<{ accounts: WorkspaceAccount[] }>(
+					resolve('/api/accounts'),
+					{},
+					{ privateEpoch: expectedEpoch }
+				),
+				requestJson<{ bonuses: WorkspaceBonus[] }>(
+					resolve('/api/bonuses'),
+					{},
+					{ privateEpoch: expectedEpoch }
+				)
+			]);
+			if (!isPrivateEpochCurrent(expectedEpoch)) return;
+			workspaceAccounts = accountPayload.accounts;
+			workspaceBonuses = bonusPayload.bonuses;
+		} catch {
+			// Cards remain usable if the broader workspace summary is temporarily unavailable.
+		} finally {
+			if (isPrivateEpochCurrent(expectedEpoch)) hasLoadedWorkspace = true;
+		}
 	}
 
 	async function login(event: SubmitEvent): Promise<void> {
@@ -688,6 +760,9 @@
 	function clearPrivateUiState(): void {
 		cards = [];
 		hasLoadedCards = false;
+		workspaceAccounts = [];
+		workspaceBonuses = [];
+		hasLoadedWorkspace = false;
 		plaid = { ...emptyPlaid };
 		plaidConnections = [];
 		loading = true;
@@ -1908,38 +1983,12 @@
 	<a class="skip-link" href="#main-content">Skip to dashboard</a>
 
 	<div class="app-shell" inert={authBusy === 'logout'} aria-busy={authBusy === 'logout'}>
-		<header class="site-header">
-			<a class="brand" href={resolve('/')} aria-label="ChipDue home">
-				<span class="brand-mark" aria-hidden="true">
-					<svg viewBox="0 0 32 32">
-						<rect x="6" y="8" width="20" height="18" rx="4"></rect>
-						<path d="M6 13h20M11 5.5v5M21 5.5v5"></path>
-						<circle cx="21" cy="21" r="2.5"></circle>
-					</svg>
-				</span>
-				<span>ChipDue</span>
-			</a>
-			<div class="header-controls">
-				<div
-					class="header-status"
-					title="ChipDue does not keep card data in persistent browser storage"
-				>
-					<span class="status-dot"></span>
-					<span>{authMode === 'cloud' ? 'Private cloud' : 'Private by default'}</span>
-				</div>
-				{#if authMode === 'cloud'}
-					<button
-						class="logout-button"
-						type="button"
-						onclick={logout}
-						disabled={authBusy === 'logout'}
-						aria-busy={authBusy === 'logout'}
-					>
-						{authBusy === 'logout' ? 'Logging out…' : 'Log out'}
-					</button>
-				{/if}
-			</div>
-		</header>
+		<WorkspaceHeader
+			current="dashboard"
+			mode={authMode}
+			loggingOut={authBusy === 'logout'}
+			onlogout={logout}
+		/>
 
 		<main id="main-content">
 			<section
@@ -1949,10 +1998,11 @@
 			>
 				{#if showOnboardingHero}
 					<div class="hero-copy">
-						<p class="eyebrow">Your payment command center</p>
-						<h1 id="page-title">Never miss a card due date.</h1>
+						<p class="eyebrow">Your private money command center</p>
+						<h1 id="page-title">Keep every dollar moving with purpose.</h1>
 						<p class="hero-description">
-							Balances and deadlines in one calm, private dashboard—{authMode === 'cloud'
+							Accounts, bonuses, investments, and card deadlines in one calm dashboard—{authMode ===
+							'cloud'
 								? 'served by your private ChipDue cloud.'
 								: 'stored on your machine.'}
 						</p>
@@ -1960,7 +2010,7 @@
 				{:else}
 					<div>
 						<p class="section-kicker">Dashboard</p>
-						<h1 id="page-title">Cards &amp; deadlines</h1>
+						<h1 id="page-title">Financial command center</h1>
 					</div>
 				{/if}
 				<div class:hero-action-stack={showOnboardingHero}>
@@ -2085,22 +2135,63 @@
 					<div>
 						<p>Next deadline</p>
 						<strong class="next-date">
-							{loading || !hasLoadedCards ? '—' : formatDate(nextCard?.dueDate ?? null)}
+							{loading || !hasLoadedCards ? '—' : formatDate(nextWorkspaceDeadline?.date ?? null)}
 						</strong>
 						<span
 							>{hasLoadedCards
-								? (nextCard?.nickname ?? 'No upcoming due date')
+								? (nextWorkspaceDeadline?.label ?? 'No upcoming deadline')
 								: 'Awaiting local data'}</span
 						>
 					</div>
 				</article>
 			</section>
 
+			<section class="workspace-modules" aria-label="Financial workspace areas">
+				<a class="workspace-module accounts-module" href={resolve('/accounts')}>
+					<span class="module-icon" aria-hidden="true">
+						<svg viewBox="0 0 24 24"
+							><path d="M3 10h18M5 10v8m4-8v8m6-8v8m4-8v8M3 20h18M12 4 3 8h18l-9-4Z"></path></svg
+						>
+					</span>
+					<span>
+						<strong>Accounts</strong>
+						<small
+							>{hasLoadedWorkspace
+								? `${workspaceAccounts.length} tracked · bank, business, cash, and brokerage`
+								: 'Bank, business, cash, and brokerage accounts'}</small
+						>
+					</span>
+					<svg class="module-arrow" aria-hidden="true" viewBox="0 0 20 20"
+						><path d="m7 4 6 6-6 6"></path></svg
+					>
+				</a>
+				<a class="workspace-module bonuses-module" href={resolve('/bonuses')}>
+					<span class="module-icon" aria-hidden="true">
+						<svg viewBox="0 0 24 24"
+							><path
+								d="M12 3v18M7 7.5C7 5.6 8.8 4 11 4h2c2.2 0 4 1.4 4 3.2 0 4.8-10 1.6-10 6.4C7 15.5 8.8 17 11 17h2c2.2 0 4-1.6 4-3.5"
+							></path></svg
+						>
+					</span>
+					<span>
+						<strong>Bonuses</strong>
+						<small
+							>{hasLoadedWorkspace
+								? `${activeWorkspaceBonuses.length} active · ${formatMoney(activeBonusValueCents)} potential`
+								: 'Requirements, payouts, and safe-to-close dates'}</small
+						>
+					</span>
+					<svg class="module-arrow" aria-hidden="true" viewBox="0 0 20 20"
+						><path d="m7 4 6 6-6 6"></path></svg
+					>
+				</a>
+			</section>
+
 			<section class="cards-section" aria-labelledby="cards-heading">
 				<div class="section-heading">
 					<div>
-						<p class="section-kicker">Overview</p>
-						<h2 id="cards-heading">Your cards</h2>
+						<p class="section-kicker">Credit cards</p>
+						<h2 id="cards-heading">Payments &amp; deadlines</h2>
 					</div>
 					{#if plaid.connectedItems > 0}
 						<button
@@ -2365,7 +2456,8 @@
 								: 'Local first. Always.'}
 						</h2>
 						<p>
-							ChipDue adds no analytics and stores no card details in persistent browser storage.
+							ChipDue adds no analytics and stores no financial details in persistent browser
+							storage.
 							{authMode === 'cloud'
 								? ' Your private server holds the encrypted database and controls this session.'
 								: ''}
@@ -3713,6 +3805,90 @@
 
 	.summary-card strong.next-date {
 		font-size: 1.08rem;
+	}
+
+	.workspace-modules {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.85rem;
+		padding-top: 1rem;
+	}
+
+	.workspace-module {
+		display: grid;
+		min-width: 0;
+		grid-template-columns: auto minmax(0, 1fr) auto;
+		gap: 0.8rem;
+		align-items: center;
+		padding: 0.9rem 1rem;
+		border: 1px solid var(--line);
+		border-radius: 10px;
+		color: var(--ink);
+		background: rgba(255, 253, 249, 0.72);
+		box-shadow: var(--shadow-sm);
+		text-decoration: none;
+		transition:
+			border-color 140ms ease,
+			background 140ms ease,
+			transform 140ms ease;
+	}
+
+	.workspace-module:hover {
+		border-color: var(--line-strong);
+		background: var(--paper);
+		transform: translateY(-1px);
+	}
+
+	.module-icon {
+		display: grid;
+		width: 36px;
+		height: 36px;
+		place-items: center;
+		border-radius: 8px;
+		color: var(--accent-dark);
+		background: var(--accent-soft);
+	}
+
+	.bonuses-module .module-icon {
+		color: var(--positive);
+		background: var(--positive-soft);
+	}
+
+	.module-icon svg,
+	.module-arrow {
+		fill: none;
+		stroke: currentColor;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+		stroke-width: 1.7;
+	}
+
+	.module-icon svg {
+		width: 21px;
+	}
+
+	.workspace-module > span:nth-child(2) {
+		display: grid;
+		min-width: 0;
+		gap: 0.16rem;
+	}
+
+	.workspace-module strong {
+		font-size: 0.78rem;
+		font-weight: 750;
+	}
+
+	.workspace-module small {
+		overflow: hidden;
+		color: var(--muted);
+		font-size: 0.65rem;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.module-arrow {
+		width: 18px;
+		color: var(--faint);
 	}
 
 	.cards-section {
@@ -5178,6 +5354,10 @@
 			border-left: 0;
 		}
 
+		.workspace-modules {
+			grid-template-columns: 1fr;
+		}
+
 		.cards-section {
 			padding: 3.2rem 0;
 		}
@@ -5236,14 +5416,6 @@
 	@media (max-width: 430px) {
 		.header-controls {
 			gap: 0.5rem;
-		}
-
-		.header-status span:last-child {
-			display: none;
-		}
-
-		.header-status .status-dot {
-			display: inline-block;
 		}
 
 		.hero-actions {
