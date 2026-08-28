@@ -12,7 +12,11 @@ export const GET: RequestHandler = async ({ cookies, request, url }) => {
 		marker = result.outcome;
 	} catch (error) {
 		console.error('Google OIDC callback failed', {
-			code: error instanceof AppError ? error.code : 'INTERNAL_ERROR'
+			code: error instanceof AppError ? error.code : 'INTERNAL_ERROR',
+			location:
+				error instanceof Error
+					? error.stack?.split('\n').find((line) => line.trimStart().startsWith('at '))
+					: undefined
 		});
 		// Provider and validation failures deliberately collapse to one fixed local redirect.
 	} finally {
