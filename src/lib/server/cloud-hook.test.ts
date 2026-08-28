@@ -124,6 +124,14 @@ describe.sequential('cloud request guard', () => {
 		}
 	});
 
+	it('lets the protected scheduled-sync route perform its own cron-secret validation', async () => {
+		const response = await cloudRequest('/api/cron/plaid-sync/morning-pdt', {
+			routeId: '/api/cron/plaid-sync/[candidate]'
+		});
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe('resolved');
+	});
+
 	it('removes the password endpoint at the hook boundary in Google-only mode', async () => {
 		process.env.CARDDUE_AUTH_MODE = 'google';
 		delete process.env.CARDDUE_OWNER_PASSWORD_HASH;

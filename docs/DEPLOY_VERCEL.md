@@ -140,6 +140,7 @@ Use the Vercel dashboard's protected input rather than CLI arguments. Scope ever
 | `CARDDUE_GOOGLE_CLIENT_ID`      | Optional Google Web OAuth client ID; configure only together with its secret                    |
 | `CARDDUE_GOOGLE_CLIENT_SECRET`  | Optional Google Web OAuth client secret; configure only together with its ID                    |
 | `CARDDUE_GOOGLE_BOOTSTRAP_HASH` | Temporary Google-only first-owner verifier; remove immediately after successful setup           |
+| `CRON_SECRET`                   | Random Sensitive value of at least 16 characters; required for scheduled Plaid synchronization  |
 
 Never configure these in Vercel:
 
@@ -184,6 +185,8 @@ After manual cloud mode is verified, add `PLAID_CLIENT_ID`, `PLAID_SECRET`, and 
 
 Never add Plaid credentials to Preview, Development, a browser-exposed variable, or the recovery bundle. The browser receives only Plaid's short-lived Link token. ChipDue asks for Liabilities and Transactions, maps only the documented card/activity fields, encrypts transaction history, the incremental cursor, and the long-lived access token server-side, and discards each raw response. Confirm both Plaid products are enabled before Production use.
 
+The committed Vercel schedule refreshes every Plaid connection during the 9 AM and 5 PM hours in `America/Los_Angeles`. Four once-daily UTC candidates keep those two Pacific windows correct across daylight-saving changes; the two inactive candidates exit before contacting Plaid. Each period is claimed atomically in `carddue_metadata`, so duplicate deliveries do not repeat a completed sync. Vercel supplies `Authorization: Bearer CRON_SECRET`; the endpoint also requires Vercel's Cron user agent and otherwise remains unavailable. On Vercel Hobby, an invocation can occur anywhere within the scheduled hour; Pro and Enterprise schedules have per-minute precision.
+
 ## 8. Deploy and verify before entering real data
 
 Create a new production deployment after setting the variables. Changes to Vercel environment variables apply only to new deployments. Do not enter card data until all checks below pass.
@@ -198,7 +201,7 @@ Create a new production deployment after setting the variables. Changes to Verce
 
 ### Authentication and browser checks
 
-- A logged-out request to every card, Plaid, sync, disconnect, update, and calendar API receives `401`; only health and authentication endpoints are public.
+- A logged-out request to every card, Plaid, manual sync, disconnect, update, and calendar API receives `401`; only health, authentication, and the separately secret-authenticated scheduled-sync endpoint bypass the browser session.
 - In password mode, a wrong password returns a generic failure and repeated failures trigger throttling without revealing whether configuration or records exist. In Google-only mode every request method to the password-login route returns `404` before parsing a body or touching authentication storage.
 - A successful login sets only the `__Host-carddue_session` cookie with Secure, HTTP-only, SameSite Strict, root-path semantics, and no Domain attribute.
 - In password mode, a logged-out Google start cannot create or claim an owner, and a link start without the exact ChipDue session is rejected. In Google-only mode, only the one-time manually pasted setup token can create an initial OAuth transaction; the token never appears in a URL, cookie, database row, log, or provider request.

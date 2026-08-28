@@ -19,6 +19,20 @@ function secureHeaders(response: Response): Response {
 	return response;
 }
 
+export function isPublicCloudApiPath(path: string): boolean {
+	return (
+		path === '/api/health' ||
+		path === '/api/auth/session' ||
+		path === '/api/auth/login' ||
+		path === '/api/auth/logout' ||
+		path === '/api/auth/google/start' ||
+		path === '/api/auth/google/callback' ||
+		path === '/api/auth/google/bootstrap' ||
+		path === '/api/auth/google/bootstrap/continue' ||
+		path === '/api/cron/plaid-sync/[candidate]'
+	);
+}
+
 export const handle: Handle = async ({ event, resolve }) => {
 	try {
 		const mode = getRuntimeMode();
@@ -51,15 +65,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 					)
 				);
 			}
-			const publicApi =
-				matchedPath === '/api/health' ||
-				matchedPath === '/api/auth/session' ||
-				matchedPath === '/api/auth/login' ||
-				matchedPath === '/api/auth/logout' ||
-				matchedPath === '/api/auth/google/start' ||
-				matchedPath === '/api/auth/google/callback' ||
-				matchedPath === '/api/auth/google/bootstrap' ||
-				matchedPath === '/api/auth/google/bootstrap/continue';
+			const publicApi = isPublicCloudApiPath(matchedPath);
 			if (matchedPath.startsWith('/api/') && !publicApi) {
 				const authenticated = await authenticateSession(event.cookies.get(SESSION_COOKIE_NAME));
 				if (!authenticated) {

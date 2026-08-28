@@ -1,4 +1,22 @@
 {
 	"$schema": "https://openapi.vercel.sh/vercel.json",
-	"buildCommand": "npm run build:vercel"
+	"buildCommand": "npm run build:vercel",
+	"crons": [
+		{
+			"path": "/api/cron/plaid-sync/morning-pdt",
+			"schedule": "0 16 * * *"
+		},
+		{
+			"path": "/api/cron/plaid-sync/morning-pst",
+			"schedule": "0 17 * * *"
+		},
+		{
+			"path": "/api/cron/plaid-sync/evening-pdt",
+			"schedule": "0 0 * * *"
+		},
+		{
+			"path": "/api/cron/plaid-sync/evening-pst",
+			"schedule": "0 1 * * *"
+		}
+	]
 }
