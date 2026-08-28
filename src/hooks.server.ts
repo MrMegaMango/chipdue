@@ -59,8 +59,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 				matchedPath === '/api/auth/google/start' ||
 				matchedPath === '/api/auth/google/callback' ||
 				matchedPath === '/api/auth/google/bootstrap' ||
-				matchedPath === '/api/auth/google/bootstrap/continue' ||
-				matchedPath === '/api/admin/google-owner-reset';
+				matchedPath === '/api/auth/google/bootstrap/continue';
 			if (matchedPath.startsWith('/api/') && !publicApi) {
 				const authenticated = await authenticateSession(event.cookies.get(SESSION_COOKIE_NAME));
 				if (!authenticated) {
