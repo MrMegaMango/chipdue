@@ -146,6 +146,16 @@ describe('card activity preview', () => {
 		expect(source).toContain('?limit=${RECENT_ACTIVITY_LIMIT}');
 		expect(source).toContain('onclick={() => openTransactionHistory(card)}');
 	});
+
+	it('keeps both activity header labels on one compact line', () => {
+		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+		expect(source).toMatch(
+			/\.activity-preview-header h4 \{[\s\S]*?font-size: 0\.8rem;[\s\S]*?white-space: nowrap;/
+		);
+		expect(source).toMatch(
+			/\.activity-preview-header button \{[\s\S]*?font-size: 0\.7rem;[\s\S]*?white-space: nowrap;/
+		);
+	});
 });
 
 describe('interest-saving payment target', () => {
@@ -212,7 +222,7 @@ describe('banking visual identity', () => {
 		expect(layoutSource).toContain('--muted: #465163');
 		expect(layoutSource).toContain('--faint: #5f697a');
 		expect(pageSource).toMatch(
-			/\.activity-preview-header h4 \{[\s\S]*?font-size: 0\.9rem;[\s\S]*?font-weight: 700;/
+			/\.activity-preview-header h4 \{[\s\S]*?font-size: 0\.8rem;[\s\S]*?font-weight: 700;/
 		);
 		expect(pageSource).toMatch(
 			/\.activity-preview-list span \{[\s\S]*?color: var\(--faint\);[\s\S]*?font-size: 0\.74rem;/

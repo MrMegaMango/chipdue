@@ -4537,33 +4537,36 @@
 
 	.activity-preview-header {
 		display: flex;
-		min-height: 42px;
-		gap: 0.75rem;
+		min-height: 38px;
+		gap: 0.45rem;
 		align-items: center;
 		justify-content: space-between;
-		padding: 0.65rem 0.75rem;
+		padding: 0.5rem 0.65rem;
 		border-bottom: 1px solid var(--line);
 		background: #f1ede5;
 	}
 
 	.activity-preview-header h4 {
 		margin: 0;
-		font-size: 0.9rem;
+		font-size: 0.8rem;
 		font-weight: 700;
 		letter-spacing: 0;
+		white-space: nowrap;
 	}
 
 	.activity-preview-header button {
 		display: inline-flex;
-		min-height: 30px;
+		min-height: 28px;
+		flex: 0 0 auto;
 		gap: 0.22rem;
 		align-items: center;
-		padding: 0.35rem 0.52rem;
+		padding: 0.25rem 0.4rem;
 		border: 1px solid #b8c2f5;
 		border-radius: 5px;
 		color: var(--accent);
-		font-size: 0.76rem;
+		font-size: 0.7rem;
 		font-weight: 680;
+		white-space: nowrap;
 		background: white;
 		cursor: pointer;
 	}
