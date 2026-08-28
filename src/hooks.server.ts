@@ -22,6 +22,7 @@ function secureHeaders(response: Response): Response {
 export function isPublicCloudApiPath(path: string): boolean {
 	return (
 		path === '/api/health' ||
+		path === '/api/access-request' ||
 		path === '/api/auth/session' ||
 		path === '/api/auth/login' ||
 		path === '/api/auth/logout' ||

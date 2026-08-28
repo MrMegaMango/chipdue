@@ -4,6 +4,7 @@
 	export const LAST_FOUR_PATTERN = '[0-9][0-9][0-9][0-9]';
 	export const GOOGLE_BOOTSTRAP_CONTINUE_TO = '/api/auth/google/bootstrap/continue';
 	export const SETUP_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+	export const ACCESS_REQUEST_PATH = '/api/access-request';
 
 	export function inputToCents(value: string | number | undefined): number | null {
 		if (value === undefined || (typeof value === 'string' && !value.trim())) return null;
@@ -1731,7 +1732,7 @@
 			<h1 id="login-title">Unlock your dashboard</h1>
 			<p class="auth-intro">
 				{googleOnlyMode
-					? 'Sign in with Google to continue. Google is the only sign-in method for this server.'
+					? 'ChipDue is invite-only. Sign in with an approved Google account to continue.'
 					: googleLoginAvailable
 						? 'Continue with the Google account linked to this server. Your ChipDue password remains available for recovery and first-time linking.'
 						: 'Enter the password for this ChipDue server.'}
@@ -1768,6 +1769,20 @@
 				{#if passwordLoginAvailable}
 					<div class="auth-divider" aria-hidden="true"><span>or use recovery password</span></div>
 				{/if}
+			{/if}
+
+			{#if googleOnlyMode}
+				<div class="invite-request">
+					<p><strong>Need an invitation?</strong> Ask the admin to approve your Google account.</p>
+					<a
+						class="button button-secondary invite-request-button"
+						href={resolve(ACCESS_REQUEST_PATH)}
+						aria-label="Notify the ChipDue admin by email"
+					>
+						Notify Admin
+					</a>
+					<small>Opens a pre-addressed request in your email app.</small>
+				</div>
 			{/if}
 
 			{#if passwordLoginAvailable}
@@ -3056,6 +3071,41 @@
 		font-size: 0.72rem;
 		font-weight: 600;
 		background: #f2f2f2;
+	}
+
+	.invite-request {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		gap: 0.65rem 0.8rem;
+		align-items: center;
+		margin-top: 1.15rem;
+		padding-top: 1rem;
+		border-top: 1px solid var(--line);
+		text-align: left;
+	}
+
+	.invite-request p {
+		margin: 0;
+		color: var(--muted);
+		font-size: 0.7rem;
+		line-height: 1.45;
+	}
+
+	.invite-request strong {
+		color: var(--ink);
+	}
+
+	.invite-request-button {
+		min-height: 38px;
+		padding: 0.55rem 0.8rem;
+		font-size: 0.67rem;
+		white-space: nowrap;
+	}
+
+	.invite-request small {
+		grid-column: 1 / -1;
+		color: var(--faint);
+		font-size: 0.6rem;
 	}
 
 	.google-button:focus-visible,

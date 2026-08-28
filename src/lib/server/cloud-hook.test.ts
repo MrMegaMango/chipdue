@@ -111,6 +111,12 @@ describe.sequential('cloud request guard', () => {
 		expect(await response.text()).toBe('resolved');
 	});
 
+	it('allows unauthenticated visitors to start an admin access request', async () => {
+		const response = await cloudRequest('/api/access-request');
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe('resolved');
+	});
+
 	it('lets the Google start and callback routes perform their own intent validation', async () => {
 		for (const path of [
 			'/api/auth/google/start',

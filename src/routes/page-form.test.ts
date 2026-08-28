@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+	ACCESS_REQUEST_PATH,
 	authorizeGoogleCallbackResult,
 	cardBrandForIssuer,
 	canOfferGoogleLogin,
@@ -91,6 +92,14 @@ describe('Google-only setup privacy contract', () => {
 		expect(canShowGoogleBootstrap('cloud', 'google', false)).toBe(false);
 		expect(canShowGoogleBootstrap('cloud', 'password', true)).toBe(false);
 		expect(canShowGoogleBootstrap('local', 'local', true)).toBe(false);
+	});
+
+	it('offers an invite request addressed to the configured admin', () => {
+		expect(ACCESS_REQUEST_PATH).toBe('/api/access-request');
+		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+		expect(source).toContain('ChipDue is invite-only.');
+		expect(source).toContain('Notify Admin');
+		expect(source).not.toContain('mailto:');
 	});
 
 	it('accepts only the fixed-size one-time setup token format', () => {

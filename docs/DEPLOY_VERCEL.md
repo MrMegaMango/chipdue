@@ -137,6 +137,7 @@ Use the Vercel dashboard's protected input rather than CLI arguments. Scope ever
 | `CARDDUE_OWNER_PASSWORD_HASH`   | Required only in password mode; forbidden in Google-only mode                                   |
 | `CARDDUE_ALLOWED_HOSTS`         | The one canonical lowercase authority only; no scheme, path, wildcard, comma, or trailing slash |
 | `CARDDUE_SESSION_TTL_HOURS`     | Optional integer from 1 through 720; default is 24                                              |
+| `CARDDUE_ADMIN_EMAIL`           | Optional recipient for invite requests from the signed-out screen                               |
 | `CARDDUE_GOOGLE_CLIENT_ID`      | Optional Google Web OAuth client ID; configure only together with its secret                    |
 | `CARDDUE_GOOGLE_CLIENT_SECRET`  | Optional Google Web OAuth client secret; configure only together with its ID                    |
 | `CARDDUE_GOOGLE_BOOTSTRAP_HASH` | Temporary Google-only first-owner verifier; remove immediately after successful setup           |
