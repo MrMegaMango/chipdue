@@ -191,6 +191,20 @@ describe('banking visual identity', () => {
 		expect(layoutSource).toContain('--accent: #3d5afe');
 		expect(layoutSource).toContain('background: #f1ede5');
 	});
+
+	it('uses the native UI font and readable secondary-text contrast', () => {
+		const pageSource = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+		const layoutSource = readFileSync(new URL('./layout.css', import.meta.url), 'utf8');
+		expect(layoutSource).not.toContain("'Avenir Next'");
+		expect(layoutSource).toContain('--muted: #465163');
+		expect(layoutSource).toContain('--faint: #5f697a');
+		expect(pageSource).toMatch(
+			/\.activity-preview-header h4 \{[\s\S]*?font-size: 0\.9rem;[\s\S]*?font-weight: 700;/
+		);
+		expect(pageSource).toMatch(
+			/\.activity-preview-list span \{[\s\S]*?color: var\(--faint\);[\s\S]*?font-size: 0\.74rem;/
+		);
+	});
 });
 
 describe('returning-user dashboard', () => {

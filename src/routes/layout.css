@@ -1,6 +1,5 @@
 :root {
 	font-family:
-		'Avenir Next',
 		ui-sans-serif,
 		-apple-system,
 		BlinkMacSystemFont,
@@ -14,8 +13,8 @@
 	-webkit-font-smoothing: antialiased;
 	--ink: #111827;
 	--ink-soft: #1b2942;
-	--muted: #656d7d;
-	--faint: #818796;
+	--muted: #465163;
+	--faint: #5f697a;
 	--line: #d8d2c7;
 	--line-strong: #bbb4a8;
 	--paper: #fffdf9;

@@ -3744,8 +3744,8 @@
 	.card-identity p {
 		overflow: hidden;
 		margin: 0.25rem 0 0;
-		color: #b8c0ce;
-		font-size: 0.72rem;
+		color: #c4ccda;
+		font-size: 0.8rem;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
@@ -3757,7 +3757,7 @@
 		flex: 0 0 auto;
 		align-items: center;
 		border-radius: 999px;
-		font-size: 0.63rem;
+		font-size: 0.72rem;
 		font-weight: 720;
 	}
 
@@ -3784,11 +3784,11 @@
 	.balance-block > span,
 	.payment-details span {
 		color: var(--muted);
-		font-size: 0.68rem;
+		font-size: 0.78rem;
 	}
 
 	.balance-block > span {
-		color: #aeb6c5;
+		color: #cbd3df;
 	}
 
 	.balance-block > strong {
@@ -3806,8 +3806,9 @@
 	}
 
 	.balance-block small {
-		color: #aeb6c5;
-		font-size: 0.66rem;
+		color: #bdc6d4;
+		font-size: 0.75rem;
+		line-height: 1.4;
 	}
 
 	.payment-details {
@@ -3832,7 +3833,7 @@
 
 	.payment-details strong {
 		overflow: hidden;
-		font-size: 0.78rem;
+		font-size: 0.86rem;
 		font-weight: 690;
 		text-overflow: ellipsis;
 		white-space: nowrap;
@@ -3899,16 +3900,16 @@
 		gap: 0.75rem;
 		align-items: center;
 		justify-content: space-between;
-		padding: 0.55rem 0.7rem;
+		padding: 0.65rem 0.75rem;
 		border-bottom: 1px solid var(--line);
 		background: #f1ede5;
 	}
 
 	.activity-preview-header h4 {
 		margin: 0;
-		font-size: 0.69rem;
-		font-weight: 730;
-		letter-spacing: -0.01em;
+		font-size: 0.9rem;
+		font-weight: 700;
+		letter-spacing: 0;
 	}
 
 	.activity-preview-header button {
@@ -3920,8 +3921,8 @@
 		border: 1px solid #b8c2f5;
 		border-radius: 5px;
 		color: var(--accent);
-		font-size: 0.61rem;
-		font-weight: 720;
+		font-size: 0.76rem;
+		font-weight: 680;
 		background: white;
 		cursor: pointer;
 	}
@@ -3956,7 +3957,7 @@
 		grid-template-columns: minmax(0, 1fr) auto;
 		gap: 0.7rem;
 		align-items: center;
-		padding: 0.62rem 0.7rem;
+		padding: 0.72rem 0.75rem;
 	}
 
 	.activity-preview-list li + li {
@@ -3977,13 +3978,13 @@
 	}
 
 	.activity-preview-list strong {
-		font-size: 0.65rem;
-		font-weight: 690;
+		font-size: 0.8rem;
+		font-weight: 650;
 	}
 
 	.activity-preview-list span {
 		color: var(--faint);
-		font-size: 0.56rem;
+		font-size: 0.74rem;
 	}
 
 	.activity-preview-amount {
@@ -3998,7 +3999,7 @@
 		margin: 0;
 		padding: 1rem 0.7rem;
 		color: var(--faint);
-		font-size: 0.62rem;
+		font-size: 0.76rem;
 		text-align: center;
 	}
 
@@ -4031,7 +4032,7 @@
 		gap: 0.4rem;
 		align-items: center;
 		color: var(--faint);
-		font-size: 0.62rem;
+		font-size: 0.74rem;
 	}
 
 	.card-footer .mini-dot {
@@ -4054,7 +4055,7 @@
 		padding: 0;
 		border: 0;
 		color: var(--muted);
-		font-size: 0.65rem;
+		font-size: 0.74rem;
 		font-weight: 700;
 		background: transparent;
 		cursor: pointer;
