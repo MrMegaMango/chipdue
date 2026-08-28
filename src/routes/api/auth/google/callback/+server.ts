@@ -1,5 +1,6 @@
 import type { RequestHandler } from './$types';
 import { setSessionCookie } from '$lib/server/auth';
+import { AppError } from '$lib/server/errors';
 import { clearGoogleTransactionCookie, completeGoogleOidc } from '$lib/server/google-oidc';
 import { privateResponseHeaders } from '$lib/server/http';
 
@@ -9,7 +10,10 @@ export const GET: RequestHandler = async ({ cookies, request, url }) => {
 		const result = await completeGoogleOidc(request, url, cookies);
 		if (result.sessionToken) setSessionCookie(cookies, result.sessionToken);
 		marker = result.outcome;
-	} catch {
+	} catch (error) {
+		console.error('Google OIDC callback failed', {
+			code: error instanceof AppError ? error.code : 'INTERNAL_ERROR'
+		});
 		// Provider and validation failures deliberately collapse to one fixed local redirect.
 	} finally {
 		clearGoogleTransactionCookie(cookies);
