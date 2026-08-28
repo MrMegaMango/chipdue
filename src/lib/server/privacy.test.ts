@@ -3,6 +3,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	statSync,
 	symlinkSync,
@@ -11,10 +12,11 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createManualCard } from './cards';
+import { createManualCard, listCards, listCardTransactions, replacePlaidCards } from './cards';
 import { closeDatabaseForTests, getDatabase } from './database';
 import { decryptSecret, encryptSecret, resetCryptoStateForTests } from './crypto';
 import { ensurePrivateDataDirectory, getDataPaths } from './paths';
+import { savePlaidItem } from './plaid-store';
 import { createManualCardSchema } from './schemas';
 
 describe.sequential('private local persistence', () => {
@@ -68,6 +70,72 @@ describe.sequential('private local persistence', () => {
 		expect(databaseBytes.includes(Buffer.from('Private test issuer'))).toBe(false);
 	});
 
+	it('encrypts transaction history, cursors, and provider identifiers at rest', async () => {
+		const merchant = 'Private merchant alpha';
+		const providerTransactionId = 'provider-transaction-alpha';
+		const cursor = 'private-cursor-alpha';
+		const plaidItemId = await savePlaidItem(
+			'provider-item-alpha',
+			'private-access-token-alpha',
+			'Synthetic Bank'
+		);
+		await replacePlaidCards(
+			plaidItemId,
+			[
+				{
+					accountId: 'provider-account-alpha',
+					nickname: 'Synthetic card',
+					issuer: 'Synthetic Bank',
+					last4: '3333',
+					currency: 'USD',
+					statementBalanceCents: 12_345,
+					minimumPaymentCents: 2_000,
+					currentBalanceCents: 14_500,
+					dueDate: '2026-09-28',
+					statementDate: '2026-08-28',
+					isOverdue: false,
+					autopayEnabled: false,
+					transactionHistory: {
+						enabled: true,
+						cursor,
+						status: 'HISTORICAL_UPDATE_COMPLETE',
+						transactions: [
+							{
+								transactionId: providerTransactionId,
+								name: merchant,
+								merchantName: merchant,
+								amountCents: 4_321,
+								currency: 'USD',
+								date: '2026-08-20',
+								authorizedDate: '2026-08-19',
+								pending: false,
+								categoryPrimary: 'FOOD_AND_DRINK',
+								categoryDetailed: 'FOOD_AND_DRINK_RESTAURANT'
+							}
+						]
+					}
+				}
+			],
+			'2026-08-27T12:00:00.000Z'
+		);
+
+		const [card] = await listCards();
+		expect(card.transactionHistoryEnabled).toBe(true);
+		const history = await listCardTransactions(card.id);
+		expect(history.transactions[0]).toMatchObject({
+			name: merchant,
+			merchantName: merchant,
+			amountCents: 4_321
+		});
+		expect(history.transactions[0].id).not.toBe(providerTransactionId);
+
+		getDatabase().pragma('wal_checkpoint(TRUNCATE)');
+		const databaseBytes = readFileSync(join(temporaryDirectory, 'carddue.sqlite3'));
+		for (const privateValue of [merchant, providerTransactionId, cursor]) {
+			expect(databaseBytes.includes(Buffer.from(privateValue))).toBe(false);
+		}
+	});
+
 	it('refuses a data directory inside the Git checkout', () => {
 		process.env.CARDDUE_DATA_DIR = join(process.cwd(), 'private-data-must-not-be-created');
 		expect(() => getDataPaths()).toThrow(/outside a Git checkout/);
@@ -88,7 +156,9 @@ describe.sequential('private local persistence', () => {
 			delete process.env.USERPROFILE;
 			process.env.CARDDUE_DATA_DIR = join(temporaryDirectory, 'explicit-data');
 
-			expect(getDataPaths().dataDirectory).toBe(join(temporaryDirectory, 'explicit-data'));
+			expect(getDataPaths().dataDirectory).toBe(
+				join(realpathSync.native(temporaryDirectory), 'explicit-data')
+			);
 		} finally {
 			if (previousHome === undefined) delete process.env.HOME;
 			else process.env.HOME = previousHome;

@@ -106,8 +106,35 @@
 		statementDate: string | null;
 		isOverdue: boolean | null;
 		autopayEnabled: boolean;
+		transactionHistoryEnabled: boolean;
+		transactionHistoryStatus:
+			| 'TRANSACTIONS_UPDATE_STATUS_UNKNOWN'
+			| 'NOT_READY'
+			| 'INITIAL_UPDATE_COMPLETE'
+			| 'HISTORICAL_UPDATE_COMPLETE'
+			| null;
+		plaidConnectionId: string | null;
 		updatedAt: string;
 		lastSyncedAt?: string | null;
+	};
+
+	type CardTransaction = {
+		id: string;
+		name: string;
+		merchantName: string | null;
+		amountCents: number;
+		currency: string;
+		date: string;
+		authorizedDate: string | null;
+		pending: boolean;
+		categoryPrimary: string | null;
+		categoryDetailed: string | null;
+	};
+
+	type TransactionHistoryResponse = {
+		transactions: CardTransaction[];
+		status: Exclude<CardView['transactionHistoryStatus'], null>;
+		lastSyncedAt: string | null;
 	};
 
 	type PlaidStatus = {
@@ -210,14 +237,21 @@
 	let editingId = $state<string | null>(null);
 	let form = $state<CardForm>(blankForm());
 	let formError = $state('');
-	let busyAction = $state<'save' | 'delete' | 'connect' | 'sync' | 'disconnect' | 'update' | null>(
-		null
-	);
+	let busyAction = $state<
+		'save' | 'delete' | 'connect' | 'sync' | 'disconnect' | 'update' | 'enable-history' | null
+	>(null);
 	let deletingId = $state<string | null>(null);
 	let plaidConnections = $state<PlaidConnection[]>([]);
 	let plaidStatusLoading = $state(true);
 	let plaidStatusError = $state('');
 	let plaidItemActionId = $state<string | null>(null);
+	let historyCard = $state<CardView | null>(null);
+	let historyTransactions = $state<CardTransaction[]>([]);
+	let historyStatus = $state<TransactionHistoryResponse['status'] | null>(null);
+	let historyLastSyncedAt = $state<string | null>(null);
+	let historyLoading = $state(false);
+	let historyError = $state('');
+	let historyCloseButton = $state<HTMLButtonElement>();
 	let notice = $state('');
 	let noticeKind = $state<NoticeKind>('success');
 	let firstField = $state<HTMLInputElement>();
@@ -273,7 +307,7 @@
 			setupToken = '';
 			if (noticeTimer) clearTimeout(noticeTimer);
 			if (clockTimer) clearInterval(clockTimer);
-			if (dialogMode) document.body.style.overflow = previousBodyOverflow;
+			if (dialogMode || historyCard) document.body.style.overflow = previousBodyOverflow;
 			document.removeEventListener('visibilitychange', handleVisibilityChange);
 		};
 	});
@@ -623,6 +657,13 @@
 		busyAction = null;
 		deletingId = null;
 		plaidItemActionId = null;
+		historyCard = null;
+		historyTransactions = [];
+		historyStatus = null;
+		historyLastSyncedAt = null;
+		historyLoading = false;
+		historyError = '';
+		historyCloseButton = undefined;
 		setupToken = '';
 		setupBusy = false;
 		setupError = '';
@@ -750,6 +791,32 @@
 		return fullDate.format(new Date(year, month - 1, day));
 	}
 
+	function formatTransactionAmount(transaction: CardTransaction): string {
+		const amount = new Intl.NumberFormat('en-US', {
+			style: 'currency',
+			currency: transaction.currency,
+			minimumFractionDigits: 2
+		}).format(Math.abs(transaction.amountCents) / 100);
+		return transaction.amountCents < 0 ? `−${amount}` : amount;
+	}
+
+	function transactionCategory(transaction: CardTransaction): string {
+		const label = (value: string) =>
+			value
+				.toLowerCase()
+				.split('_')
+				.map((part) => (part === 'and' ? '&' : part.charAt(0).toUpperCase() + part.slice(1)))
+				.join(' ');
+		const primary = transaction.categoryPrimary;
+		const detailed = transaction.categoryDetailed;
+		if (!primary && !detailed) return transaction.pending ? 'Pending' : 'Posted';
+		if (!primary || !detailed) return label(detailed ?? primary ?? '');
+		const detailSuffix = detailed.startsWith(`${primary}_`)
+			? detailed.slice(primary.length + 1)
+			: detailed;
+		return detailSuffix ? `${label(primary)} · ${label(detailSuffix)}` : label(primary);
+	}
+
 	function daysUntil(value: string | null): number {
 		if (!value) return Number.POSITIVE_INFINITY;
 		const [year, month, day] = value.slice(0, 10).split('-').map(Number);
@@ -866,11 +933,62 @@
 		dismissDialog();
 	}
 
+	async function openTransactionHistory(card: CardView): Promise<void> {
+		if (card.source !== 'plaid' || !card.transactionHistoryEnabled || busyAction) return;
+		const epoch = privateStateEpoch;
+		if (!isPrivateEpochCurrent(epoch)) return;
+		if (historyCard?.id !== card.id) prepareDialog();
+		historyCard = card;
+		historyTransactions = [];
+		historyStatus = card.transactionHistoryStatus;
+		historyLastSyncedAt = card.lastSyncedAt ?? null;
+		historyError = '';
+		historyLoading = true;
+		await tick();
+		historyCloseButton?.focus();
+
+		try {
+			const payload = await requestJson<TransactionHistoryResponse>(
+				resolve('/api/cards/[id]/transactions', { id: card.id }),
+				{},
+				{ privateEpoch: epoch }
+			);
+			if (!isPrivateEpochCurrent(epoch) || historyCard?.id !== card.id) return;
+			historyTransactions = payload.transactions;
+			historyStatus = payload.status;
+			historyLastSyncedAt = payload.lastSyncedAt;
+		} catch (error) {
+			if (isPrivateEpochCurrent(epoch) && historyCard?.id === card.id) {
+				historyError = readableError(error, 'Transaction history could not be loaded.');
+			}
+		} finally {
+			if (isPrivateEpochCurrent(epoch) && historyCard?.id === card.id) historyLoading = false;
+		}
+	}
+
+	function retryTransactionHistory(): void {
+		if (historyCard) void openTransactionHistory(historyCard);
+	}
+
+	function closeTransactionHistory(): void {
+		const focusTarget = previouslyFocused;
+		historyCard = null;
+		historyTransactions = [];
+		historyStatus = null;
+		historyLastSyncedAt = null;
+		historyLoading = false;
+		historyError = '';
+		document.body.style.overflow = previousBodyOverflow;
+		previouslyFocused = undefined;
+		void tick().then(() => focusTarget?.focus());
+	}
+
 	function handleWindowKeydown(event: KeyboardEvent): void {
-		if (!dialogMode) return;
+		if (!dialogMode && !historyCard) return;
 		if (event.key === 'Escape') {
 			event.preventDefault();
-			closeDialog();
+			if (historyCard) closeTransactionHistory();
+			else closeDialog();
 			return;
 		}
 		if (event.key !== 'Tab' || !dialogElement) return;
@@ -1124,7 +1242,7 @@
 			return;
 		}
 		try {
-			await requestJson(
+			const exchanged = await requestJson<{ connection: PlaidConnection }>(
 				resolve('/api/plaid/exchange'),
 				{
 					method: 'POST',
@@ -1133,7 +1251,13 @@
 				{ privateEpoch: epoch }
 			);
 			if (!isPrivateEpochCurrent(epoch)) return;
-			await requestJson(resolve('/api/plaid/sync'), { method: 'POST' }, { privateEpoch: epoch });
+			await requestJson(
+				resolve('/api/plaid/items/[id]/transactions/sync', {
+					id: exchanged.connection.id
+				}),
+				{ method: 'POST' },
+				{ privateEpoch: epoch }
+			);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const [cardsRefreshed, statusRefreshed] = await Promise.all([
 				refreshCards(true, epoch),
@@ -1143,7 +1267,7 @@
 			const refreshed = cardsRefreshed && statusRefreshed;
 			showNotice(
 				refreshed
-					? 'Plaid connected and cards synced.'
+					? 'Plaid connected. Cards and transaction history are syncing.'
 					: 'Plaid connected and synced, but the dashboard could not refresh.',
 				refreshed ? 'success' : 'error'
 			);
@@ -1155,6 +1279,110 @@
 			handler.destroy();
 			if (activePlaidHandler === handler) activePlaidHandler = null;
 			if (isPrivateEpochCurrent(epoch)) busyAction = null;
+		}
+	}
+
+	async function enableTransactionHistory(card: CardView): Promise<void> {
+		if (
+			busyAction ||
+			card.source !== 'plaid' ||
+			card.transactionHistoryEnabled ||
+			!card.plaidConnectionId
+		)
+			return;
+		const epoch = privateStateEpoch;
+		if (!isPrivateEpochCurrent(epoch)) return;
+		busyAction = 'enable-history';
+		plaidItemActionId = card.plaidConnectionId;
+
+		try {
+			const [, tokenPayload] = await Promise.all([
+				loadPlaidLink(epoch),
+				requestJson<{ linkToken?: string; link_token?: string }>(
+					resolve('/api/plaid/items/[id]/transactions/update', {
+						id: card.plaidConnectionId
+					}),
+					{ method: 'POST' },
+					{ privateEpoch: epoch }
+				)
+			]);
+			if (!isPrivateEpochCurrent(epoch)) return;
+			const linkToken = tokenPayload.linkToken ?? tokenPayload.link_token;
+			if (!linkToken) throw new Error('The server did not return a Plaid consent token.');
+
+			const factory = plaidFactory();
+			if (!factory) throw new Error('Plaid Link is unavailable.');
+
+			let handler: PlaidHandler;
+			handler = factory.create({
+				token: linkToken,
+				onSuccess: () => {
+					if (!isPrivateEpochCurrent(epoch)) {
+						handler.destroy();
+						if (activePlaidHandler === handler) activePlaidHandler = null;
+						return;
+					}
+					void finishTransactionHistoryEnable(card, handler, epoch);
+				},
+				onExit: (error) => {
+					handler.destroy();
+					if (activePlaidHandler === handler) activePlaidHandler = null;
+					if (isPrivateEpochCurrent(epoch)) {
+						busyAction = null;
+						plaidItemActionId = null;
+						if (error) showNotice('Plaid could not enable transaction history.', 'error');
+					}
+				}
+			});
+			activePlaidHandler = handler;
+			handler.open();
+		} catch (error) {
+			if (isPrivateEpochCurrent(epoch)) {
+				busyAction = null;
+				plaidItemActionId = null;
+				showNotice(readableError(error, 'Plaid consent could not be opened.'), 'error');
+			}
+		}
+	}
+
+	async function finishTransactionHistoryEnable(
+		card: CardView,
+		handler: PlaidHandler,
+		epoch: number
+	): Promise<void> {
+		if (!isPrivateEpochCurrent(epoch) || !card.plaidConnectionId) {
+			handler.destroy();
+			if (activePlaidHandler === handler) activePlaidHandler = null;
+			return;
+		}
+		try {
+			await requestJson(
+				resolve('/api/plaid/items/[id]/transactions/sync', {
+					id: card.plaidConnectionId
+				}),
+				{ method: 'POST' },
+				{ privateEpoch: epoch }
+			);
+			if (!isPrivateEpochCurrent(epoch)) return;
+			const refreshed = await refreshCards(true, epoch);
+			if (!isPrivateEpochCurrent(epoch)) return;
+			showNotice(
+				refreshed
+					? 'Transaction history enabled. Plaid may keep filling older activity in the background.'
+					: 'Transaction history enabled, but the dashboard could not refresh.',
+				refreshed ? 'success' : 'error'
+			);
+		} catch (error) {
+			if (isPrivateEpochCurrent(epoch)) {
+				showNotice(readableError(error, 'Transaction history could not be synced.'), 'error');
+			}
+		} finally {
+			handler.destroy();
+			if (activePlaidHandler === handler) activePlaidHandler = null;
+			if (isPrivateEpochCurrent(epoch)) {
+				busyAction = null;
+				plaidItemActionId = null;
+			}
 		}
 	}
 
@@ -1643,7 +1871,8 @@
 					</div>
 					<p id="plaid-consent-copy" class="plaid-consent">
 						Plaid’s CDN script runs in this page and can access data rendered here. It loads only
-						after you choose Connect Plaid.
+						after you choose Connect Plaid. New connections request card balances, liabilities, and
+						up to 24 months of transactions.
 					</p>
 				</div>
 			</section>
@@ -1844,6 +2073,28 @@
 												{deletingId === card.id ? 'Deleting…' : 'Delete'}
 											</button>
 										</div>
+									{:else}
+										<div class="card-actions">
+											<button
+												class="history-button"
+												type="button"
+												onclick={() =>
+													card.transactionHistoryEnabled
+														? openTransactionHistory(card)
+														: enableTransactionHistory(card)}
+												disabled={busyAction !== null}
+												aria-busy={busyAction === 'enable-history' &&
+													plaidItemActionId === card.plaidConnectionId}
+												aria-describedby="plaid-consent-copy"
+											>
+												{busyAction === 'enable-history' &&
+												plaidItemActionId === card.plaidConnectionId
+													? 'Opening…'
+													: card.transactionHistoryEnabled
+														? 'Activity'
+														: 'Enable activity'}
+											</button>
+										</div>
 									{/if}
 								</footer>
 							</article>
@@ -1961,8 +2212,8 @@
 							<li>
 								<span class="check-mark">✓</span><span
 									>{authMode === 'cloud'
-										? 'Card details are encrypted on your private ChipDue server'
-										: 'Card details are encrypted in a local database outside this source checkout'}</span
+										? 'Card details and enabled transaction history are encrypted on your private ChipDue server'
+										: 'Card details and enabled transaction history are encrypted in a local database outside this source checkout'}</span
 								>
 							</li>
 							<li>
@@ -2254,6 +2505,93 @@
 						</button>
 					</footer>
 				</form>
+			</div>
+		</div>
+	{/if}
+
+	{#if historyCard}
+		<div class="dialog-layer">
+			<div class="dialog-backdrop"></div>
+			<div
+				bind:this={dialogElement}
+				class="dialog history-dialog"
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby="history-dialog-title"
+				aria-describedby="history-dialog-description"
+			>
+				<header class="dialog-header history-header">
+					<div>
+						<p class="section-kicker">Card activity</p>
+						<h2 id="history-dialog-title">{historyCard.nickname}</h2>
+						<p id="history-dialog-description">
+							{cardSubtitle(historyCard)} · Up to 24 months from Plaid
+						</p>
+					</div>
+					<button
+						bind:this={historyCloseButton}
+						class="icon-button"
+						type="button"
+						onclick={closeTransactionHistory}
+						aria-label="Close transaction history"
+					>
+						<svg aria-hidden="true" viewBox="0 0 20 20"><path d="m5 5 10 10M15 5 5 15"></path></svg>
+					</button>
+				</header>
+
+				<div class="history-body">
+					<div class="history-sync-note">
+						<span class="mini-dot"></span>
+						<span>{ageLabel(historyLastSyncedAt, 'Synced')}</span>
+						{#if historyStatus === 'NOT_READY' || historyStatus === 'INITIAL_UPDATE_COMPLETE'}
+							<span>· Older activity is still loading</span>
+						{/if}
+					</div>
+
+					{#if historyLoading}
+						<div class="history-loading" aria-label="Loading transaction history" aria-busy="true">
+							<span></span><span></span><span></span>
+						</div>
+					{:else if historyError}
+						<div class="history-error" role="alert">
+							<strong>Couldn’t load activity</strong>
+							<span>{historyError}</span>
+							<button type="button" onclick={retryTransactionHistory}>Try again</button>
+						</div>
+					{:else if historyTransactions.length > 0}
+						<ul class="transaction-list">
+							{#each historyTransactions as transaction (transaction.id)}
+								<li>
+									<div class="transaction-date">
+										<strong
+											>{new Date(`${transaction.date}T12:00:00`).toLocaleDateString('en-US', {
+												month: 'short',
+												day: 'numeric'
+											})}</strong
+										>
+										<span>{transaction.pending ? 'Pending' : 'Posted'}</span>
+									</div>
+									<div class="transaction-details">
+										<strong>{transaction.merchantName ?? transaction.name}</strong>
+										<span>{transactionCategory(transaction)}</span>
+									</div>
+									<strong class:credit={transaction.amountCents < 0} class="transaction-amount">
+										{formatTransactionAmount(transaction)}
+									</strong>
+								</li>
+							{/each}
+						</ul>
+					{:else}
+						<div class="history-empty">
+							<h3>No activity yet</h3>
+							<p>
+								{historyStatus === 'HISTORICAL_UPDATE_COMPLETE'
+									? 'Plaid did not return transactions for this card.'
+									: 'Plaid is preparing this card’s transaction history. Sync again shortly.'}
+							</p>
+						</div>
+					{/if}
+				</div>
 			</div>
 		</div>
 	{/if}
@@ -3356,6 +3694,10 @@
 		opacity: 0.5;
 	}
 
+	.card-actions .history-button {
+		color: var(--green);
+	}
+
 	.skeleton-card {
 		gap: 1rem;
 		padding: 1.5rem;
@@ -3946,6 +4288,135 @@
 		stroke-linecap: round;
 	}
 
+	.history-dialog {
+		width: min(100%, 720px);
+	}
+
+	.history-body {
+		padding: 0 1.5rem 1.5rem;
+	}
+
+	.history-sync-note {
+		display: flex;
+		min-height: 44px;
+		gap: 0.35rem;
+		align-items: center;
+		color: var(--faint);
+		font-size: 0.64rem;
+	}
+
+	.transaction-list {
+		margin: 0;
+		padding: 0;
+		border: 1px solid var(--line);
+		border-radius: 12px;
+		list-style: none;
+		overflow: hidden;
+	}
+
+	.transaction-list li {
+		display: grid;
+		grid-template-columns: 62px minmax(0, 1fr) auto;
+		gap: 0.8rem;
+		align-items: center;
+		padding: 0.8rem 0.9rem;
+		background: white;
+	}
+
+	.transaction-list li + li {
+		border-top: 1px solid var(--line);
+	}
+
+	.transaction-date,
+	.transaction-details {
+		display: grid;
+		min-width: 0;
+		gap: 0.2rem;
+	}
+
+	.transaction-date strong,
+	.transaction-details strong,
+	.transaction-amount {
+		font-size: 0.72rem;
+		font-weight: 710;
+	}
+
+	.transaction-date span,
+	.transaction-details span {
+		color: var(--faint);
+		font-size: 0.6rem;
+	}
+
+	.transaction-details strong,
+	.transaction-details span {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.transaction-amount {
+		font-variant-numeric: tabular-nums;
+	}
+
+	.transaction-amount.credit {
+		color: var(--green);
+	}
+
+	.history-loading {
+		display: grid;
+		gap: 0.55rem;
+	}
+
+	.history-loading span {
+		height: 54px;
+		border-radius: 9px;
+		background: linear-gradient(90deg, #edf0eb 25%, #f7f8f6 50%, #edf0eb 75%);
+		background-size: 200% 100%;
+		animation: shimmer 1.5s infinite;
+	}
+
+	.history-empty,
+	.history-error {
+		padding: 2.5rem 1rem;
+		border: 1px dashed var(--line-strong);
+		border-radius: 12px;
+		text-align: center;
+		background: var(--paper-soft);
+	}
+
+	.history-empty h3,
+	.history-empty p,
+	.history-error strong,
+	.history-error span {
+		margin: 0;
+	}
+
+	.history-empty h3,
+	.history-error strong {
+		display: block;
+		font-size: 0.8rem;
+	}
+
+	.history-empty p,
+	.history-error span {
+		display: block;
+		margin-top: 0.35rem;
+		color: var(--muted);
+		font-size: 0.68rem;
+	}
+
+	.history-error button {
+		margin-top: 0.9rem;
+		padding: 0.45rem 0.7rem;
+		border: 1px solid var(--line-strong);
+		border-radius: 8px;
+		color: var(--ink);
+		font-size: 0.66rem;
+		font-weight: 700;
+		background: white;
+		cursor: pointer;
+	}
+
 	.card-form {
 		padding: 1.4rem 1.5rem 1.5rem;
 	}
@@ -4243,9 +4714,16 @@
 		}
 
 		.dialog-header,
-		.card-form {
+		.card-form,
+		.history-body {
 			padding-right: 1.15rem;
 			padding-left: 1.15rem;
+		}
+
+		.transaction-list li {
+			grid-template-columns: 52px minmax(0, 1fr) auto;
+			gap: 0.55rem;
+			padding: 0.72rem;
 		}
 
 		.site-footer {

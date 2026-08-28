@@ -182,7 +182,7 @@ Skip this section for manual-only ChipDue. Plaid is not required for deployment 
 
 After manual cloud mode is verified, add `PLAID_CLIENT_ID`, `PLAID_SECRET`, and `PLAID_ENV` as Sensitive, Production-only values. Start with Plaid Sandbox. Move to Production only after reviewing Plaid's current access, pricing, redirect, and data-retention settings.
 
-Never add Plaid credentials to Preview, Development, a browser-exposed variable, or the recovery bundle. The browser receives only Plaid's short-lived Link token. ChipDue asks for Liabilities, maps the allowlisted reminder fields, encrypts the long-lived access token server-side, and discards the raw response.
+Never add Plaid credentials to Preview, Development, a browser-exposed variable, or the recovery bundle. The browser receives only Plaid's short-lived Link token. ChipDue asks for Liabilities and Transactions, maps only the documented card/activity fields, encrypts transaction history, the incremental cursor, and the long-lived access token server-side, and discards each raw response. Confirm both Plaid products are enabled before Production use.
 
 ## 8. Deploy and verify before entering real data
 

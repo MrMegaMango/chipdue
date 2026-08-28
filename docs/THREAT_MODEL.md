@@ -36,8 +36,8 @@ The hosted model has one password or one explicitly bootstrapped Google-only ide
 
 ## Assets
 
-- Card nicknames, optional issuer names and suffixes, balances, dates, and autopay settings
-- Plaid access tokens, Item IDs, institution names, and derived account references
+- Card nicknames, optional issuer names and suffixes, balances, dates, autopay settings, and enabled transaction history
+- Plaid access tokens, Item IDs, transaction cursors, institution names, and derived account references
 - The cloud AES key, mode-specific password hash or temporary bootstrap token/verifier, session and OAuth transaction cookies, and recovery bundles
 - Neon runtime and migration database credentials
 - Optional Google OAuth client secret and linked-identity fingerprint
@@ -96,7 +96,7 @@ The hosted model has one password or one explicitly bootstrapped Google-only ide
 | Transport downgrade                      | Cloud requests require HTTPS as reported by the Vercel proxy; Vercel terminates public TLS; Neon URLs must require TLS                                                              |
 | Cross-site mutation                      | Exact Origin validation, Fetch Metadata rejection, same-origin requests, JSON-only bounded bodies, and no CORS                                                                      |
 | Browser or CDN retains data              | Global `no-store` responses; no localStorage, sessionStorage, IndexedDB, service worker, or user-data prerendering                                                                  |
-| Raw provider data expands exposure       | Google uses `openid` only and tokens are discarded; Plaid uses Liabilities-only allowlisted mapping; raw responses/errors are neither stored nor logged                             |
+| Raw provider data expands exposure       | Google uses `openid` only and tokens are discarded; Plaid Liabilities/Transactions responses are reduced to an explicit allowlist, encrypted, and never logged raw                  |
 | Logs reveal secrets or records           | Sanitized error envelopes; no intentional request bodies, cookies, query parameters, SQL values, decrypted fields, or raw provider errors in logs                                   |
 | CI or releases publish private artifacts | Synthetic fixtures, no production secrets, no private artifact upload, privacy scan, clean build, full-history scan, and mandatory verified Vercel build wrapper                    |
 | Calendar export expands disclosure       | Authentication in cloud mode; amounts opt-in and omitted by default; downloaded files documented as private                                                                         |

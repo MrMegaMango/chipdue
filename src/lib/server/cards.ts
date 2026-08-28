@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Card, CardSource } from '$lib/types';
+import type { Card, CardSource, CardTransaction, TransactionHistoryStatus } from '$lib/types';
 import { cloudQuery, cloudTransaction, type CloudStatement } from './cloud-database';
 import { decryptJson, encryptJson, privateFingerprint, privateUuid } from './crypto';
 import { getDatabase } from './database';
@@ -19,11 +19,34 @@ interface CardPayload {
 	statementDate: string | null;
 	isOverdue: boolean | null;
 	autopayEnabled: boolean;
+	transactionHistory?: StoredTransactionHistory;
+}
+
+export interface StoredPlaidTransaction {
+	transactionId: string;
+	name: string;
+	merchantName: string | null;
+	amountCents: number;
+	currency: string;
+	date: string;
+	authorizedDate: string | null;
+	pending: boolean;
+	categoryPrimary: string | null;
+	categoryDetailed: string | null;
+}
+
+export interface StoredTransactionHistory {
+	enabled: true;
+	cursor: string | null;
+	status: TransactionHistoryStatus;
+	transactions: StoredPlaidTransaction[];
 }
 
 interface CardRow extends Record<string, unknown> {
 	id: string;
 	source: CardSource;
+	plaid_item_id: string | null;
+	external_account_ref: string | null;
 	payload_enc: string;
 	last_synced_at: string | null;
 	created_at: string;
@@ -38,6 +61,68 @@ export interface PlaidCardSnapshot extends CardPayload {
 	accountId: string;
 }
 
+export interface PlaidTransactionState {
+	enabled: boolean;
+	cursor: string | null;
+	status: TransactionHistoryStatus;
+	byAccountReference: Map<string, StoredPlaidTransaction[]>;
+}
+
+const TRANSACTION_HISTORY_STATUSES = new Set<TransactionHistoryStatus>([
+	'TRANSACTIONS_UPDATE_STATUS_UNKNOWN',
+	'NOT_READY',
+	'INITIAL_UPDATE_COMPLETE',
+	'HISTORICAL_UPDATE_COMPLETE'
+]);
+const MAX_STORED_TRANSACTIONS = 10_000;
+
+function isStoredPlaidTransaction(value: unknown): value is StoredPlaidTransaction {
+	if (!value || typeof value !== 'object') return false;
+	const transaction = value as Partial<StoredPlaidTransaction>;
+	return (
+		typeof transaction.transactionId === 'string' &&
+		transaction.transactionId.length > 0 &&
+		transaction.transactionId.length <= 256 &&
+		typeof transaction.name === 'string' &&
+		transaction.name.length > 0 &&
+		transaction.name.length <= 160 &&
+		(transaction.merchantName === null ||
+			(typeof transaction.merchantName === 'string' && transaction.merchantName.length <= 120)) &&
+		typeof transaction.amountCents === 'number' &&
+		Number.isSafeInteger(transaction.amountCents) &&
+		Math.abs(transaction.amountCents) <= 100_000_000_000 &&
+		typeof transaction.currency === 'string' &&
+		/^[A-Z]{3}$/.test(transaction.currency) &&
+		typeof transaction.date === 'string' &&
+		/^\d{4}-\d{2}-\d{2}$/.test(transaction.date) &&
+		(transaction.authorizedDate === null ||
+			(typeof transaction.authorizedDate === 'string' &&
+				/^\d{4}-\d{2}-\d{2}$/.test(transaction.authorizedDate))) &&
+		typeof transaction.pending === 'boolean' &&
+		(transaction.categoryPrimary === null ||
+			(typeof transaction.categoryPrimary === 'string' &&
+				transaction.categoryPrimary.length <= 80)) &&
+		(transaction.categoryDetailed === null ||
+			(typeof transaction.categoryDetailed === 'string' &&
+				transaction.categoryDetailed.length <= 120))
+	);
+}
+
+function isStoredTransactionHistory(value: unknown): value is StoredTransactionHistory {
+	if (!value || typeof value !== 'object') return false;
+	const history = value as Partial<StoredTransactionHistory>;
+	return (
+		history.enabled === true &&
+		(history.cursor === null ||
+			(typeof history.cursor === 'string' && history.cursor.length <= 256)) &&
+		typeof history.status === 'string' &&
+		TRANSACTION_HISTORY_STATUSES.has(history.status as TransactionHistoryStatus) &&
+		Array.isArray(history.transactions) &&
+		history.transactions.length <= MAX_STORED_TRANSACTIONS &&
+		history.transactions.every(isStoredPlaidTransaction)
+	);
+}
+
 function decodePayload(row: CardRow): CardPayload {
 	const payload = decryptJson<CardPayload>(row.payload_enc, `card:${row.id}`);
 	if (
@@ -48,14 +133,34 @@ function decodePayload(row: CardRow): CardPayload {
 	) {
 		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
 	}
+	if (
+		payload.transactionHistory !== undefined &&
+		!isStoredTransactionHistory(payload.transactionHistory)
+	) {
+		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
+	}
 	return payload;
 }
 
 function rowToCard(row: CardRow): Card {
+	const payload = decodePayload(row);
 	return {
 		id: row.id,
 		source: row.source,
-		...decodePayload(row),
+		nickname: payload.nickname,
+		issuer: payload.issuer,
+		last4: payload.last4,
+		currency: payload.currency,
+		statementBalanceCents: payload.statementBalanceCents,
+		minimumPaymentCents: payload.minimumPaymentCents,
+		currentBalanceCents: payload.currentBalanceCents,
+		dueDate: payload.dueDate,
+		statementDate: payload.statementDate,
+		isOverdue: payload.isOverdue,
+		autopayEnabled: payload.autopayEnabled,
+		transactionHistoryEnabled: payload.transactionHistory?.enabled === true,
+		transactionHistoryStatus: payload.transactionHistory?.status ?? null,
+		plaidConnectionId: row.source === 'plaid' ? row.plaid_item_id : null,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 		lastSyncedAt: row.last_synced_at
@@ -85,7 +190,8 @@ function snapshotPayload(snapshot: PlaidCardSnapshot): CardPayload {
 		dueDate: snapshot.dueDate,
 		statementDate: snapshot.statementDate,
 		isOverdue: snapshot.isOverdue,
-		autopayEnabled: snapshot.autopayEnabled
+		autopayEnabled: snapshot.autopayEnabled,
+		...(snapshot.transactionHistory ? { transactionHistory: snapshot.transactionHistory } : {})
 	};
 }
 
@@ -93,12 +199,14 @@ export async function listCards(): Promise<Card[]> {
 	const rows =
 		getRuntimeMode() === 'cloud'
 			? await cloudQuery<CardRow>(
-					`SELECT id::text, source, payload_enc, last_synced_at, created_at, updated_at
+					`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
+					        last_synced_at, created_at, updated_at
 					 FROM public.carddue_cards`
 				)
 			: (getDatabase()
 					.prepare(
-						`SELECT id, source, payload_enc, last_synced_at, created_at, updated_at
+						`SELECT id, source, plaid_item_id, external_account_ref, payload_enc,
+						        last_synced_at, created_at, updated_at
 						 FROM cards`
 					)
 					.all() as CardRow[]);
@@ -110,14 +218,16 @@ export async function getCard(id: string): Promise<Card> {
 		getRuntimeMode() === 'cloud'
 			? (
 					await cloudQuery<CardRow>(
-						`SELECT id::text, source, payload_enc, last_synced_at, created_at, updated_at
+						`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
+						        last_synced_at, created_at, updated_at
 						 FROM public.carddue_cards WHERE id = $1`,
 						[id]
 					)
 				)[0]
 			: (getDatabase()
 					.prepare(
-						`SELECT id, source, payload_enc, last_synced_at, created_at, updated_at
+						`SELECT id, source, plaid_item_id, external_account_ref, payload_enc,
+						        last_synced_at, created_at, updated_at
 						 FROM cards WHERE id = ?`
 					)
 					.get(id) as CardRow | undefined);
@@ -193,7 +303,8 @@ export async function updateManualCard(id: string, changes: UpdateManualCardData
 		const rows = await cloudQuery<CardRow>(
 			`UPDATE public.carddue_cards SET payload_enc = $1, updated_at = $2
 			 WHERE id = $3 AND source = 'manual'
-			 RETURNING id::text, source, payload_enc, last_synced_at, created_at, updated_at`,
+			 RETURNING id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
+			           last_synced_at, created_at, updated_at`,
 			[encrypted, now, id]
 		);
 		if (!rows[0]) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
@@ -329,4 +440,113 @@ export async function replacePlaidCards(
 	} else {
 		replaceLocalPlaidCards(plaidItemId, snapshots, syncedAt);
 	}
+}
+
+export async function readPlaidTransactionState(
+	plaidItemId: string
+): Promise<PlaidTransactionState> {
+	const rows =
+		getRuntimeMode() === 'cloud'
+			? await cloudQuery<CardRow>(
+					`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
+					        last_synced_at, created_at, updated_at
+					 FROM public.carddue_cards
+					 WHERE plaid_item_id = $1 AND source = 'plaid'`,
+					[plaidItemId]
+				)
+			: (getDatabase()
+					.prepare(
+						`SELECT id, source, plaid_item_id, external_account_ref, payload_enc,
+						        last_synced_at, created_at, updated_at
+						 FROM cards WHERE plaid_item_id = ? AND source = 'plaid'`
+					)
+					.all(plaidItemId) as CardRow[]);
+	const enabledRows = rows
+		.map((row) => ({ row, history: decodePayload(row).transactionHistory }))
+		.filter(
+			(value): value is { row: CardRow; history: StoredTransactionHistory } =>
+				value.history !== undefined
+		);
+	if (enabledRows.length === 0) {
+		return {
+			enabled: false,
+			cursor: null,
+			status: 'TRANSACTIONS_UPDATE_STATUS_UNKNOWN',
+			byAccountReference: new Map()
+		};
+	}
+
+	const cursor = enabledRows[0].history.cursor;
+	const status = enabledRows[0].history.status;
+	if (enabledRows.some(({ history }) => history.cursor !== cursor || history.status !== status)) {
+		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
+	}
+	return {
+		enabled: true,
+		cursor,
+		status,
+		byAccountReference: new Map(
+			enabledRows.flatMap(({ row, history }) =>
+				row.external_account_ref ? [[row.external_account_ref, history.transactions] as const] : []
+			)
+		)
+	};
+}
+
+export async function listCardTransactions(cardId: string): Promise<{
+	transactions: CardTransaction[];
+	status: TransactionHistoryStatus;
+	lastSyncedAt: string | null;
+}> {
+	const row =
+		getRuntimeMode() === 'cloud'
+			? (
+					await cloudQuery<CardRow>(
+						`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
+						        last_synced_at, created_at, updated_at
+						 FROM public.carddue_cards WHERE id = $1`,
+						[cardId]
+					)
+				)[0]
+			: (getDatabase()
+					.prepare(
+						`SELECT id, source, plaid_item_id, external_account_ref, payload_enc,
+						        last_synced_at, created_at, updated_at
+						 FROM cards WHERE id = ?`
+					)
+					.get(cardId) as CardRow | undefined);
+	if (!row) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
+	if (row.source !== 'plaid') {
+		throw new AppError(
+			'TRANSACTION_HISTORY_UNAVAILABLE',
+			'Transaction history is available for Plaid cards only.',
+			409
+		);
+	}
+	const history = decodePayload(row).transactionHistory;
+	if (!history) {
+		throw new AppError(
+			'TRANSACTION_HISTORY_NOT_ENABLED',
+			'Transaction history has not been enabled for this connection.',
+			409
+		);
+	}
+	const transactions = history.transactions
+		.map<CardTransaction>((transaction) => ({
+			id: privateUuid(transaction.transactionId, `plaid-transaction:${cardId}`),
+			name: transaction.name,
+			merchantName: transaction.merchantName,
+			amountCents: transaction.amountCents,
+			currency: transaction.currency,
+			date: transaction.date,
+			authorizedDate: transaction.authorizedDate,
+			pending: transaction.pending,
+			categoryPrimary: transaction.categoryPrimary,
+			categoryDetailed: transaction.categoryDetailed
+		}))
+		.sort(
+			(left, right) => right.date.localeCompare(left.date) || left.name.localeCompare(right.name)
+		)
+		.slice(0, 500);
+	return { transactions, status: history.status, lastSyncedAt: row.last_synced_at };
 }

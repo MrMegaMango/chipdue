@@ -12,7 +12,7 @@ Local mode is the default. ChipDue runs as a loopback-only service for one trust
 
 Private cloud mode is an opt-in, single-owner deployment on Vercel backed by Neon Postgres. It is not a shared account, family service, public SaaS, or multi-user authorization model. The production hostname is public on the internet, but ChipDue requires the configured password or the one explicitly bound Google identity before returning financial APIs. Explicit Google-only mode has no ChipDue password endpoint.
 
-ChipDue encrypts card payloads, Plaid access tokens, Plaid Item IDs, and institution names with AES-256-GCM inside the Vercel Function before sending them to Neon. Neon receives ciphertext plus limited operational metadata: opaque keyed identifiers, record source and status, schema version, timestamps, authentication-config-bound keyed session-token hashes, keyed rate-limit buckets, short-lived keyed OAuth transaction markers, an opaque Google-only bootstrap claim state when used, and—if Google is linked—one keyed Google identity fingerprint. It never receives the raw setup token, Google subject, or email from ChipDue. This metadata can still reveal approximate record counts, activity times, and whether records came from manual entry or Plaid.
+ChipDue encrypts card payloads, enabled transaction history, Plaid transaction cursors, access tokens, Plaid Item IDs, and institution names with AES-256-GCM inside the Vercel Function before sending them to Neon. Neon receives ciphertext plus limited operational metadata: opaque keyed identifiers, record source and status, schema version, timestamps, authentication-config-bound keyed session-token hashes, keyed rate-limit buckets, short-lived keyed OAuth transaction markers, an opaque Google-only bootstrap claim state when used, and—if Google is linked—one keyed Google identity fingerprint. It never receives the raw setup token, Google subject, or email from ChipDue. This metadata can still reveal approximate record counts, activity times, and whether records came from manual entry or Plaid.
 
 The hosted design is not zero-knowledge or end-to-end encryption. Vercel stores the production database URL, encryption key, and the selected authentication configuration: a password hash in password mode, or Google credentials plus a temporary bootstrap verifier during Google-only setup. The Function must decrypt records to display them or sync Plaid. A Neon-only database disclosure should not reveal the encrypted fields without the separate key; compromise of the Vercel project, runtime, owner account, or recovery material can expose them.
 
@@ -27,9 +27,10 @@ ChipDue stores only the fields required for reminders:
 - Autopay preference, source, and last-update time
 - Opaque identifiers needed to update or delete records
 - For Plaid connections, encrypted access tokens and Item IDs
+- When transaction access is enabled, up to 24 months of encrypted card transactions, their pending/category fields, and the encrypted incremental-sync cursor
 - For optional Google sign-in, a keyed one-way fingerprint of Google's issuer and stable subject
 
-It does not store full account numbers, credentials entered into Plaid Link, identity profiles, addresses, transaction history, or raw Plaid responses. Plaid responses are mapped immediately to the allowlisted reminder fields and then discarded.
+It does not store full account numbers, credentials entered into Plaid Link, identity profiles, addresses, locations, original bank descriptions, merchant logos, counterparties, or raw Plaid responses. Plaid responses are mapped immediately to the allowlisted card and transaction fields, encrypted as part of the card payload, and then discarded.
 
 When Google sign-in is enabled, ChipDue does not request or store the Google email, name, picture, profile, access token, ID token, or refresh token. A short-lived encrypted browser cookie carries the OAuth state, nonce, PKCE verifier, intent, expiry, and either the initiating ChipDue session or an opaque bootstrap-claim reference. The raw Google-only setup token is never stored in that cookie or in Neon. The cookie is cleared at callback; a validated one-time database marker is atomically consumed, while abandoned markers expire and are pruned.
 
@@ -44,8 +45,8 @@ Plaid is optional in both modes. When you explicitly start Plaid Link:
 - Your browser loads Plaid's Link SDK from `cdn.plaid.com`.
 - Plaid and the selected financial institution handle authentication.
 - A short-lived public token returns to the ChipDue server.
-- The server exchanges it and requests only Liabilities data from Plaid.
-- ChipDue maps the response to its minimal fields and discards the raw payload.
+- The server exchanges it and requests Liabilities plus up to 24 months of Transactions data from Plaid. Existing connections require a separate **Enable activity** consent flow before ChipDue calls Transactions.
+- ChipDue keeps only transaction date, display name, optional merchant, amount, currency, pending state, and category; it maps those fields into the encrypted card payload and discards the raw response.
 
 Google authentication is optional in private cloud mode. Password mode first links it only from an existing ChipDue session. Google-only mode instead uses a temporary high-entropy operator setup token and has no password fallback. During each Google flow, the browser contacts Google and Google necessarily receives network and service metadata such as the IP address, time, requested `openid` scope, and ChipDue hostname. Google's consent screen also displays the User Support Email configured by the deployer and is reachable through the public login start; use a dedicated non-personal monitored alias or group whose membership is private. Google returns a short-lived authorization code to ChipDue's exact callback. The server exchanges and validates it, keeps only a keyed issuer-and-subject fingerprint for the linked owner, issues ChipDue's own opaque session, and discards the provider tokens.
 
@@ -76,7 +77,7 @@ Calendar files omit monetary amounts by default. Cloud exports require an authen
 - Local encryption mainly reduces accidental disclosure and repository leakage because the key and database reside on the same computer.
 - Cloud application encryption protects against a database-only disclosure, not a simultaneous Vercel runtime and database compromise.
 - Plaid and connected institutions process information under their own terms and privacy policies.
-- Liability fields can be delayed, missing, or incorrect. ChipDue never initiates or guarantees a payment.
+- Liability and transaction fields can be delayed, missing, modified, or incorrect. ChipDue never initiates or guarantees a payment.
 - Vercel, Neon, Google, Plaid, and their free-tier terms or identity policies can change. Local manual mode remains provider-independent.
 
 ## Delete your data

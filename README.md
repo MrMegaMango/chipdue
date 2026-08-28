@@ -1,6 +1,6 @@
 # ChipDue
 
-ChipDue is a privacy-first dashboard for tracking credit-card statement balances, minimum payments, and due dates. It works entirely in manual mode and can optionally sync the same limited fields through Plaid Liabilities.
+ChipDue is a privacy-first dashboard for tracking credit-card statement balances, minimum payments, due dates, and opt-in transaction activity. It works entirely in manual mode and can optionally sync card details through Plaid Liabilities and Transactions.
 
 Choose one of two deployment modes:
 
@@ -14,8 +14,8 @@ Choose one of two deployment modes:
 - Track statement balance, minimum due, current balance, due date, statement date, and autopay status.
 - Optionally link one Google account for cloud sign-in without storing an email, profile, Google token, or refresh token.
 - Connect Plaid only when you explicitly choose to; manual mode never contacts Plaid.
-- Encrypt card payloads, Plaid access tokens, Item IDs, and institution names with AES-256-GCM.
-- Request only Plaid Liabilities - never transaction history, identity, or full account numbers.
+- Encrypt card payloads, transaction history, Plaid cursors, access tokens, Item IDs, and institution names with AES-256-GCM.
+- Request Plaid Liabilities and, with explicit consent, up to 24 months of card transactions—never identity or full account numbers.
 - Export due dates as an iCalendar file, with amounts omitted by default.
 - Keep financial data out of browser persistence, logs, source code, CI, and Git history.
 - Run privacy and full-history secret checks before every push.
@@ -120,14 +120,15 @@ Official references:
 2. Add `PLAID_CLIENT_ID`, `PLAID_SECRET`, and `PLAID_ENV` to `.env.local` for local use or Vercel's Production environment for hosted use.
 3. Never add a `PUBLIC_` or `VITE_` prefix to a secret.
 4. Keep `PLAID_ENV=sandbox` until the complete flow is tested.
-5. Restart or redeploy ChipDue, then choose **Connect with Plaid**.
+5. Restart or redeploy ChipDue, then choose **Connect Plaid**. New connections request Liabilities and Transactions; existing connections show **Enable activity** before transaction access is used.
 
-Plaid's Trial plan currently supports real data and Liabilities for a limited number of lifetime Production Items. An Item is one institution login and can contain multiple cards. Provider terms can change, so ChipDue always retains manual mode.
+Plaid plan access and pricing differ by product and can change. Confirm that both Liabilities and Transactions are enabled for your account before Production use. An Item is one institution login and can contain multiple cards, and ChipDue always retains manual mode.
 
 Official references:
 
 - [Plaid billing](https://plaid.com/docs/account/billing/)
 - [Plaid Liabilities](https://plaid.com/docs/liabilities/)
+- [Plaid Transactions](https://plaid.com/docs/transactions/)
 - [Plaid Link security flow](https://plaid.com/docs/link/)
 
 ## Where private data lives

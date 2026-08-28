@@ -16,6 +16,9 @@ const card: Card = {
 	statementDate: null,
 	isOverdue: false,
 	autopayEnabled: false,
+	transactionHistoryEnabled: false,
+	transactionHistoryStatus: null,
+	plaidConnectionId: null,
 	createdAt: '2027-01-01T00:00:00.000Z',
 	updatedAt: '2027-01-01T00:00:00.000Z',
 	lastSyncedAt: null
