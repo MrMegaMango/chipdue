@@ -2,7 +2,6 @@ import {
 	AccountType,
 	Configuration,
 	CountryCode,
-	CreditAccountSubtype,
 	PlaidApi,
 	PlaidEnvironments,
 	Products,
@@ -24,6 +23,10 @@ import {
 import { privateFingerprint } from './crypto';
 import { getInstallId } from './database';
 import { AppError } from './errors';
+import {
+	replacePlaidFinancialAccounts,
+	type PlaidFinancialAccountSnapshot
+} from './financial-records';
 import {
 	getPrivatePlaidItem,
 	listPlaidConnections,
@@ -94,6 +97,12 @@ function plaidErrorCode(error: unknown): string | null {
 	return typeof code === 'string' && /^[A-Z0-9_]{1,64}$/.test(code) ? code : null;
 }
 
+function optionalLinkProductUnavailable(error: unknown): boolean {
+	return new Set(['INVALID_PRODUCT', 'PRODUCT_NOT_ENABLED', 'PRODUCTS_NOT_SUPPORTED']).has(
+		plaidErrorCode(error) ?? ''
+	);
+}
+
 async function sanitizedPlaidError(error: unknown, itemId?: string): Promise<AppError> {
 	const code = plaidErrorCode(error);
 	if (code === 'ITEM_LOGIN_REQUIRED' && itemId) {
@@ -122,15 +131,35 @@ async function baseLinkTokenRequest(): Promise<Omit<LinkTokenCreateRequest, 'pro
 }
 
 export async function createPlaidLinkToken(): Promise<{ linkToken: string; expiration: string }> {
+	const request = {
+		...(await baseLinkTokenRequest()),
+		products: [Products.Transactions],
+		transactions: { days_requested: TRANSACTION_HISTORY_DAYS }
+	};
 	try {
 		const response = await getPlaidClient().linkTokenCreate({
-			...(await baseLinkTokenRequest()),
-			products: [Products.Liabilities, Products.Transactions],
-			transactions: { days_requested: TRANSACTION_HISTORY_DAYS },
-			account_filters: {
-				credit: { account_subtypes: [CreditAccountSubtype.CreditCard] }
-			}
+			...request,
+			additional_consented_products: [Products.Liabilities, Products.Investments]
 		});
+		return { linkToken: response.data.link_token, expiration: response.data.expiration };
+	} catch (error) {
+		if (error instanceof AppError) throw error;
+		if (!optionalLinkProductUnavailable(error)) throw await sanitizedPlaidError(error);
+	}
+
+	try {
+		const response = await getPlaidClient().linkTokenCreate({
+			...request,
+			additional_consented_products: [Products.Liabilities]
+		});
+		return { linkToken: response.data.link_token, expiration: response.data.expiration };
+	} catch (error) {
+		if (error instanceof AppError) throw error;
+		if (!optionalLinkProductUnavailable(error)) throw await sanitizedPlaidError(error);
+	}
+
+	try {
+		const response = await getPlaidClient().linkTokenCreate(request);
 		return { linkToken: response.data.link_token, expiration: response.data.expiration };
 	} catch (error) {
 		if (error instanceof AppError) throw error;
@@ -159,11 +188,39 @@ export async function createPlaidUpdateToken(
 	localItemId: string
 ): Promise<{ linkToken: string; expiration: string }> {
 	const item = await getPrivatePlaidItem(localItemId);
+	const request = {
+		...(await baseLinkTokenRequest()),
+		access_token: item.accessToken,
+		update: { account_selection_enabled: true }
+	};
 	try {
 		const response = await getPlaidClient().linkTokenCreate({
-			...(await baseLinkTokenRequest()),
-			access_token: item.accessToken
+			...request,
+			additional_consented_products: [Products.Transactions, Products.Investments]
 		});
+		return { linkToken: response.data.link_token, expiration: response.data.expiration };
+	} catch (error) {
+		if (error instanceof AppError) throw error;
+		if (!optionalLinkProductUnavailable(error)) {
+			throw await sanitizedPlaidError(error, localItemId);
+		}
+	}
+
+	try {
+		const response = await getPlaidClient().linkTokenCreate({
+			...request,
+			additional_consented_products: [Products.Transactions]
+		});
+		return { linkToken: response.data.link_token, expiration: response.data.expiration };
+	} catch (error) {
+		if (error instanceof AppError) throw error;
+		if (!optionalLinkProductUnavailable(error)) {
+			throw await sanitizedPlaidError(error, localItemId);
+		}
+	}
+
+	try {
+		const response = await getPlaidClient().linkTokenCreate(request);
 		return { linkToken: response.data.link_token, expiration: response.data.expiration };
 	} catch (error) {
 		if (error instanceof AppError) throw error;
@@ -375,16 +432,88 @@ function applyTransactionUpdates(
 	};
 }
 
+function syncedFinancialAccountType(
+	type: AccountType,
+	subtype: string | null
+): PlaidFinancialAccountSnapshot['accountType'] | null {
+	if (type === AccountType.Investment) return 'brokerage';
+	if (type !== AccountType.Depository) return null;
+	if (subtype === 'checking') return 'checking';
+	if (subtype === 'savings' || subtype === 'money market') return 'savings';
+	if (subtype === 'cash management') return 'cash_management';
+	return 'other';
+}
+
+function optionalProductCanBeSkipped(error: unknown): boolean {
+	return new Set([
+		'ADDITIONAL_CONSENT_REQUIRED',
+		'NO_INVESTMENT_ACCOUNTS',
+		'NO_LIABILITY_ACCOUNTS',
+		'PRODUCT_NOT_ENABLED',
+		'PRODUCT_NOT_READY',
+		'PRODUCTS_NOT_SUPPORTED'
+	]).has(plaidErrorCode(error) ?? '');
+}
+
 export async function syncPlaidItem(
 	localItemId: string,
 	options: { enableTransactions?: boolean } = {}
-): Promise<{ syncedAt: string; count: number; transactionCount: number }> {
+): Promise<{ syncedAt: string; count: number; accountCount: number; transactionCount: number }> {
 	const item = await getPrivatePlaidItem(localItemId);
 	try {
-		const [response, brand] = await Promise.all([
-			getPlaidClient().liabilitiesGet({ access_token: item.accessToken }),
+		const client = getPlaidClient();
+		const [accountsResponse, brand] = await Promise.all([
+			client.accountsGet({ access_token: item.accessToken }),
 			institutionBrand(item.accessToken, item.institutionName)
 		]);
+		const plaidAccounts = accountsResponse.data.accounts;
+
+		let liabilities = new Map<
+			string,
+			NonNullable<
+				Awaited<ReturnType<PlaidApi['liabilitiesGet']>>['data']['liabilities']['credit']
+			>[number]
+		>();
+		if (plaidAccounts.some((account) => account.type === AccountType.Credit)) {
+			try {
+				const response = await client.liabilitiesGet({ access_token: item.accessToken });
+				liabilities = new Map(
+					(response.data.liabilities.credit ?? [])
+						.filter((liability) => liability.account_id)
+						.map((liability) => [liability.account_id as string, liability])
+				);
+			} catch (error) {
+				if (!optionalProductCanBeSkipped(error)) throw error;
+			}
+		}
+
+		const investmentCostBasis = new Map<string, number>();
+		if (plaidAccounts.some((account) => account.type === AccountType.Investment)) {
+			try {
+				const response = await client.investmentsHoldingsGet({
+					access_token: item.accessToken
+				});
+				const totals = new Map<string, { cents: number; complete: boolean; count: number }>();
+				for (const holding of response.data.holdings) {
+					const accountId = safeText(holding.account_id, 256);
+					if (!accountId) continue;
+					const total = totals.get(accountId) ?? { cents: 0, complete: true, count: 0 };
+					const costBasis = amountToCents(holding.cost_basis);
+					total.count += 1;
+					if (costBasis === null) total.complete = false;
+					else total.cents += costBasis;
+					totals.set(accountId, total);
+				}
+				for (const [accountId, total] of totals) {
+					if (total.complete && total.count > 0 && Number.isSafeInteger(total.cents)) {
+						investmentCostBasis.set(accountId, total.cents);
+					}
+				}
+			} catch (error) {
+				if (!optionalProductCanBeSkipped(error)) throw error;
+			}
+		}
+
 		let transactionState = await readPlaidTransactionState(localItemId);
 		if (options.enableTransactions || transactionState.enabled) {
 			try {
@@ -401,51 +530,67 @@ export async function syncPlaidItem(
 				};
 			}
 		}
-		const liabilities = new Map(
-			(response.data.liabilities.credit ?? [])
-				.filter((liability) => liability.account_id)
-				.map((liability) => [liability.account_id as string, liability])
-		);
 		const snapshots: PlaidCardSnapshot[] = [];
+		const accountSnapshots: PlaidFinancialAccountSnapshot[] = [];
 
-		for (const account of response.data.accounts) {
+		for (const account of plaidAccounts) {
 			const liability = liabilities.get(account.account_id);
-			if (!liability || account.type !== AccountType.Credit) continue;
-			const accountReference = privateFingerprint(account.account_id, 'plaid-account');
-			const transactionHistory: StoredTransactionHistory | undefined = transactionState.enabled
-				? {
-						enabled: true,
-						cursor: transactionState.cursor,
-						status: transactionState.status,
-						transactions: transactionState.byAccountReference.get(accountReference) ?? []
-					}
-				: undefined;
-			snapshots.push({
+			if (account.type === AccountType.Credit) {
+				const accountReference = privateFingerprint(account.account_id, 'plaid-account');
+				const transactionHistory: StoredTransactionHistory | undefined = transactionState.enabled
+					? {
+							enabled: true,
+							cursor: transactionState.cursor,
+							status: transactionState.status,
+							transactions: transactionState.byAccountReference.get(accountReference) ?? []
+						}
+					: undefined;
+				snapshots.push({
+					accountId: account.account_id,
+					nickname: account.name.trim().slice(0, 80) || 'Credit card',
+					issuer: brand.name,
+					issuerLogoBase64: brand.logoBase64,
+					last4: safeLast4(account.mask),
+					currency: safeCurrency(
+						account.balances.iso_currency_code ?? account.balances.unofficial_currency_code
+					),
+					statementBalanceCents: amountToCents(liability?.last_statement_balance ?? null),
+					minimumPaymentCents: amountToCents(liability?.minimum_payment_amount ?? null),
+					currentBalanceCents: amountToCents(account.balances.current),
+					dueDate: safeDate(liability?.next_payment_due_date ?? null),
+					statementDate: safeDate(liability?.last_statement_issue_date ?? null),
+					isOverdue: liability?.is_overdue ?? null,
+					autopayEnabled: false,
+					...(transactionHistory ? { transactionHistory } : {})
+				});
+				continue;
+			}
+
+			const accountType = syncedFinancialAccountType(account.type, account.subtype);
+			if (!accountType) continue;
+			accountSnapshots.push({
 				accountId: account.account_id,
-				nickname: account.name.trim().slice(0, 80) || 'Credit card',
-				issuer: brand.name,
-				issuerLogoBase64: brand.logoBase64,
+				nickname: account.name.trim().slice(0, 80) || 'Financial account',
+				institution: brand.name,
+				accountType,
 				last4: safeLast4(account.mask),
 				currency: safeCurrency(
 					account.balances.iso_currency_code ?? account.balances.unofficial_currency_code
 				),
-				statementBalanceCents: amountToCents(liability.last_statement_balance),
-				minimumPaymentCents: amountToCents(liability.minimum_payment_amount),
 				currentBalanceCents: amountToCents(account.balances.current),
-				dueDate: safeDate(liability.next_payment_due_date),
-				statementDate: safeDate(liability.last_statement_issue_date),
-				isOverdue: liability.is_overdue,
-				autopayEnabled: false,
-				...(transactionHistory ? { transactionHistory } : {})
+				costBasisCents:
+					accountType === 'brokerage' ? (investmentCostBasis.get(account.account_id) ?? null) : null
 			});
 		}
 
 		const syncedAt = new Date().toISOString();
+		await replacePlaidFinancialAccounts(localItemId, accountSnapshots, syncedAt);
 		await replacePlaidCards(localItemId, snapshots, syncedAt);
 		await markPlaidItemSynced(localItemId, syncedAt);
 		return {
 			syncedAt,
 			count: snapshots.length,
+			accountCount: accountSnapshots.length,
 			transactionCount: [...transactionState.byAccountReference.values()].reduce(
 				(total, transactions) => total + transactions.length,
 				0
@@ -460,6 +605,7 @@ export async function syncPlaidItem(
 export async function syncAllPlaidItems(): Promise<{
 	syncedItems: number;
 	cardCount: number;
+	accountCount: number;
 	transactionCount: number;
 	lastSyncedAt: string | null;
 }> {
@@ -468,6 +614,7 @@ export async function syncAllPlaidItems(): Promise<{
 	return {
 		syncedItems: results.length,
 		cardCount: results.reduce((total, result) => total + result.count, 0),
+		accountCount: results.reduce((total, result) => total + result.accountCount, 0),
 		transactionCount: results.reduce((total, result) => total + result.transactionCount, 0),
 		lastSyncedAt:
 			results

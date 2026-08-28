@@ -2,8 +2,11 @@ import { randomUUID } from 'node:crypto';
 import type {
 	Card,
 	CardRewardCategory,
+	CardRewardCategoryMatch,
+	CardRewardType,
 	CardSource,
 	CardTransaction,
+	CardTransactionRewardEstimate,
 	TransactionHistoryStatus
 } from '$lib/types';
 import { cloudQuery, cloudTransaction, type CloudStatement } from './cloud-database';
@@ -13,9 +16,27 @@ import { AppError } from './errors';
 import { getRuntimeMode } from './runtime';
 import type { CreateManualCardData, UpdateCardRewardsData, UpdateManualCardData } from './schemas';
 
+interface StoredCardRewardCategory {
+	id: string;
+	name: string;
+	multiplier?: number | null;
+	matchCategory?: CardRewardCategoryMatch | null;
+	rate?: string;
+}
+
 interface StoredCardRewards {
 	programName: string | null;
 	cashValueCents: number | null;
+	rewardType?: CardRewardType | null;
+	baseRate?: number | null;
+	categories: StoredCardRewardCategory[];
+}
+
+interface NormalizedCardRewards {
+	programName: string | null;
+	cashValueCents: number | null;
+	rewardType: CardRewardType | null;
+	baseRate: number | null;
 	categories: CardRewardCategory[];
 }
 
@@ -88,7 +109,32 @@ const TRANSACTION_HISTORY_STATUSES = new Set<TransactionHistoryStatus>([
 	'INITIAL_UPDATE_COMPLETE',
 	'HISTORICAL_UPDATE_COMPLETE'
 ]);
+const CARD_REWARD_TYPES = new Set<CardRewardType>(['points', 'miles', 'cash_back']);
+const CARD_REWARD_CATEGORY_MATCHES = new Set<CardRewardCategoryMatch>([
+	'dining',
+	'groceries',
+	'gas',
+	'travel',
+	'transit',
+	'entertainment',
+	'drugstores',
+	'streaming',
+	'online_shopping',
+	'home_improvement',
+	'utilities'
+]);
+const NON_REWARD_TRANSACTION_CATEGORIES = new Set([
+	'BANK_FEES',
+	'INCOME',
+	'LOAN_PAYMENTS',
+	'TRANSFER_IN',
+	'TRANSFER_OUT'
+]);
 const MAX_STORED_TRANSACTIONS = 10_000;
+
+function isRewardRate(value: unknown): value is number {
+	return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 100;
+}
 
 function isStoredPlaidTransaction(value: unknown): value is StoredPlaidTransaction {
 	if (!value || typeof value !== 'object') return false;
@@ -160,6 +206,13 @@ function isStoredCardRewards(value: unknown): value is StoredCardRewards | undef
 				Number.isSafeInteger(rewards.cashValueCents) &&
 				rewards.cashValueCents >= 0 &&
 				rewards.cashValueCents <= 100_000_000_000)) &&
+		(rewards.rewardType === undefined ||
+			rewards.rewardType === null ||
+			(typeof rewards.rewardType === 'string' &&
+				CARD_REWARD_TYPES.has(rewards.rewardType as CardRewardType))) &&
+		(rewards.baseRate === undefined ||
+			rewards.baseRate === null ||
+			isRewardRate(rewards.baseRate)) &&
 		Array.isArray(rewards.categories) &&
 		rewards.categories.length <= 12 &&
 		rewards.categories.every(
@@ -173,11 +226,62 @@ function isStoredCardRewards(value: unknown): value is StoredCardRewards | undef
 				typeof category.name === 'string' &&
 				category.name.length > 0 &&
 				category.name.length <= 60 &&
-				typeof category.rate === 'string' &&
-				category.rate.length > 0 &&
-				category.rate.length <= 20
+				(((category.multiplier === null || isRewardRate(category.multiplier)) &&
+					(category.matchCategory === undefined ||
+						category.matchCategory === null ||
+						(typeof category.matchCategory === 'string' &&
+							CARD_REWARD_CATEGORY_MATCHES.has(
+								category.matchCategory as CardRewardCategoryMatch
+							)))) ||
+					(typeof category.rate === 'string' &&
+						category.rate.length > 0 &&
+						category.rate.length <= 20))
 		)
 	);
+}
+
+function parseLegacyRewardRate(value: string | undefined): number | null {
+	if (!value) return null;
+	const match = value.trim().match(/^(\d+(?:\.\d+)?)\s*(?:x|%)?$/i);
+	if (!match) return null;
+	const rate = Number(match[1]);
+	return isRewardRate(rate) ? rate : null;
+}
+
+function inferredRewardMatch(name: string): CardRewardCategoryMatch | null {
+	const normalized = name
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, ' ')
+		.trim();
+	if (/\b(dining|restaurant|restaurants|coffee|fast food)\b/.test(normalized)) return 'dining';
+	if (/\b(grocery|groceries|supermarket|supermarkets)\b/.test(normalized)) return 'groceries';
+	if (/\b(gas|fuel|gas station|gas stations)\b/.test(normalized)) return 'gas';
+	if (/\b(travel|hotel|hotels|airfare|flight|flights)\b/.test(normalized)) return 'travel';
+	if (/\b(transit|rideshare|taxi|taxis|parking|tolls)\b/.test(normalized)) return 'transit';
+	if (/\b(entertainment|events|movies)\b/.test(normalized)) return 'entertainment';
+	if (/\b(drugstore|drugstores|pharmacy|pharmacies)\b/.test(normalized)) return 'drugstores';
+	if (/\b(streaming|streaming services)\b/.test(normalized)) return 'streaming';
+	if (/\b(online shopping|online purchases|online marketplace)\b/.test(normalized)) {
+		return 'online_shopping';
+	}
+	if (/\b(home improvement|hardware)\b/.test(normalized)) return 'home_improvement';
+	if (/\b(utilities|utility|internet|cable|phone)\b/.test(normalized)) return 'utilities';
+	return null;
+}
+
+function normalizeStoredRewards(rewards: StoredCardRewards | undefined): NormalizedCardRewards {
+	return {
+		programName: rewards?.programName ?? null,
+		cashValueCents: rewards?.cashValueCents ?? null,
+		rewardType: rewards?.rewardType ?? null,
+		baseRate: rewards?.baseRate ?? null,
+		categories: (rewards?.categories ?? []).map((category) => ({
+			id: category.id,
+			name: category.name,
+			multiplier: category.multiplier ?? parseLegacyRewardRate(category.rate),
+			matchCategory: category.matchCategory ?? inferredRewardMatch(category.name)
+		}))
+	};
 }
 
 function decodePayload(row: CardRow): CardPayload | null {
@@ -212,6 +316,7 @@ function decodePayload(row: CardRow): CardPayload | null {
 function rowToCard(row: CardRow): Card | null {
 	const payload = decodePayload(row);
 	if (!payload) return null;
+	const rewards = normalizeStoredRewards(payload.rewards);
 	return {
 		id: row.id,
 		source: row.source,
@@ -229,9 +334,11 @@ function rowToCard(row: CardRow): Card | null {
 		statementDate: payload.statementDate,
 		isOverdue: payload.isOverdue,
 		autopayEnabled: payload.autopayEnabled,
-		rewardProgramName: payload.rewards?.programName ?? null,
-		rewardValueCents: payload.rewards?.cashValueCents ?? null,
-		rewardCategories: payload.rewards?.categories ?? [],
+		rewardProgramName: rewards.programName,
+		rewardValueCents: rewards.cashValueCents,
+		rewardType: rewards.rewardType,
+		rewardBaseRate: rewards.baseRate,
+		rewardCategories: rewards.categories,
 		transactionHistoryEnabled: payload.transactionHistory?.enabled === true,
 		transactionHistoryStatus: payload.transactionHistory?.status ?? null,
 		plaidConnectionId: row.source === 'plaid' ? row.plaid_item_id : null,
@@ -379,7 +486,14 @@ export async function updateManualCard(id: string, changes: UpdateManualCardData
 		rewards: {
 			programName: existing.rewardProgramName,
 			cashValueCents: existing.rewardValueCents,
-			categories: existing.rewardCategories
+			rewardType: existing.rewardType,
+			baseRate: existing.rewardBaseRate,
+			categories: existing.rewardCategories.map((category) => ({
+				id: category.id,
+				name: category.name,
+				multiplier: category.multiplier,
+				matchCategory: category.matchCategory
+			}))
 		}
 	};
 	const encrypted = encryptJson(payload, `card:${id}`);
@@ -411,23 +525,22 @@ export async function updateCardRewards(id: string, changes: UpdateCardRewardsDa
 	const payload = row ? decodePayload(row) : null;
 	if (!row || !payload) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
 
-	const existing = payload.rewards;
+	const existing = normalizeStoredRewards(payload.rewards);
 	payload.rewards = {
 		programName:
-			changes.rewardProgramName === undefined
-				? (existing?.programName ?? null)
-				: changes.rewardProgramName,
+			changes.rewardProgramName === undefined ? existing.programName : changes.rewardProgramName,
 		cashValueCents:
-			changes.rewardValueCents === undefined
-				? (existing?.cashValueCents ?? null)
-				: changes.rewardValueCents,
+			changes.rewardValueCents === undefined ? existing.cashValueCents : changes.rewardValueCents,
+		rewardType: changes.rewardType === undefined ? existing.rewardType : changes.rewardType,
+		baseRate: changes.rewardBaseRate === undefined ? existing.baseRate : changes.rewardBaseRate,
 		categories:
 			changes.rewardCategories === undefined
-				? (existing?.categories ?? [])
+				? existing.categories
 				: changes.rewardCategories.map((category) => ({
 						id: category.id ?? randomUUID(),
 						name: category.name,
-						rate: category.rate
+						multiplier: category.multiplier,
+						matchCategory: category.matchCategory
 					}))
 	};
 	const encrypted = encryptJson(payload, `card:${id}`);
@@ -480,19 +593,23 @@ async function replaceCloudPlaidCards(
 		 FROM public.carddue_cards WHERE plaid_item_id = $1 AND source = 'plaid'`,
 		[plaidItemId]
 	);
+	const existingCards = existingRows.flatMap((row) => {
+		const payload = decodePayload(row);
+		return payload ? [{ row, payload }] : [];
+	});
 	const rewardsByReference = new Map(
-		existingRows.flatMap((row) => {
-			const rewards = decodePayload(row)?.rewards;
+		existingCards.flatMap(({ row, payload }) => {
+			const rewards = payload.rewards;
 			return row.external_account_ref && rewards
 				? [[row.external_account_ref, rewards] as const]
 				: [];
 		})
 	);
-	const references: string[] = [];
+	const references = new Set<string>();
 	const statements: CloudStatement[] = snapshots.map((snapshot) => {
 		const reference = privateFingerprint(snapshot.accountId, 'plaid-account');
 		const id = privateUuid(snapshot.accountId, `plaid-card:${plaidItemId}`);
-		references.push(reference);
+		references.add(reference);
 		return {
 			text: `INSERT INTO public.carddue_cards
 			       (id, source, plaid_item_id, external_account_ref, payload_enc,
@@ -511,21 +628,15 @@ async function replaceCloudPlaidCards(
 			]
 		};
 	});
-	statements.push(
-		references.length
-			? {
-					text: `DELETE FROM public.carddue_cards
-					       WHERE plaid_item_id = $1 AND source = 'plaid'
-					       AND NOT (external_account_ref = ANY($2::text[]))`,
-					params: [plaidItemId, references]
-				}
-			: {
-					text: `DELETE FROM public.carddue_cards
-					       WHERE plaid_item_id = $1 AND source = 'plaid'`,
-					params: [plaidItemId]
-				}
-	);
-	await cloudTransaction(statements);
+	for (const { row } of existingCards) {
+		if (row.external_account_ref && !references.has(row.external_account_ref)) {
+			statements.push({
+				text: `DELETE FROM public.carddue_cards WHERE id = $1 AND source = 'plaid'`,
+				params: [row.id]
+			});
+		}
+	}
+	if (statements.length > 0) await cloudTransaction(statements);
 }
 
 function replaceLocalPlaidCards(
@@ -537,20 +648,26 @@ function replaceLocalPlaidCards(
 	const transaction = database.transaction(() => {
 		const existingRows = database
 			.prepare(
-				`SELECT id, source, payload_enc, last_synced_at, created_at, updated_at,
-				        external_account_ref
+				`SELECT id, source, plaid_item_id, external_account_ref, payload_enc,
+				        last_synced_at, created_at, updated_at
 				 FROM cards WHERE plaid_item_id = ? AND source = 'plaid'`
 			)
 			.all(plaidItemId) as PlaidCardRow[];
-		const existingByReference = new Map(existingRows.map((row) => [row.external_account_ref, row]));
+		const existingCards = existingRows.flatMap((row) => {
+			const payload = decodePayload(row);
+			return payload ? [{ row, payload }] : [];
+		});
+		const existingByReference = new Map(
+			existingCards.map(({ row, payload }) => [row.external_account_ref, { row, payload }])
+		);
 		const seenReferences = new Set<string>();
 
 		for (const snapshot of snapshots) {
 			const reference = privateFingerprint(snapshot.accountId, 'plaid-account');
 			seenReferences.add(reference);
 			const current = existingByReference.get(reference);
-			const id = current?.id ?? randomUUID();
-			const rewards = current ? decodePayload(current)?.rewards : undefined;
+			const id = current?.row.id ?? randomUUID();
+			const rewards = current?.payload.rewards;
 			const encrypted = encryptJson(snapshotPayload(snapshot, rewards), `card:${id}`);
 			if (current) {
 				database
@@ -571,7 +688,7 @@ function replaceLocalPlaidCards(
 			}
 		}
 
-		for (const row of existingRows) {
+		for (const { row } of existingCards) {
 			if (!seenReferences.has(row.external_account_ref)) {
 				database.prepare(`DELETE FROM cards WHERE id = ? AND source = 'plaid'`).run(row.id);
 			}
@@ -643,6 +760,83 @@ export async function readPlaidTransactionState(
 	};
 }
 
+function transactionMatchesRewardCategory(
+	transaction: StoredPlaidTransaction,
+	matchCategory: CardRewardCategoryMatch
+): boolean {
+	const primary = transaction.categoryPrimary?.toUpperCase() ?? '';
+	const detailed = transaction.categoryDetailed?.toUpperCase() ?? '';
+	const category = `${primary} ${detailed}`;
+
+	switch (matchCategory) {
+		case 'dining':
+			return /(RESTAURANT|FAST_FOOD|FOOD_TRUCK|COFFEE|BAR)/.test(detailed);
+		case 'groceries':
+			return /(GROCER|SUPERMARKET)/.test(detailed);
+		case 'gas':
+			return /(GAS|FUEL)/.test(detailed);
+		case 'travel':
+			return primary === 'TRAVEL';
+		case 'transit':
+			return (
+				primary === 'TRANSPORTATION' &&
+				!/(GAS|FUEL)/.test(detailed) &&
+				/(PUBLIC_TRANSIT|TAXI|RIDESHARE|PARKING|TOLL|TRANSPORTATION)/.test(category)
+			);
+		case 'entertainment':
+			return primary === 'ENTERTAINMENT';
+		case 'drugstores':
+			return /(PHARMAC|DRUGSTORE)/.test(detailed);
+		case 'streaming':
+			return /(STREAMING|MUSIC_AND_AUDIO|TV_AND_MOVIES)/.test(detailed);
+		case 'online_shopping':
+			return /(ONLINE_MARKETPLACE|ONLINE_RETAIL)/.test(detailed);
+		case 'home_improvement':
+			return /(HOME_IMPROVEMENT|HARDWARE|BUILDING_SUPPLIES)/.test(detailed);
+		case 'utilities':
+			return (
+				primary === 'RENT_AND_UTILITIES' &&
+				/(UTILIT|ELECTRIC|INTERNET|CABLE|TELEPHONE|WATER|SEWAGE|GARBAGE)/.test(detailed)
+			);
+	}
+}
+
+function transactionRewardEstimate(
+	transaction: StoredPlaidTransaction,
+	rewards: NormalizedCardRewards
+): CardTransactionRewardEstimate | null {
+	if (
+		!rewards.rewardType ||
+		transaction.amountCents <= 0 ||
+		(transaction.categoryPrimary !== null &&
+			NON_REWARD_TRANSACTION_CATEGORIES.has(transaction.categoryPrimary.toUpperCase()))
+	) {
+		return null;
+	}
+
+	let rate = rewards.baseRate;
+	let categoryName: string | null = null;
+	for (const category of rewards.categories) {
+		if (
+			category.multiplier !== null &&
+			category.matchCategory &&
+			transactionMatchesRewardCategory(transaction, category.matchCategory) &&
+			(rate === null || category.multiplier > rate)
+		) {
+			rate = category.multiplier;
+			categoryName = category.name;
+		}
+	}
+	if (rate === null) return null;
+
+	return {
+		type: rewards.rewardType,
+		amount: Math.round((transaction.amountCents * rate) / 100),
+		rate,
+		categoryName
+	};
+}
+
 export async function listCardTransactions(
 	cardId: string,
 	limit = 500
@@ -679,7 +873,8 @@ export async function listCardTransactions(
 			409
 		);
 	}
-	const history = decodePayload(row)?.transactionHistory;
+	const payload = decodePayload(row);
+	const history = payload?.transactionHistory;
 	if (!history) {
 		throw new AppError(
 			'TRANSACTION_HISTORY_NOT_ENABLED',
@@ -687,6 +882,7 @@ export async function listCardTransactions(
 			409
 		);
 	}
+	const rewards = normalizeStoredRewards(payload?.rewards);
 	const transactions = history.transactions
 		.map<CardTransaction>((transaction) => ({
 			id: privateUuid(transaction.transactionId, `plaid-transaction:${cardId}`),
@@ -698,7 +894,8 @@ export async function listCardTransactions(
 			authorizedDate: transaction.authorizedDate,
 			pending: transaction.pending,
 			categoryPrimary: transaction.categoryPrimary,
-			categoryDetailed: transaction.categoryDetailed
+			categoryDetailed: transaction.categoryDetailed,
+			rewardEstimate: transactionRewardEstimate(transaction, rewards)
 		}))
 		.sort(
 			(left, right) => right.date.localeCompare(left.date) || left.name.localeCompare(right.name)

@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { AccountBonus, BonusRequirement, FinancialAccount } from '$lib/types';
-import { cloudQuery } from './cloud-database';
-import { decryptJson, encryptJson } from './crypto';
+import { cloudQuery, cloudTransaction, type CloudStatement } from './cloud-database';
+import { decryptJson, encryptJson, privateFingerprint, privateUuid } from './crypto';
 import { getDatabase } from './database';
 import { AppError } from './errors';
 import { getRuntimeMode } from './runtime';
@@ -19,9 +19,30 @@ import {
 
 interface PrivateRecordRow extends Record<string, unknown> {
 	id: string;
+	source: 'manual' | 'plaid';
+	plaid_item_id: string | null;
+	external_account_ref: string | null;
 	payload_enc: string;
+	last_synced_at: string | null;
 	created_at: string;
 	updated_at: string;
+}
+
+interface PlaidAccountRow extends PrivateRecordRow {
+	source: 'plaid';
+	plaid_item_id: string;
+	external_account_ref: string;
+}
+
+export interface PlaidFinancialAccountSnapshot {
+	accountId: string;
+	nickname: string;
+	institution: string | null;
+	accountType: 'checking' | 'savings' | 'brokerage' | 'cash_management' | 'other';
+	last4: string | null;
+	currency: string;
+	currentBalanceCents: number | null;
+	costBasisCents: number | null;
 }
 
 const dateSchema = z
@@ -89,6 +110,7 @@ function decodeRecord(row: PrivateRecordRow): PrivateRecordPayload | null {
 function rowToAccount(row: PrivateRecordRow, payload: AccountPayload): FinancialAccount {
 	return {
 		id: row.id,
+		source: row.source,
 		nickname: payload.nickname,
 		institution: payload.institution,
 		accountType: payload.accountType,
@@ -100,6 +122,8 @@ function rowToAccount(row: PrivateRecordRow, payload: AccountPayload): Financial
 		costBasisCents: payload.costBasisCents,
 		openedDate: payload.openedDate,
 		notes: payload.notes,
+		plaidConnectionId: row.source === 'plaid' ? row.plaid_item_id : null,
+		lastSyncedAt: row.last_synced_at,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at
 	};
@@ -126,33 +150,37 @@ function rowToBonus(row: PrivateRecordRow, payload: BonusPayload): AccountBonus 
 	};
 }
 
-async function listManualRows(): Promise<PrivateRecordRow[]> {
+async function listRows(): Promise<PrivateRecordRow[]> {
 	return getRuntimeMode() === 'cloud'
 		? await cloudQuery<PrivateRecordRow>(
-				`SELECT id::text, payload_enc, created_at, updated_at
-				 FROM public.carddue_cards WHERE source = 'manual'`
+				`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
+				        last_synced_at, created_at, updated_at
+				 FROM public.carddue_cards`
 			)
 		: (getDatabase()
 				.prepare(
-					`SELECT id, payload_enc, created_at, updated_at
-					 FROM cards WHERE source = 'manual'`
+					`SELECT id, source, plaid_item_id, external_account_ref, payload_enc,
+					        last_synced_at, created_at, updated_at
+					 FROM cards`
 				)
 				.all() as PrivateRecordRow[]);
 }
 
-async function getManualRow(id: string): Promise<PrivateRecordRow | undefined> {
+async function getRow(id: string): Promise<PrivateRecordRow | undefined> {
 	return getRuntimeMode() === 'cloud'
 		? (
 				await cloudQuery<PrivateRecordRow>(
-					`SELECT id::text, payload_enc, created_at, updated_at
-					 FROM public.carddue_cards WHERE id = $1 AND source = 'manual'`,
+					`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
+					        last_synced_at, created_at, updated_at
+					 FROM public.carddue_cards WHERE id = $1`,
 					[id]
 				)
 			)[0]
 		: (getDatabase()
 				.prepare(
-					`SELECT id, payload_enc, created_at, updated_at
-					 FROM cards WHERE id = ? AND source = 'manual'`
+					`SELECT id, source, plaid_item_id, external_account_ref, payload_enc,
+					        last_synced_at, created_at, updated_at
+					 FROM cards WHERE id = ?`
 				)
 				.get(id) as PrivateRecordRow | undefined);
 }
@@ -184,14 +212,14 @@ async function updateRecord(id: string, payload: PrivateRecordPayload, now: stri
 	if (getRuntimeMode() === 'cloud') {
 		const rows = await cloudQuery<{ id: string }>(
 			`UPDATE public.carddue_cards SET payload_enc = $1, updated_at = $2
-			 WHERE id = $3 AND source = 'manual' RETURNING id::text`,
+			 WHERE id = $3 RETURNING id::text`,
 			[encrypted, now, id]
 		);
 		if (!rows[0]) throw new AppError('RECORD_NOT_FOUND', 'Record not found.', 404);
 		return;
 	}
 	const result = getDatabase()
-		.prepare(`UPDATE cards SET payload_enc = ?, updated_at = ? WHERE id = ? AND source = 'manual'`)
+		.prepare(`UPDATE cards SET payload_enc = ?, updated_at = ? WHERE id = ?`)
 		.run(encrypted, now, id);
 	if (result.changes !== 1) throw new AppError('RECORD_NOT_FOUND', 'Record not found.', 404);
 }
@@ -214,7 +242,7 @@ function normalizeRequirements(requirements: CreateBonusData['requirements']): B
 
 export async function listFinancialAccounts(): Promise<FinancialAccount[]> {
 	const accounts: FinancialAccount[] = [];
-	for (const row of await listManualRows()) {
+	for (const row of await listRows()) {
 		const payload = decodeRecord(row);
 		if (payload?.recordType === 'account') accounts.push(rowToAccount(row, payload));
 	}
@@ -222,7 +250,7 @@ export async function listFinancialAccounts(): Promise<FinancialAccount[]> {
 }
 
 export async function getFinancialAccount(id: string): Promise<FinancialAccount> {
-	const row = await getManualRow(id);
+	const row = await getRow(id);
 	const payload = row ? decodeRecord(row) : null;
 	if (!row || payload?.recordType !== 'account') {
 		throw new AppError('ACCOUNT_NOT_FOUND', 'Account not found.', 404);
@@ -244,6 +272,21 @@ export async function updateFinancialAccount(
 	changes: UpdateFinancialAccountData
 ): Promise<FinancialAccount> {
 	const existing = await getFinancialAccount(id);
+	if (
+		existing.source === 'plaid' &&
+		(changes.institution !== undefined ||
+			changes.accountType !== undefined ||
+			changes.status !== undefined ||
+			changes.last4 !== undefined ||
+			changes.currency !== undefined ||
+			changes.currentBalanceCents !== undefined)
+	) {
+		throw new AppError(
+			'PLAID_ACCOUNT_READ_ONLY',
+			'Synced account balances and bank details are updated through Plaid.',
+			409
+		);
+	}
 	const payload: AccountPayload = {
 		recordType: 'account',
 		nickname: changes.nickname ?? existing.nickname,
@@ -267,13 +310,170 @@ export async function updateFinancialAccount(
 }
 
 export async function deleteFinancialAccount(id: string): Promise<void> {
-	await getFinancialAccount(id);
+	const existing = await getFinancialAccount(id);
+	if (existing.source === 'plaid') {
+		throw new AppError(
+			'PLAID_ACCOUNT_READ_ONLY',
+			'Disconnect the institution to remove a synced account.',
+			409
+		);
+	}
 	await deleteRecord(id);
+}
+
+function plaidAccountPayload(
+	snapshot: PlaidFinancialAccountSnapshot,
+	existing?: AccountPayload
+): AccountPayload {
+	return {
+		recordType: 'account',
+		nickname: existing?.nickname ?? snapshot.nickname,
+		institution: snapshot.institution,
+		accountType: snapshot.accountType,
+		ownerType: existing?.ownerType ?? 'personal',
+		status: existing?.status ?? 'active',
+		last4: snapshot.last4,
+		currency: snapshot.currency,
+		currentBalanceCents: snapshot.currentBalanceCents,
+		costBasisCents: snapshot.costBasisCents ?? existing?.costBasisCents ?? null,
+		openedDate: existing?.openedDate ?? null,
+		notes: existing?.notes ?? null
+	};
+}
+
+function accountRows(rows: PrivateRecordRow[]): Array<{
+	row: PlaidAccountRow;
+	payload: AccountPayload;
+}> {
+	return rows.flatMap((row) => {
+		if (row.source !== 'plaid' || !row.plaid_item_id || !row.external_account_ref) {
+			return [];
+		}
+		const payload = decodeRecord(row);
+		return payload?.recordType === 'account' ? [{ row: row as PlaidAccountRow, payload }] : [];
+	});
+}
+
+async function replaceCloudPlaidAccounts(
+	plaidItemId: string,
+	snapshots: PlaidFinancialAccountSnapshot[],
+	syncedAt: string
+): Promise<void> {
+	const existing = accountRows(
+		await cloudQuery<PrivateRecordRow>(
+			`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
+			        last_synced_at, created_at, updated_at
+			 FROM public.carddue_cards WHERE plaid_item_id = $1 AND source = 'plaid'`,
+			[plaidItemId]
+		)
+	);
+	const existingByReference = new Map(
+		existing.map(({ row, payload }) => [row.external_account_ref, { row, payload }])
+	);
+	const seenIds = new Set<string>();
+	const statements: CloudStatement[] = [];
+
+	for (const snapshot of snapshots) {
+		const reference = privateFingerprint(snapshot.accountId, 'plaid-financial-account');
+		const current = existingByReference.get(reference);
+		const id = current?.row.id ?? privateUuid(snapshot.accountId, `plaid-account:${plaidItemId}`);
+		seenIds.add(id);
+		const encrypted = encryptJson(plaidAccountPayload(snapshot, current?.payload), `card:${id}`);
+		statements.push({
+			text: `INSERT INTO public.carddue_cards
+			       (id, source, plaid_item_id, external_account_ref, payload_enc,
+			        last_synced_at, created_at, updated_at)
+			       VALUES ($1, 'plaid', $2, $3, $4, $5, $5, $5)
+			       ON CONFLICT (plaid_item_id, external_account_ref) DO UPDATE SET
+			       payload_enc = EXCLUDED.payload_enc,
+			       last_synced_at = EXCLUDED.last_synced_at,
+			       updated_at = EXCLUDED.updated_at`,
+			params: [id, plaidItemId, reference, encrypted, syncedAt]
+		});
+	}
+
+	for (const { row } of existing) {
+		if (!seenIds.has(row.id)) {
+			statements.push({
+				text: `DELETE FROM public.carddue_cards WHERE id = $1 AND source = 'plaid'`,
+				params: [row.id]
+			});
+		}
+	}
+	if (statements.length > 0) await cloudTransaction(statements);
+}
+
+function replaceLocalPlaidAccounts(
+	plaidItemId: string,
+	snapshots: PlaidFinancialAccountSnapshot[],
+	syncedAt: string
+): void {
+	const database = getDatabase();
+	const transaction = database.transaction(() => {
+		const existing = accountRows(
+			database
+				.prepare(
+					`SELECT id, source, plaid_item_id, external_account_ref, payload_enc,
+					        last_synced_at, created_at, updated_at
+					 FROM cards WHERE plaid_item_id = ? AND source = 'plaid'`
+				)
+				.all(plaidItemId) as PrivateRecordRow[]
+		);
+		const existingByReference = new Map(
+			existing.map(({ row, payload }) => [row.external_account_ref, { row, payload }])
+		);
+		const seenIds = new Set<string>();
+
+		for (const snapshot of snapshots) {
+			const reference = privateFingerprint(snapshot.accountId, 'plaid-financial-account');
+			const current = existingByReference.get(reference);
+			const id = current?.row.id ?? randomUUID();
+			seenIds.add(id);
+			const encrypted = encryptJson(plaidAccountPayload(snapshot, current?.payload), `card:${id}`);
+			if (current) {
+				database
+					.prepare(
+						`UPDATE cards SET payload_enc = ?, last_synced_at = ?, updated_at = ?
+						 WHERE id = ? AND source = 'plaid'`
+					)
+					.run(encrypted, syncedAt, syncedAt, id);
+			} else {
+				database
+					.prepare(
+						`INSERT INTO cards
+						 (id, source, plaid_item_id, external_account_ref, payload_enc,
+						  last_synced_at, created_at, updated_at)
+						 VALUES (?, 'plaid', ?, ?, ?, ?, ?, ?)`
+					)
+					.run(id, plaidItemId, reference, encrypted, syncedAt, syncedAt, syncedAt);
+			}
+		}
+
+		for (const { row } of existing) {
+			if (!seenIds.has(row.id)) {
+				database.prepare(`DELETE FROM cards WHERE id = ? AND source = 'plaid'`).run(row.id);
+			}
+		}
+	});
+	transaction();
+}
+
+export async function replacePlaidFinancialAccounts(
+	plaidItemId: string,
+	snapshots: PlaidFinancialAccountSnapshot[],
+	syncedAt: string
+): Promise<void> {
+	if (getRuntimeMode() === 'cloud') {
+		await replaceCloudPlaidAccounts(plaidItemId, snapshots, syncedAt);
+	} else {
+		replaceLocalPlaidAccounts(plaidItemId, snapshots, syncedAt);
+	}
 }
 
 export async function listBonuses(): Promise<AccountBonus[]> {
 	const bonuses: AccountBonus[] = [];
-	for (const row of await listManualRows()) {
+	for (const row of await listRows()) {
+		if (row.source !== 'manual') continue;
 		const payload = decodeRecord(row);
 		if (payload?.recordType === 'bonus') bonuses.push(rowToBonus(row, payload));
 	}
@@ -288,9 +488,9 @@ export async function listBonuses(): Promise<AccountBonus[]> {
 }
 
 export async function getBonus(id: string): Promise<AccountBonus> {
-	const row = await getManualRow(id);
+	const row = await getRow(id);
 	const payload = row ? decodeRecord(row) : null;
-	if (!row || payload?.recordType !== 'bonus') {
+	if (!row || row.source !== 'manual' || payload?.recordType !== 'bonus') {
 		throw new AppError('BONUS_NOT_FOUND', 'Bonus not found.', 404);
 	}
 	return rowToBonus(row, payload);

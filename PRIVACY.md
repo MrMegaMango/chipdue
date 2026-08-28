@@ -21,20 +21,21 @@ The hosted design is not zero-knowledge or end-to-end encryption. Vercel stores 
 ChipDue stores only the fields required for the private financial workspace:
 
 - A user-selected account nickname, optional institution, account type, personal or business classification, lifecycle status, and optional last four characters
-- Optional account balance, brokerage cost basis or contributions, opening date, and private notes
+- Optional account balance, brokerage cost basis or contributions, opening date, private notes, data source, and last-sync time
 - A user-selected bonus name, optional linked account and institution, reward value, lifecycle status, requirements checklist, opening date, requirement deadline, expected or actual payout dates, safe-to-close date, and private notes
 - A user-selected card nickname and optional issuer name
 - Optional last four digits
 - Statement balance, minimum payment, and current balance
 - Statement date and next payment due date
 - Autopay preference, source, and last-update time
-- Optional rewards program name, cash-equivalent reward value, and user-entered bonus categories and rates
+- Optional rewards program name, reward type, base earning rate, cash-equivalent reward value, and user-entered bonus category names, rates, and Plaid category mappings
+- Reward estimates calculated by ChipDue from encrypted transaction amounts and the earning rules you enter; these are not issuer-reported rewards
 - Opaque identifiers needed to update or delete records
-- For Plaid connections, encrypted access tokens and Item IDs
+- For Plaid connections, encrypted access tokens, Item IDs, selected account details and balances, and optional investment holding cost basis
 - When transaction access is enabled, up to 24 months of encrypted card transactions, their pending/category fields, and the encrypted incremental-sync cursor
 - For optional Google sign-in, a keyed one-way fingerprint of Google's issuer and stable subject
 
-It does not store full account numbers, credentials entered into Plaid Link, identity profiles, addresses, locations, original bank descriptions, merchant logos, counterparties, or raw Plaid responses. Plaid responses are mapped immediately to the allowlisted card and transaction fields, encrypted as part of the card payload, and then discarded.
+It does not store full account numbers, credentials entered into Plaid Link, identity profiles, addresses, locations, original bank descriptions, merchant logos, counterparties, security-level investment positions, or raw Plaid responses. Plaid responses are mapped immediately to the allowlisted account, card, and transaction fields, encrypted as application records, and then discarded.
 
 When Google sign-in is enabled, ChipDue does not request or store the Google email, name, picture, profile, access token, ID token, or refresh token. A short-lived encrypted browser cookie carries the OAuth state, nonce, PKCE verifier, intent, expiry, and either the initiating ChipDue session or an opaque bootstrap-claim reference. The raw Google-only setup token is never stored in that cookie or in Neon. The cookie is cleared at callback; a validated one-time database marker is atomically consumed, while abandoned markers expire and are pruned.
 
@@ -49,7 +50,8 @@ Plaid is optional in both modes. When you explicitly start Plaid Link:
 - Your browser loads Plaid's Link SDK from `cdn.plaid.com`.
 - Plaid and the selected financial institution handle authentication.
 - A short-lived public token returns to the ChipDue server.
-- The server exchanges it and requests Liabilities plus up to 24 months of Transactions data from Plaid. Existing connections require a separate **Enable activity** consent flow before ChipDue calls Transactions.
+- The server exchanges it and requests Accounts, Investments, Liabilities, and up to 24 months of Transactions data from Plaid. Existing connections may require one **Manage accounts** pass to authorize accounts that were not selected originally.
+- ChipDue maps selected checking, savings, cash-management, and brokerage accounts to encrypted account records. Balances refresh during scheduled and on-demand syncs; brokerage cost basis is included only when Plaid Investments returns complete holding data.
 - ChipDue keeps only transaction date, display name, optional merchant, amount, currency, pending state, and category; it maps those fields into the encrypted card payload and discards the raw response.
 
 Google authentication is optional in private cloud mode. Password mode first links it only from an existing ChipDue session. Google-only mode instead uses a temporary high-entropy operator setup token and has no password fallback. During each Google flow, the browser contacts Google and Google necessarily receives network and service metadata such as the IP address, time, requested `openid` scope, and ChipDue hostname. Google's consent screen also displays the User Support Email configured by the deployer and is reachable through the public login start; use a dedicated non-personal monitored alias or group whose membership is private. Google returns a short-lived authorization code to ChipDue's exact callback. The server exchanges and validates it, keeps only a keyed issuer-and-subject fingerprint for the linked owner, issues ChipDue's own opaque session, and discards the provider tokens.
@@ -81,7 +83,7 @@ Calendar files omit monetary amounts by default. Cloud exports require an authen
 - Local encryption mainly reduces accidental disclosure and repository leakage because the key and database reside on the same computer.
 - Cloud application encryption protects against a database-only disclosure, not a simultaneous Vercel runtime and database compromise.
 - Plaid and connected institutions process information under their own terms and privacy policies.
-- Liability and transaction fields can be delayed, missing, modified, or incorrect. ChipDue never initiates or guarantees a payment.
+- Account balances, holdings, liability fields, and transactions can be delayed, missing, modified, or incorrect. ChipDue never initiates or guarantees a payment or trade.
 - Vercel, Neon, Google, Plaid, and their free-tier terms or identity policies can change. Local manual mode remains provider-independent.
 
 ## Delete your data

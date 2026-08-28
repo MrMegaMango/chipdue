@@ -1,6 +1,6 @@
 # ChipDue
 
-ChipDue is a privacy-first financial workspace for tracking bank and brokerage accounts, signup bonuses, investment performance, credit-card payments, and the deadlines that connect them. Accounts and bonuses work entirely in manual mode, while the credit-card module can optionally sync card details through Plaid Liabilities and Transactions.
+ChipDue is a privacy-first financial workspace for tracking bank and brokerage accounts, signup bonuses, investment performance, credit-card payments, and the deadlines that connect them. One Plaid connection can automatically sync eligible bank, brokerage, and credit-card accounts, while manual entry remains available for unsupported institutions and bonus details.
 
 Choose one of two deployment modes:
 
@@ -13,13 +13,14 @@ Choose one of two deployment modes:
 
 - Keep a private inventory of personal and business checking, savings, cash-management, and brokerage accounts.
 - Track signup bonuses from opening through requirements, qualification, payout, and safe-to-close dates.
-- Record brokerage balances and cost basis to see simple performance without turning ChipDue into a trading terminal.
+- Automatically refresh eligible bank and brokerage balances after a one-time Plaid connection and account-selection flow.
+- Record brokerage balances and use Plaid holding cost basis when available to see simple performance without turning ChipDue into a trading terminal.
 - Track statement balance, minimum due, current balance, due date, statement date, and autopay status.
-- Track each card’s rewards program, current cash-equivalent reward value, and flexible bonus categories such as dining at 3x or groceries at 5%.
+- Track each card’s reward type, base earning rate, current cash-equivalent value, and bonus categories, with estimated points, miles, or cash back shown beside eligible Plaid transactions.
 - Optionally link one Google account for cloud sign-in without storing an email, profile, Google token, or refresh token.
 - Connect Plaid only when you explicitly choose to; manual mode never contacts Plaid.
 - Encrypt account and bonus records, card payloads, transaction history, Plaid cursors, access tokens, Item IDs, and institution names with AES-256-GCM.
-- Request Plaid Liabilities and, with explicit consent, up to 24 months of card transactions—never identity or full account numbers.
+- Request Plaid Accounts, Investments, Liabilities, and up to 24 months of Transactions data—never identity or full account numbers.
 - Export due dates as an iCalendar file, with amounts omitted by default.
 - Keep financial data out of browser persistence, logs, source code, CI, and Git history.
 - Run privacy and full-history secret checks before every push.
@@ -124,13 +125,15 @@ Official references:
 2. Add `PLAID_CLIENT_ID`, `PLAID_SECRET`, and `PLAID_ENV` to `.env.local` for local use or Vercel's Production environment for hosted use.
 3. Never add a `PUBLIC_` or `VITE_` prefix to a secret.
 4. Keep `PLAID_ENV=sandbox` until the complete flow is tested.
-5. Restart or redeploy ChipDue, then choose **Connect Plaid**. New connections request Liabilities and Transactions; existing connections show **Enable activity** before transaction access is used.
+5. Restart or redeploy ChipDue, then choose **Connect Plaid**. Select the checking, savings, brokerage, and credit-card accounts you want to share. For an existing connection, choose **Manage accounts** once to add accounts that were not previously selected.
 
-Plaid plan access and pricing differ by product and can change. Confirm that both Liabilities and Transactions are enabled for your account before Production use. An Item is one institution login and can contain multiple cards, and ChipDue always retains manual mode.
+Plaid plan access, institution coverage, and pricing differ by product and can change. Accounts and balances are the baseline; brokerage holdings/cost basis require Investments coverage, and detailed card payment fields require Liabilities. An Item is one institution login and can contain multiple bank, brokerage, and card accounts. ChipDue always retains manual mode as a fallback.
 
 Official references:
 
 - [Plaid billing](https://plaid.com/docs/account/billing/)
+- [Plaid Accounts](https://plaid.com/docs/api/accounts/)
+- [Plaid Investments](https://plaid.com/docs/investments/)
 - [Plaid Liabilities](https://plaid.com/docs/liabilities/)
 - [Plaid Transactions](https://plaid.com/docs/transactions/)
 - [Plaid Link security flow](https://plaid.com/docs/link/)

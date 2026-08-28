@@ -1,5 +1,20 @@
 export type CardSource = 'manual' | 'plaid';
 
+export type CardRewardType = 'points' | 'miles' | 'cash_back';
+
+export type CardRewardCategoryMatch =
+	| 'dining'
+	| 'groceries'
+	| 'gas'
+	| 'travel'
+	| 'transit'
+	| 'entertainment'
+	| 'drugstores'
+	| 'streaming'
+	| 'online_shopping'
+	| 'home_improvement'
+	| 'utilities';
+
 export type TransactionHistoryStatus =
 	| 'TRANSACTIONS_UPDATE_STATUS_UNKNOWN'
 	| 'NOT_READY'
@@ -23,6 +38,8 @@ export interface Card {
 	autopayEnabled: boolean;
 	rewardProgramName: string | null;
 	rewardValueCents: number | null;
+	rewardType: CardRewardType | null;
+	rewardBaseRate: number | null;
 	rewardCategories: CardRewardCategory[];
 	transactionHistoryEnabled: boolean;
 	transactionHistoryStatus: TransactionHistoryStatus | null;
@@ -35,7 +52,15 @@ export interface Card {
 export interface CardRewardCategory {
 	id: string;
 	name: string;
-	rate: string;
+	multiplier: number | null;
+	matchCategory: CardRewardCategoryMatch | null;
+}
+
+export interface CardTransactionRewardEstimate {
+	type: CardRewardType;
+	amount: number;
+	rate: number;
+	categoryName: string | null;
 }
 
 export interface CardTransaction {
@@ -49,6 +74,7 @@ export interface CardTransaction {
 	pending: boolean;
 	categoryPrimary: string | null;
 	categoryDetailed: string | null;
+	rewardEstimate: CardTransactionRewardEstimate | null;
 }
 
 export interface ManualCardInput {
@@ -68,7 +94,14 @@ export interface ManualCardInput {
 export interface CardRewardsInput {
 	rewardProgramName?: string | null;
 	rewardValueCents?: number | null;
-	rewardCategories?: Array<{ id?: string; name: string; rate: string }>;
+	rewardType?: CardRewardType | null;
+	rewardBaseRate?: number | null;
+	rewardCategories?: Array<{
+		id?: string;
+		name: string;
+		multiplier: number;
+		matchCategory?: CardRewardCategoryMatch | null;
+	}>;
 }
 
 export type FinancialAccountType =
@@ -76,9 +109,11 @@ export type FinancialAccountType =
 
 export type FinancialAccountOwner = 'personal' | 'business';
 export type FinancialAccountStatus = 'planned' | 'active' | 'closed';
+export type FinancialAccountSource = 'manual' | 'plaid';
 
 export interface FinancialAccount {
 	id: string;
+	source: FinancialAccountSource;
 	nickname: string;
 	institution: string | null;
 	accountType: FinancialAccountType;
@@ -90,6 +125,8 @@ export interface FinancialAccount {
 	costBasisCents: number | null;
 	openedDate: string | null;
 	notes: string | null;
+	plaidConnectionId: string | null;
+	lastSyncedAt: string | null;
 	createdAt: string;
 	updatedAt: string;
 }

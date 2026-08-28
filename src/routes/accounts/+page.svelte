@@ -6,12 +6,14 @@
 		FinancialAccount,
 		FinancialAccountOwner,
 		FinancialAccountStatus,
-		FinancialAccountType
+		FinancialAccountType,
+		PlaidConnection
 	} from '$lib/types';
 	import '$lib/finance-pages.css';
 
 	type RuntimeMode = 'local' | 'cloud';
 	type SessionResponse = { mode: RuntimeMode; authenticated: boolean };
+	type PlaidStatusResponse = { configured: boolean; connections: PlaidConnection[] };
 	type AccountForm = {
 		nickname: string;
 		institution: string;
@@ -35,6 +37,12 @@
 		day: 'numeric',
 		year: 'numeric'
 	});
+	const dateTime = new Intl.DateTimeFormat('en-US', {
+		month: 'short',
+		day: 'numeric',
+		hour: 'numeric',
+		minute: '2-digit'
+	});
 
 	let mode = $state<RuntimeMode | null>(null);
 	let accounts = $state<FinancialAccount[]>([]);
@@ -47,18 +55,24 @@
 	let busy = $state(false);
 	let deletingId = $state<string | null>(null);
 	let loggingOut = $state(false);
+	let plaidConfigured = $state(false);
+	let plaidConnections = $state<PlaidConnection[]>([]);
+	let syncing = $state(false);
 	let toast = $state('');
 	let toastTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const activeAccounts = $derived(accounts.filter((account) => account.status === 'active'));
+	const syncedAccountCount = $derived(
+		activeAccounts.filter((account) => account.source === 'plaid').length
+	);
+	const dialogAccount = $derived(
+		editingId ? accounts.find((account) => account.id === editingId) : undefined
+	);
 	const knownBalances = $derived(
 		activeAccounts.filter((account) => account.currentBalanceCents !== null)
 	);
 	const trackedBalanceCents = $derived(
 		knownBalances.reduce((total, account) => total + (account.currentBalanceCents ?? 0), 0)
-	);
-	const businessCount = $derived(
-		activeAccounts.filter((account) => account.ownerType === 'business').length
 	);
 	const brokerageGainCents = $derived(
 		activeAccounts
@@ -112,10 +126,13 @@
 				window.location.assign(resolve('/'));
 				return;
 			}
-			const response = await requestJson<{ accounts: FinancialAccount[] }>(
-				resolve('/api/accounts')
-			);
-			accounts = response.accounts;
+			const [accountResponse, plaidResponse] = await Promise.all([
+				requestJson<{ accounts: FinancialAccount[] }>(resolve('/api/accounts')),
+				requestJson<PlaidStatusResponse>(resolve('/api/plaid/status'))
+			]);
+			accounts = accountResponse.accounts;
+			plaidConfigured = plaidResponse.configured;
+			plaidConnections = plaidResponse.connections;
 		} catch (error) {
 			pageError = readableError(error, 'Your accounts could not be loaded.');
 		} finally {
@@ -155,6 +172,14 @@
 
 	function formatDate(value: string | null): string {
 		return value ? fullDate.format(new Date(`${value}T12:00:00`)) : 'Not entered';
+	}
+
+	function formatSyncTime(value: string | null): string {
+		if (!value) return 'Waiting for first sync';
+		const parsed = new Date(value);
+		return Number.isFinite(parsed.getTime())
+			? `Synced ${dateTime.format(parsed)}`
+			: 'Sync time unavailable';
 	}
 
 	function typeLabel(type: FinancialAccountType): string {
@@ -226,19 +251,28 @@
 		}
 		busy = true;
 		formError = '';
-		const payload = {
+		const editingAccount = editingId
+			? accounts.find((account) => account.id === editingId)
+			: undefined;
+		const annotations = {
 			nickname: form.nickname.trim(),
-			institution: form.institution.trim() || null,
-			accountType: form.accountType,
 			ownerType: form.ownerType,
-			status: form.status,
-			last4: form.last4.trim() || null,
-			currency: 'USD',
-			currentBalanceCents: cents(form.currentBalance),
 			costBasisCents: form.accountType === 'brokerage' ? cents(form.costBasis) : null,
 			openedDate: form.openedDate || null,
 			notes: form.notes.trim() || null
 		};
+		const payload =
+			editingAccount?.source === 'plaid'
+				? annotations
+				: {
+						...annotations,
+						institution: form.institution.trim() || null,
+						accountType: form.accountType,
+						status: form.status,
+						last4: form.last4.trim() || null,
+						currency: 'USD',
+						currentBalanceCents: cents(form.currentBalance)
+					};
 		try {
 			if (editingId) {
 				await requestJson(resolve('/api/accounts/[id]', { id: editingId }), {
@@ -266,7 +300,23 @@
 		accounts = response.accounts;
 	}
 
+	async function syncPlaidAccounts(): Promise<void> {
+		if (syncing || plaidConnections.length === 0) return;
+		syncing = true;
+		pageError = '';
+		try {
+			await requestJson(resolve('/api/plaid/sync'), { method: 'POST' });
+			await reloadAccounts();
+			showToast('Plaid balances are up to date.');
+		} catch (error) {
+			pageError = readableError(error, 'Plaid accounts could not be synced.');
+		} finally {
+			syncing = false;
+		}
+	}
+
 	async function deleteAccount(account: FinancialAccount): Promise<void> {
+		if (account.source === 'plaid') return;
 		if (
 			!window.confirm(`Delete “${account.nickname}”? Linked bonuses will remain in your tracker.`)
 		) {
@@ -327,11 +377,31 @@
 				<p class="finance-kicker">Financial workspace</p>
 				<h1 id="accounts-title">Accounts</h1>
 				<p>
-					Keep personal and business cash, savings, and investments in one private inventory.
-					Balances are manual for now, so you stay in control of what is stored.
+					Connect once to keep checking, savings, cash-management, and brokerage balances current.
+					Use manual accounts only when Plaid cannot cover an institution.
 				</p>
 			</div>
-			<button class="finance-button" type="button" onclick={openAdd}>+ Add account</button>
+			<div class="account-toolbar-actions">
+				{#if plaidConfigured}
+					<a
+						class="finance-button secondary"
+						href={plaidConnections.length > 0 ? resolve('/#plaid-connections') : resolve('/')}
+					>
+						{plaidConnections.length > 0 ? 'Manage Plaid' : 'Connect Plaid'}
+					</a>
+				{/if}
+				{#if plaidConnections.length > 0}
+					<button
+						class="finance-button secondary"
+						type="button"
+						onclick={syncPlaidAccounts}
+						disabled={syncing}
+					>
+						{syncing ? 'Syncing…' : 'Sync balances'}
+					</button>
+				{/if}
+				<button class="finance-button" type="button" onclick={openAdd}>+ Add manually</button>
+			</div>
 		</section>
 
 		<section class="finance-summary" aria-label="Account summary">
@@ -346,8 +416,8 @@
 				>
 			</article>
 			<article>
-				<span>Business accounts</span>
-				<strong>{loading ? '—' : businessCount}</strong>
+				<span>Plaid-synced</span>
+				<strong>{loading ? '—' : syncedAccountCount}</strong>
 			</article>
 			<article>
 				<span>Brokerage performance</span>
@@ -371,14 +441,19 @@
 			</div>
 		{:else if accounts.length === 0}
 			<div class="finance-empty">
-				<h2>Build your account map</h2>
+				<h2>Connect your financial picture</h2>
 				<p>
-					Start with the account behind your next signup bonus, or add a brokerage account to track
-					its balance and cost basis.
+					Plaid can pull eligible bank and brokerage balances into this account map. You can still
+					add an unsupported account once and maintain it manually.
 				</p>
-				<button class="finance-button" type="button" onclick={openAdd}
-					>Add your first account</button
-				>
+				<div class="empty-account-actions">
+					{#if plaidConfigured}
+						<a class="finance-button" href={resolve('/')}>Connect with Plaid</a>
+					{/if}
+					<button class="finance-button secondary" type="button" onclick={openAdd}
+						>Add manually</button
+					>
+				</div>
 			</div>
 		{:else}
 			<section aria-labelledby="account-list-title">
@@ -400,16 +475,21 @@
 											: ''}
 									</p>
 								</div>
-								<span
-									class:good={account.status === 'active'}
-									class:muted={account.status !== 'active'}
-									class="finance-pill"
-								>
-									{account.status}
-								</span>
+								<div class="account-pills">
+									<span class:plaid={account.source === 'plaid'} class="finance-pill source">
+										{account.source === 'plaid' ? 'Plaid' : 'Manual'}
+									</span>
+									<span
+										class:good={account.status === 'active'}
+										class:muted={account.status !== 'active'}
+										class="finance-pill"
+									>
+										{account.status}
+									</span>
+								</div>
 							</header>
 							<div class="finance-card-value">
-								<span>Current balance</span>
+								<span>{account.source === 'plaid' ? 'Synced balance' : 'Current balance'}</span>
 								<strong>{formatMoney(account.currentBalanceCents)}</strong>
 							</div>
 							<dl class="finance-details">
@@ -425,6 +505,14 @@
 									<dt>Opened</dt>
 									<dd>{formatDate(account.openedDate)}</dd>
 								</div>
+								<div>
+									<dt>Data source</dt>
+									<dd>
+										{account.source === 'plaid'
+											? formatSyncTime(account.lastSyncedAt)
+											: 'Manual entry'}
+									</dd>
+								</div>
 								{#if account.accountType === 'brokerage'}
 									<div>
 										<dt>Performance</dt>
@@ -437,10 +525,17 @@
 								{/if}
 							</dl>
 							<footer>
-								<button type="button" onclick={() => openEdit(account)}>Edit</button>
-								<button class="delete" type="button" onclick={() => deleteAccount(account)}>
-									{deletingId === account.id ? 'Deleting…' : 'Delete'}
-								</button>
+								<span>{account.source === 'plaid' ? 'Automatic balance' : 'Manual balance'}</span>
+								<div>
+									<button type="button" onclick={() => openEdit(account)}>
+										{account.source === 'plaid' ? 'Details' : 'Edit'}
+									</button>
+									{#if account.source === 'manual'}
+										<button class="delete" type="button" onclick={() => deleteAccount(account)}>
+											{deletingId === account.id ? 'Deleting…' : 'Delete'}
+										</button>
+									{/if}
+								</div>
 							</footer>
 						</article>
 					{/each}
@@ -461,8 +556,18 @@
 		>
 			<header class="finance-dialog-header">
 				<div>
-					<h2 id="account-dialog-title">{editingId ? 'Edit account' : 'Add account'}</h2>
-					<p>Only the last four characters are accepted—never enter a full account number.</p>
+					<h2 id="account-dialog-title">
+						{dialogAccount?.source === 'plaid'
+							? 'Account details'
+							: editingId
+								? 'Edit account'
+								: 'Add account'}
+					</h2>
+					<p>
+						{dialogAccount?.source === 'plaid'
+							? 'Plaid keeps the balance and bank details current. Add the personal details you want ChipDue to remember.'
+							: 'Only the last four characters are accepted—never enter a full account number.'}
+					</p>
 				</div>
 				<button type="button" aria-label="Close" onclick={closeDialog}>×</button>
 			</header>
@@ -475,11 +580,20 @@
 					</div>
 					<div class="finance-field">
 						<label for="account-institution">Institution</label>
-						<input id="account-institution" bind:value={form.institution} maxlength="80" />
+						<input
+							id="account-institution"
+							bind:value={form.institution}
+							maxlength="80"
+							disabled={dialogAccount?.source === 'plaid'}
+						/>
 					</div>
 					<div class="finance-field">
 						<label for="account-type">Account type</label>
-						<select id="account-type" bind:value={form.accountType}>
+						<select
+							id="account-type"
+							bind:value={form.accountType}
+							disabled={dialogAccount?.source === 'plaid'}
+						>
 							<option value="checking">Checking</option>
 							<option value="savings">Savings</option>
 							<option value="brokerage">Brokerage</option>
@@ -502,11 +616,16 @@
 							step="0.01"
 							bind:value={form.currentBalance}
 							placeholder="0.00"
+							disabled={dialogAccount?.source === 'plaid'}
 						/>
 					</div>
 					{#if form.accountType === 'brokerage'}
 						<div class="finance-field">
-							<label for="account-cost-basis">Cost basis / contributions</label>
+							<label for="account-cost-basis">
+								{dialogAccount?.source === 'plaid'
+									? 'Cost basis fallback'
+									: 'Cost basis / contributions'}
+							</label>
 							<input
 								id="account-cost-basis"
 								type="number"
@@ -528,13 +647,18 @@
 							bind:value={form.last4}
 							minlength="4"
 							maxlength="4"
-							pattern="[A-Za-z0-9]{4}"
+							pattern={'[A-Za-z0-9]{4}'}
 							placeholder="1234"
+							disabled={dialogAccount?.source === 'plaid'}
 						/>
 					</div>
 					<div class="finance-field">
 						<label for="account-status">Status</label>
-						<select id="account-status" bind:value={form.status}>
+						<select
+							id="account-status"
+							bind:value={form.status}
+							disabled={dialogAccount?.source === 'plaid'}
+						>
 							<option value="planned">Planned</option>
 							<option value="active">Active</option>
 							<option value="closed">Closed</option>
@@ -550,7 +674,13 @@
 						>Cancel</button
 					>
 					<button class="finance-button" type="submit" disabled={busy}>
-						{busy ? 'Saving…' : editingId ? 'Save changes' : 'Add account'}
+						{busy
+							? 'Saving…'
+							: dialogAccount?.source === 'plaid'
+								? 'Save details'
+								: editingId
+									? 'Save changes'
+									: 'Add account'}
 					</button>
 				</div>
 			</form>
@@ -579,5 +709,61 @@
 
 	dd.gain {
 		color: var(--positive);
+	}
+
+	.account-toolbar-actions,
+	.empty-account-actions,
+	.account-pills,
+	.finance-card footer > div {
+		display: flex;
+		gap: 0.55rem;
+		align-items: center;
+		flex-wrap: wrap;
+	}
+
+	.account-toolbar-actions {
+		justify-content: flex-end;
+	}
+
+	.empty-account-actions {
+		justify-content: center;
+	}
+
+	.account-pills {
+		justify-content: flex-end;
+	}
+
+	.finance-pill.source {
+		color: var(--muted);
+		background: var(--paper-soft);
+	}
+
+	.finance-pill.source.plaid {
+		color: var(--accent-dark);
+		background: var(--accent-soft);
+	}
+
+	.finance-card footer {
+		justify-content: space-between;
+	}
+
+	.finance-card footer > span {
+		color: var(--faint);
+		font-size: 0.6rem;
+		font-weight: 680;
+	}
+
+	.finance-field input:disabled,
+	.finance-field select:disabled {
+		color: var(--muted);
+		background: var(--paper-soft);
+		cursor: not-allowed;
+	}
+
+	@media (max-width: 620px) {
+		.account-toolbar-actions {
+			display: grid;
+			width: 100%;
+		}
 	}
 </style>

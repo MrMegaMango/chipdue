@@ -21,6 +21,7 @@ import {
 } from './cards';
 import { closeDatabaseForTests, getDatabase } from './database';
 import { decryptSecret, encryptSecret, resetCryptoStateForTests } from './crypto';
+import { listFinancialAccounts, replacePlaidFinancialAccounts } from './financial-records';
 import { ensurePrivateDataDirectory, getDataPaths } from './paths';
 import { savePlaidItem } from './plaid-store';
 import { createManualCardSchema, updateCardRewardsSchema } from './schemas';
@@ -75,7 +76,9 @@ describe.sequential('private local persistence', () => {
 			updateCardRewardsSchema.parse({
 				rewardProgramName: privateRewardProgram,
 				rewardValueCents: 8_765,
-				rewardCategories: [{ name: privateRewardCategory, rate: '4x' }]
+				rewardType: 'points',
+				rewardBaseRate: 1,
+				rewardCategories: [{ name: privateRewardCategory, multiplier: 4, matchCategory: 'dining' }]
 			})
 		);
 
@@ -86,7 +89,8 @@ describe.sequential('private local persistence', () => {
 		});
 		expect(updatedCard.rewardCategories[0]).toMatchObject({
 			name: privateRewardCategory,
-			rate: '4x'
+			multiplier: 4,
+			matchCategory: 'dining'
 		});
 		getDatabase().pragma('wal_checkpoint(TRUNCATE)');
 		const databaseBytes = readFileSync(join(temporaryDirectory, 'carddue.sqlite3'));
@@ -162,6 +166,45 @@ describe.sequential('private local persistence', () => {
 		getDatabase().pragma('wal_checkpoint(TRUNCATE)');
 		const databaseBytes = readFileSync(join(temporaryDirectory, 'carddue.sqlite3'));
 		for (const privateValue of [merchant, providerTransactionId, cursor]) {
+			expect(databaseBytes.includes(Buffer.from(privateValue))).toBe(false);
+		}
+	});
+
+	it('encrypts Plaid bank and brokerage account details at rest', async () => {
+		const accountName = 'Private brokerage account cfa50c23';
+		const institutionName = 'Private brokerage institution 3ac12810';
+		const plaidItemId = await savePlaidItem(
+			'provider-item-brokerage',
+			'private-access-token-brokerage',
+			institutionName
+		);
+		await replacePlaidFinancialAccounts(
+			plaidItemId,
+			[
+				{
+					accountId: 'provider-account-brokerage',
+					nickname: accountName,
+					institution: institutionName,
+					accountType: 'brokerage',
+					last4: '9876',
+					currency: 'USD',
+					currentBalanceCents: 1_234_500,
+					costBasisCents: 1_000_000
+				}
+			],
+			'2026-08-28T12:00:00.000Z'
+		);
+
+		const [account] = await listFinancialAccounts();
+		expect(account).toMatchObject({
+			source: 'plaid',
+			nickname: accountName,
+			institution: institutionName,
+			currentBalanceCents: 1_234_500
+		});
+		getDatabase().pragma('wal_checkpoint(TRUNCATE)');
+		const databaseBytes = readFileSync(join(temporaryDirectory, 'carddue.sqlite3'));
+		for (const privateValue of [accountName, institutionName, 'provider-account-brokerage']) {
 			expect(databaseBytes.includes(Buffer.from(privateValue))).toBe(false);
 		}
 	});

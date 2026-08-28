@@ -35,15 +35,17 @@ describe('card request validation', () => {
 			updateCardRewardsSchema.safeParse({
 				rewardProgramName: 'Ultimate Rewards',
 				rewardValueCents: 12_345,
+				rewardType: 'points',
+				rewardBaseRate: 1,
 				rewardCategories: [
-					{ name: 'Dining', rate: '3x' },
-					{ name: 'Groceries', rate: '5%' }
+					{ name: 'Dining', multiplier: 3, matchCategory: 'dining' },
+					{ name: 'Groceries', multiplier: 5, matchCategory: 'groceries' }
 				]
 			}).success
 		).toBe(true);
 		expect(updateCardRewardsSchema.safeParse({ rewardValueCents: -1 }).success).toBe(false);
 		expect(
-			updateCardRewardsSchema.safeParse({ rewardCategories: [{ name: '', rate: '3x' }] }).success
+			updateCardRewardsSchema.safeParse({ rewardCategories: [{ name: '', multiplier: 3 }] }).success
 		).toBe(false);
 		expect(updateCardRewardsSchema.safeParse({}).success).toBe(false);
 	});

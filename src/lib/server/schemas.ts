@@ -60,11 +60,30 @@ const bonusRequirementSchema = z
 	})
 	.strict();
 
+export const cardRewardTypeSchema = z.enum(['points', 'miles', 'cash_back']);
+
+export const cardRewardCategoryMatchSchema = z.enum([
+	'dining',
+	'groceries',
+	'gas',
+	'travel',
+	'transit',
+	'entertainment',
+	'drugstores',
+	'streaming',
+	'online_shopping',
+	'home_improvement',
+	'utilities'
+]);
+
+const rewardRateSchema = z.number().finite().positive().max(100);
+
 const cardRewardCategorySchema = z
 	.object({
 		id: z.uuid().optional(),
 		name: z.string().trim().min(1).max(60),
-		rate: z.string().trim().min(1).max(20)
+		multiplier: rewardRateSchema,
+		matchCategory: cardRewardCategoryMatchSchema.nullable().optional().default(null)
 	})
 	.strict();
 
@@ -105,6 +124,8 @@ export const updateCardRewardsSchema = z
 	.object({
 		rewardProgramName: optionalNameSchema.optional(),
 		rewardValueCents: nonnegativeCentsSchema.optional(),
+		rewardType: cardRewardTypeSchema.nullable().optional(),
+		rewardBaseRate: rewardRateSchema.nullable().optional(),
 		rewardCategories: z.array(cardRewardCategorySchema).max(12).optional()
 	})
 	.strict()

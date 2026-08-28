@@ -96,6 +96,8 @@ describe.sequential('cards API contract', () => {
 			autopayEnabled: false,
 			rewardProgramName: null,
 			rewardValueCents: null,
+			rewardType: null,
+			rewardBaseRate: null,
 			rewardCategories: []
 		});
 		expect(payload.card).not.toHaveProperty('payload_enc');
@@ -118,7 +120,11 @@ describe.sequential('cards API contract', () => {
 				body: JSON.stringify({
 					rewardProgramName: 'Cash Rewards',
 					rewardValueCents: 4_321,
-					rewardCategories: [{ name: 'Online shopping', rate: '3%' }]
+					rewardType: 'cash_back',
+					rewardBaseRate: 1,
+					rewardCategories: [
+						{ name: 'Online shopping', multiplier: 3, matchCategory: 'online_shopping' }
+					]
 				})
 			})
 		);
@@ -127,11 +133,14 @@ describe.sequential('cards API contract', () => {
 		const payload = await response.json();
 		expect(payload.card).toMatchObject({
 			rewardProgramName: 'Cash Rewards',
-			rewardValueCents: 4_321
+			rewardValueCents: 4_321,
+			rewardType: 'cash_back',
+			rewardBaseRate: 1
 		});
 		expect(payload.card.rewardCategories[0]).toMatchObject({
 			name: 'Online shopping',
-			rate: '3%'
+			multiplier: 3,
+			matchCategory: 'online_shopping'
 		});
 		expect(payload.card.rewardCategories[0].id).toMatch(/^[0-9a-f]{8}-[0-9a-f-]{27}$/i);
 	});

@@ -19,6 +19,8 @@ const card: Card = {
 	autopayEnabled: false,
 	rewardProgramName: null,
 	rewardValueCents: null,
+	rewardType: null,
+	rewardBaseRate: null,
 	rewardCategories: [],
 	transactionHistoryEnabled: false,
 	transactionHistoryStatus: null,

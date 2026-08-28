@@ -8,7 +8,10 @@ import {
 	canShowGoogleBootstrap,
 	canShowPasswordLogin,
 	GOOGLE_BOOTSTRAP_CONTINUE_TO,
+	formatRewardEstimate,
+	formatRewardRate,
 	inputToCents,
+	inputToRewardRate,
 	interestSavingTarget,
 	isApprovedBootstrapContinuation,
 	isGoogleOnlyCloudMode,
@@ -155,6 +158,21 @@ describe('card activity preview', () => {
 		expect(source).toMatch(
 			/\.activity-preview-header button \{[\s\S]*?font-size: 0\.7rem;[\s\S]*?white-space: nowrap;/
 		);
+	});
+
+	it('formats point, mile, and cash-back estimates in plain language', () => {
+		expect(inputToRewardRate(3)).toBe(3);
+		expect(inputToRewardRate('1.5')).toBe(1.5);
+		expect(inputToRewardRate(0)).toBeNull();
+		expect(inputToRewardRate(101)).toBeNull();
+		expect(formatRewardRate(3, 'points')).toBe('3x');
+		expect(formatRewardRate(2.5, 'cash_back')).toBe('2.5%');
+		expect(
+			formatRewardEstimate({ type: 'points', amount: 37, rate: 3, categoryName: 'Dining' })
+		).toBe('Est. 37 points');
+		expect(
+			formatRewardEstimate({ type: 'cash_back', amount: 37, rate: 3, categoryName: 'Dining' })
+		).toBe('Est. $0.37 cash back');
 	});
 });
 

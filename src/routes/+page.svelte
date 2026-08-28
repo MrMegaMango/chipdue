@@ -100,6 +100,60 @@
 		}
 		return { amountCents: null, source: 'unavailable' };
 	}
+
+	export type CardRewardType = 'points' | 'miles' | 'cash_back';
+	export type CardRewardCategoryMatch =
+		| 'dining'
+		| 'groceries'
+		| 'gas'
+		| 'travel'
+		| 'transit'
+		| 'entertainment'
+		| 'drugstores'
+		| 'streaming'
+		| 'online_shopping'
+		| 'home_improvement'
+		| 'utilities';
+
+	export type CardTransactionRewardEstimate = {
+		type: CardRewardType;
+		amount: number;
+		rate: number;
+		categoryName: string | null;
+	};
+
+	export function inputToRewardRate(value: string | number | undefined): number | null {
+		if (value === undefined || (typeof value === 'string' && !value.trim())) return null;
+		const parsed = Number(value);
+		return Number.isFinite(parsed) && parsed > 0 && parsed <= 100 ? parsed : null;
+	}
+
+	export function rewardTypeLabel(type: CardRewardType | null): string {
+		if (type === 'cash_back') return 'Cash back';
+		if (type === 'miles') return 'Miles';
+		return type === 'points' ? 'Points' : 'Not set';
+	}
+
+	export function formatRewardRate(rate: number | null, type: CardRewardType | null): string {
+		if (rate === null) return 'Not set';
+		const formatted = new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(rate);
+		return `${formatted}${type === 'cash_back' ? '%' : 'x'}`;
+	}
+
+	export function formatRewardEstimate(estimate: CardTransactionRewardEstimate): string {
+		if (estimate.type === 'cash_back') {
+			return `Est. ${new Intl.NumberFormat('en-US', {
+				style: 'currency',
+				currency: 'USD',
+				minimumFractionDigits: 2
+			}).format(estimate.amount / 100)} cash back`;
+		}
+		const unit = estimate.type === 'miles' ? 'mile' : 'point';
+		const units = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(
+			estimate.amount
+		);
+		return `Est. ${units} ${unit}${estimate.amount === 1 ? '' : 's'}`;
+	}
 </script>
 
 <script lang="ts">
@@ -141,6 +195,8 @@
 		autopayEnabled: boolean;
 		rewardProgramName: string | null;
 		rewardValueCents: number | null;
+		rewardType: CardRewardType | null;
+		rewardBaseRate: number | null;
 		rewardCategories: CardRewardCategory[];
 		transactionHistoryEnabled: boolean;
 		transactionHistoryStatus:
@@ -157,9 +213,15 @@
 	type CardRewardCategory = {
 		id: string;
 		name: string;
-		rate: string;
+		multiplier: number | null;
+		matchCategory: CardRewardCategoryMatch | null;
 	};
-	type EditableRewardCategory = Omit<CardRewardCategory, 'id'> & { id?: string };
+	type EditableRewardCategory = {
+		id?: string;
+		name: string;
+		multiplier: string | number | undefined;
+		matchCategory: CardRewardCategoryMatch | '';
+	};
 
 	type CardTransaction = {
 		id: string;
@@ -172,6 +234,7 @@
 		pending: boolean;
 		categoryPrimary: string | null;
 		categoryDetailed: string | null;
+		rewardEstimate: CardTransactionRewardEstimate | null;
 	};
 
 	type TransactionHistoryResponse = {
@@ -228,6 +291,8 @@
 	type RewardsForm = {
 		programName: string;
 		rewardValue: string | number | undefined;
+		rewardType: CardRewardType;
+		baseRate: string | number | undefined;
 		categories: EditableRewardCategory[];
 	};
 
@@ -265,6 +330,22 @@
 		year: 'numeric'
 	});
 	const RECENT_ACTIVITY_LIMIT = 3;
+	const REWARD_CATEGORY_MATCH_OPTIONS: Array<{
+		value: CardRewardCategoryMatch;
+		label: string;
+	}> = [
+		{ value: 'dining', label: 'Dining' },
+		{ value: 'groceries', label: 'Groceries' },
+		{ value: 'gas', label: 'Gas stations' },
+		{ value: 'travel', label: 'Travel' },
+		{ value: 'transit', label: 'Transit & rideshare' },
+		{ value: 'entertainment', label: 'Entertainment' },
+		{ value: 'drugstores', label: 'Drugstores' },
+		{ value: 'streaming', label: 'Streaming' },
+		{ value: 'online_shopping', label: 'Online shopping' },
+		{ value: 'home_improvement', label: 'Home improvement' },
+		{ value: 'utilities', label: 'Utilities' }
+	];
 
 	let authMode = $state<AuthMode | null>(null);
 	let authenticationMode = $state<AuthenticationMode | null>(null);
@@ -448,6 +529,8 @@
 		return {
 			programName: '',
 			rewardValue: '',
+			rewardType: 'points',
+			baseRate: 1,
 			categories: []
 		};
 	}
@@ -1154,7 +1237,13 @@
 		rewardsForm = {
 			programName: card.rewardProgramName ?? '',
 			rewardValue: centsToInput(card.rewardValueCents),
-			categories: card.rewardCategories.map((category) => ({ ...category }))
+			rewardType: card.rewardType ?? 'points',
+			baseRate: card.rewardBaseRate ?? 1,
+			categories: card.rewardCategories.map((category) => ({
+				...category,
+				multiplier: category.multiplier ?? '',
+				matchCategory: category.matchCategory ?? ''
+			}))
 		};
 		rewardsError = '';
 		await tick();
@@ -1163,7 +1252,10 @@
 
 	function addRewardCategory(): void {
 		if (rewardsForm.categories.length >= 12) return;
-		rewardsForm.categories = [...rewardsForm.categories, { name: '', rate: '' }];
+		rewardsForm.categories = [
+			...rewardsForm.categories,
+			{ name: '', multiplier: '', matchCategory: '' }
+		];
 	}
 
 	function removeRewardCategory(index: number): void {
@@ -1179,13 +1271,18 @@
 		if (!isValidOptionalAmount(rewardsForm.rewardValue)) {
 			return 'Reward value must be zero or more.';
 		}
+		if (inputToRewardRate(rewardsForm.baseRate) === null) {
+			return 'Base earning rate must be greater than 0 and no more than 100.';
+		}
 		for (const category of rewardsForm.categories) {
 			const name = category.name.trim();
-			const rate = category.rate.trim();
-			if (!name && !rate) continue;
-			if (!name || !rate) return 'Each reward category needs both a category and a rate.';
+			const multiplier = inputToRewardRate(category.multiplier);
+			const rawMultiplier = String(category.multiplier ?? '').trim();
+			if (!name && !rawMultiplier && !category.matchCategory) continue;
+			if (!name || multiplier === null) {
+				return 'Each reward category needs a name and an earning rate from 0.01 to 100.';
+			}
 			if (name.length > 60) return 'Category names must be 60 characters or fewer.';
-			if (rate.length > 20) return 'Reward rates must be 20 characters or fewer.';
 		}
 		return null;
 	}
@@ -1211,9 +1308,16 @@
 
 		const rewardCategories = rewardsForm.categories.flatMap((category) => {
 			const name = category.name.trim();
-			const rate = category.rate.trim();
-			if (!name && !rate) return [];
-			return [{ ...(category.id ? { id: category.id } : {}), name, rate }];
+			const multiplier = inputToRewardRate(category.multiplier);
+			if (!name || multiplier === null) return [];
+			return [
+				{
+					...(category.id ? { id: category.id } : {}),
+					name,
+					multiplier,
+					matchCategory: category.matchCategory || null
+				}
+			];
 		});
 		busyAction = 'save-rewards';
 		try {
@@ -1224,6 +1328,8 @@
 					body: JSON.stringify({
 						rewardProgramName: rewardsForm.programName.trim() || null,
 						rewardValueCents: inputToCents(rewardsForm.rewardValue),
+						rewardType: rewardsForm.rewardType,
+						rewardBaseRate: inputToRewardRate(rewardsForm.baseRate),
 						rewardCategories
 					})
 				},
@@ -1581,13 +1687,14 @@
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const [cardsRefreshed, statusRefreshed] = await Promise.all([
 				refreshCards(true, epoch),
-				refreshPlaidStatus(true, epoch)
+				refreshPlaidStatus(true, epoch),
+				refreshWorkspaceOverview(epoch)
 			]);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const refreshed = cardsRefreshed && statusRefreshed;
 			showNotice(
 				refreshed
-					? 'Plaid connected. Cards and transaction history are syncing.'
+					? 'Plaid connected. Accounts, cards, and activity are syncing.'
 					: 'Plaid connected and synced, but the dashboard could not refresh.',
 				refreshed ? 'success' : 'error'
 			);
@@ -1716,19 +1823,20 @@
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const [cardsRefreshed, statusRefreshed] = await Promise.all([
 				refreshCards(true, epoch),
-				refreshPlaidStatus(true, epoch)
+				refreshPlaidStatus(true, epoch),
+				refreshWorkspaceOverview(epoch)
 			]);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const refreshed = cardsRefreshed && statusRefreshed;
 			showNotice(
 				refreshed
-					? 'Plaid cards are up to date.'
+					? 'Plaid accounts and cards are up to date.'
 					: 'Plaid synced, but the dashboard could not refresh.',
 				refreshed ? 'success' : 'error'
 			);
 		} catch (error) {
 			if (isPrivateEpochCurrent(epoch)) {
-				showNotice(readableError(error, 'Plaid cards could not be synced.'), 'error');
+				showNotice(readableError(error, 'Plaid accounts and cards could not be synced.'), 'error');
 			}
 		} finally {
 			if (isPrivateEpochCurrent(epoch)) busyAction = null;
@@ -1752,7 +1860,7 @@
 		if (!isPrivateEpochCurrent(epoch)) return;
 		const label = connectionLabel(connection);
 		const confirmed = window.confirm(
-			`Disconnect “${label}”?\n\nChipDue will ask Plaid to revoke access, then erase this connection and its locally synced cards. This cannot be undone.`
+			`Disconnect “${label}”?\n\nChipDue will ask Plaid to revoke access, then erase this connection and its locally synced accounts, cards, and activity. This cannot be undone.`
 		);
 		if (!confirmed) return;
 
@@ -1767,13 +1875,14 @@
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const [cardsRefreshed, statusRefreshed] = await Promise.all([
 				refreshCards(true, epoch),
-				refreshPlaidStatus(true, epoch)
+				refreshPlaidStatus(true, epoch),
+				refreshWorkspaceOverview(epoch)
 			]);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const refreshed = cardsRefreshed && statusRefreshed;
 			showNotice(
 				refreshed
-					? `${label} disconnected and its local cards erased.`
+					? `${label} disconnected and its local accounts, cards, and activity erased.`
 					: `${label} disconnected, but the dashboard could not fully refresh.`,
 				refreshed ? 'success' : 'error'
 			);
@@ -1867,13 +1976,14 @@
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const [cardsRefreshed, statusRefreshed] = await Promise.all([
 				refreshCards(true, epoch),
-				refreshPlaidStatus(true, epoch)
+				refreshPlaidStatus(true, epoch),
+				refreshWorkspaceOverview(epoch)
 			]);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const refreshed = cardsRefreshed && statusRefreshed;
 			showNotice(
 				refreshed
-					? `${label} was updated and synced.`
+					? `${label} accounts and cards were updated and synced.`
 					: `${label} was updated, but the dashboard could not fully refresh.`,
 				refreshed ? 'success' : 'error'
 			);
@@ -2205,8 +2315,8 @@
 						class:visually-hidden={!showOnboardingHero}
 					>
 						Plaid’s CDN script runs in this page and can access data rendered here. It loads only
-						after you choose Connect Plaid. New connections request card balances, liabilities, and
-						up to 24 months of transactions.
+						after you choose Connect Plaid. New connections request eligible bank, brokerage, and
+						card balances, investment holdings, liabilities, and up to 24 months of transactions.
 					</p>
 				</div>
 			</section>
@@ -2453,7 +2563,7 @@
 									{/if}
 								</div>
 
-								{#if card.rewardProgramName || card.rewardValueCents !== null || card.rewardCategories.length > 0}
+								{#if card.rewardProgramName || card.rewardValueCents !== null || card.rewardType || card.rewardBaseRate !== null || card.rewardCategories.length > 0}
 									<section class="card-rewards" aria-label={`Rewards for ${card.nickname}`}>
 										<header>
 											<div>
@@ -2467,10 +2577,26 @@
 												</div>
 											{/if}
 										</header>
+										<div class="reward-summary">
+											<div>
+												<span>Reward type</span>
+												<strong>{rewardTypeLabel(card.rewardType)}</strong>
+											</div>
+											<div>
+												<span
+													>{card.rewardType === 'cash_back' ? 'Base rate' : 'Base multiplier'}</span
+												>
+												<strong>{formatRewardRate(card.rewardBaseRate, card.rewardType)}</strong>
+											</div>
+										</div>
 										{#if card.rewardCategories.length > 0}
 											<ul>
 												{#each card.rewardCategories as category (category.id)}
-													<li><span>{category.name}</span><strong>{category.rate}</strong></li>
+													<li>
+														<span>{category.name}</span><strong
+															>{formatRewardRate(category.multiplier, card.rewardType)}</strong
+														>
+													</li>
 												{/each}
 											</ul>
 										{/if}
@@ -2522,6 +2648,16 @@
 																)}
 																{transaction.pending ? ' · Pending' : ''}
 															</span>
+															{#if transaction.rewardEstimate}
+																<span class="activity-preview-reward">
+																	{formatRewardEstimate(transaction.rewardEstimate)} · {formatRewardRate(
+																		transaction.rewardEstimate.rate,
+																		transaction.rewardEstimate.type
+																	)}{transaction.rewardEstimate.categoryName
+																		? ` ${transaction.rewardEstimate.categoryName}`
+																		: ' base'}
+																</span>
+															{/if}
 														</div>
 														<strong
 															class:credit={transaction.amountCents < 0}
@@ -2616,7 +2752,7 @@
 			</section>
 
 			<section class="info-grid" aria-label="Privacy and calendar tools">
-				<article class="info-panel privacy-panel">
+				<article id="plaid-connections" class="info-panel privacy-panel">
 					<div class="panel-icon privacy-icon" aria-hidden="true">
 						<svg viewBox="0 0 24 24"
 							><path d="M12 3 5 6v5c0 4.6 2.8 8.2 7 10 4.2-1.8 7-5.4 7-10V6l-7-3Z"></path><path
@@ -2743,7 +2879,7 @@
 							<section class="connection-manager" aria-labelledby="connections-heading">
 								<div class="connection-heading">
 									<h3 id="connections-heading">Connected institutions</h3>
-									<span>Revoke access any time</span>
+									<span>Manage shared accounts or revoke access</span>
 								</div>
 								<ul class="connection-list">
 									{#each plaidConnections as connection (connection.id)}
@@ -2774,21 +2910,20 @@
 												</span>
 											</div>
 											<div class="connection-actions">
-												{#if connection.status === 'needs_update'}
-													<button
-														class="update-connection"
-														type="button"
-														onclick={() => updatePlaid(connection)}
-														disabled={busyAction !== null}
-														aria-busy={busyAction === 'update' &&
-															plaidItemActionId === connection.id}
-														aria-describedby="plaid-consent-copy"
-													>
-														{busyAction === 'update' && plaidItemActionId === connection.id
-															? 'Opening…'
-															: 'Update'}
-													</button>
-												{/if}
+												<button
+													class="update-connection"
+													type="button"
+													onclick={() => updatePlaid(connection)}
+													disabled={busyAction !== null}
+													aria-busy={busyAction === 'update' && plaidItemActionId === connection.id}
+													aria-describedby="plaid-consent-copy"
+												>
+													{busyAction === 'update' && plaidItemActionId === connection.id
+														? 'Opening…'
+														: connection.status === 'needs_update'
+															? 'Repair & manage'
+															: 'Manage accounts'}
+												</button>
 												<button
 													class="disconnect-connection"
 													type="button"
@@ -3026,7 +3161,7 @@
 						<p class="section-kicker">Card rewards</p>
 						<h2 id="rewards-dialog-title">{rewardsCard.nickname}</h2>
 						<p id="rewards-dialog-description">
-							Track the cash value you have earned and the categories that earn more.
+							Set how this card earns rewards. Activity estimates update from these rules.
 						</p>
 					</div>
 					<button
@@ -3055,6 +3190,36 @@
 						</label>
 
 						<label class="field">
+							<span>Reward type</span>
+							<select bind:value={rewardsForm.rewardType} name="rewardType">
+								<option value="points">Points</option>
+								<option value="miles">Miles</option>
+								<option value="cash_back">Cash back</option>
+							</select>
+						</label>
+
+						<label class="field">
+							<span>
+								{rewardsForm.rewardType === 'cash_back' ? 'Base earning rate' : 'Base multiplier'}
+								<small>{rewardsForm.rewardType === 'cash_back' ? 'Percent' : 'Points per $1'}</small
+								>
+							</span>
+							<div class="rate-input">
+								<input
+									bind:value={rewardsForm.baseRate}
+									name="rewardBaseRate"
+									type="number"
+									min="0.01"
+									max="100"
+									step="0.01"
+									inputmode="decimal"
+									placeholder="1"
+								/>
+								<span>{rewardsForm.rewardType === 'cash_back' ? '%' : 'x'}</span>
+							</div>
+						</label>
+
+						<label class="field">
 							<span>Current reward value <small>Cash equivalent</small></span>
 							<div class="money-input">
 								<span>$</span><input
@@ -3074,7 +3239,7 @@
 						<header>
 							<div>
 								<h3 id="reward-categories-title">Bonus categories</h3>
-								<p>Examples: Dining at 3x, or groceries at 5%.</p>
+								<p>Map bonuses to Plaid categories to estimate each transaction’s rewards.</p>
 							</div>
 							<button
 								type="button"
@@ -3093,9 +3258,29 @@
 											<span>Category</span>
 											<input bind:value={category.name} maxlength="60" placeholder="Dining" />
 										</label>
+										<label>
+											<span>Match activity</span>
+											<select bind:value={category.matchCategory}>
+												<option value="">Display only</option>
+												{#each REWARD_CATEGORY_MATCH_OPTIONS as option (option.value)}
+													<option value={option.value}>{option.label}</option>
+												{/each}
+											</select>
+										</label>
 										<label class="reward-rate-field">
-											<span>Rate</span>
-											<input bind:value={category.rate} maxlength="20" placeholder="3x" />
+											<span>{rewardsForm.rewardType === 'cash_back' ? 'Rate' : 'Multiplier'}</span>
+											<div class="rate-input">
+												<input
+													bind:value={category.multiplier}
+													type="number"
+													min="0.01"
+													max="100"
+													step="0.01"
+													inputmode="decimal"
+													placeholder="3"
+												/>
+												<span>{rewardsForm.rewardType === 'cash_back' ? '%' : 'x'}</span>
+											</div>
 										</label>
 										<button
 											class="remove-reward-category"
@@ -3206,6 +3391,16 @@
 									<div class="transaction-details">
 										<strong>{transaction.merchantName ?? transaction.name}</strong>
 										<span>{transactionCategory(transaction)}</span>
+										{#if transaction.rewardEstimate}
+											<span class="transaction-reward">
+												{formatRewardEstimate(transaction.rewardEstimate)} · {formatRewardRate(
+													transaction.rewardEstimate.rate,
+													transaction.rewardEstimate.type
+												)}{transaction.rewardEstimate.categoryName
+													? ` ${transaction.rewardEstimate.categoryName}`
+													: ' base'}
+											</span>
+										{/if}
 									</div>
 									<strong class:credit={transaction.amountCents < 0} class="transaction-amount">
 										{formatTransactionAmount(transaction)}
@@ -4501,6 +4696,33 @@
 		font-variant-numeric: tabular-nums;
 	}
 
+	.reward-summary {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 0.55rem;
+		margin-top: 0.7rem;
+		padding-top: 0.65rem;
+		border-top: 1px solid #ded7f2;
+	}
+
+	.reward-summary > div {
+		display: grid;
+		gap: 0.12rem;
+	}
+
+	.reward-summary span {
+		color: #756c8c;
+		font-size: 0.57rem;
+		font-weight: 700;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+	}
+
+	.reward-summary strong {
+		font-size: 0.72rem;
+		font-variant-numeric: tabular-nums;
+	}
+
 	.card-rewards ul {
 		display: flex;
 		flex-wrap: wrap;
@@ -4629,6 +4851,12 @@
 	.activity-preview-list span {
 		color: var(--faint);
 		font-size: 0.74rem;
+	}
+
+	.activity-preview-list .activity-preview-reward {
+		color: #5b4b91;
+		font-size: 0.67rem;
+		font-weight: 650;
 	}
 
 	.activity-preview-amount {
@@ -5341,7 +5569,7 @@
 	}
 
 	.rewards-dialog {
-		width: min(100%, 680px);
+		width: min(100%, 760px);
 	}
 
 	.history-body {
@@ -5404,6 +5632,11 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	.transaction-details .transaction-reward {
+		color: #5b4b91;
+		font-weight: 650;
 	}
 
 	.transaction-amount {
@@ -5507,7 +5740,9 @@
 	}
 
 	.field input,
-	.money-input {
+	.field select,
+	.money-input,
+	.rate-input {
 		width: 100%;
 		min-width: 0;
 		min-height: 42px;
@@ -5520,7 +5755,8 @@
 			box-shadow 140ms ease;
 	}
 
-	.field > input {
+	.field > input,
+	.field > select {
 		padding: 0.62rem 0.7rem;
 		font-size: 0.78rem;
 	}
@@ -5530,7 +5766,9 @@
 	}
 
 	.field input:focus,
-	.money-input:focus-within {
+	.field select:focus,
+	.money-input:focus-within,
+	.rate-input:focus-within {
 		border-color: var(--accent);
 		outline: 0;
 		box-shadow: 0 0 0 3px rgba(61, 90, 254, 0.12);
@@ -5555,6 +5793,30 @@
 		border-radius: 0;
 		font-size: 0.78rem;
 		outline: 0;
+	}
+
+	.rate-input {
+		display: flex;
+		align-items: center;
+		overflow: hidden;
+	}
+
+	.rate-input input {
+		width: 100%;
+		min-width: 0;
+		min-height: 36px;
+		padding: 0.55rem 0.25rem 0.55rem 0.62rem;
+		border: 0;
+		border-radius: 0;
+		font-size: 0.76rem;
+		outline: 0;
+	}
+
+	.rate-input > span {
+		padding-right: 0.65rem;
+		color: var(--muted);
+		font-size: 0.72rem;
+		font-weight: 700;
 	}
 
 	.reward-category-editor {
@@ -5613,7 +5875,7 @@
 
 	.reward-category-row {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) 110px 32px;
+		grid-template-columns: minmax(0, 1fr) 145px 105px 32px;
 		gap: 0.5rem;
 		align-items: end;
 	}
@@ -5630,7 +5892,9 @@
 		font-weight: 650;
 	}
 
-	.reward-category-row input {
+	.reward-category-row input,
+	.reward-category-row select,
+	.reward-category-row .rate-input {
 		width: 100%;
 		min-width: 0;
 		min-height: 38px;
@@ -5641,10 +5905,18 @@
 		background: white;
 	}
 
-	.reward-category-row input:focus {
+	.reward-category-row input:focus,
+	.reward-category-row select:focus,
+	.reward-category-row .rate-input:focus-within {
 		border-color: var(--accent);
 		outline: 0;
 		box-shadow: 0 0 0 3px rgba(61, 90, 254, 0.12);
+	}
+
+	.reward-category-row .rate-input input {
+		min-height: 36px;
+		border: 0;
+		box-shadow: none;
 	}
 
 	.remove-reward-category {
@@ -5901,6 +6173,19 @@
 
 		.form-grid {
 			grid-template-columns: 1fr;
+		}
+
+		.reward-category-row {
+			grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 32px;
+		}
+
+		.reward-category-row > label:first-child {
+			grid-column: 1 / 3;
+		}
+
+		.reward-category-row > .remove-reward-category {
+			grid-row: 1;
+			grid-column: 3;
 		}
 
 		.field-wide {

@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const plaidMocks = vi.hoisted(() => ({
 	linkTokenCreate: vi.fn(),
+	accountsGet: vi.fn(),
 	liabilitiesGet: vi.fn(),
+	investmentsHoldingsGet: vi.fn(),
 	transactionsSync: vi.fn(),
 	itemGet: vi.fn(),
 	institutionsGetById: vi.fn()
@@ -16,12 +18,20 @@ vi.mock('plaid', async (importOriginal) => {
 	return {
 		...actual,
 		PlaidApi: class {
+			accountsGet(request: unknown) {
+				return plaidMocks.accountsGet(request);
+			}
+
 			linkTokenCreate(request: unknown) {
 				return plaidMocks.linkTokenCreate(request);
 			}
 
 			liabilitiesGet(request: unknown) {
 				return plaidMocks.liabilitiesGet(request);
+			}
+
+			investmentsHoldingsGet(request: unknown) {
+				return plaidMocks.investmentsHoldingsGet(request);
 			}
 
 			transactionsSync(request: unknown) {
@@ -45,11 +55,13 @@ import { closeDatabaseForTests } from './database';
 import {
 	createPlaidLinkToken,
 	createPlaidTransactionsUpdateToken,
+	createPlaidUpdateToken,
 	resetPlaidClientForTests,
 	syncPlaidItem
 } from './plaid';
 import { savePlaidItem } from './plaid-store';
 import { updateCardRewardsSchema } from './schemas';
+import { listFinancialAccounts, updateFinancialAccount } from './financial-records';
 
 function liabilityResponse() {
 	return {
@@ -79,6 +91,55 @@ function liabilityResponse() {
 					}
 				]
 			}
+		}
+	};
+}
+
+function mixedAccountsResponse(checkingBalance = 1_250, brokerageBalance = 8_400) {
+	return {
+		data: {
+			accounts: [
+				...liabilityResponse().data.accounts,
+				{
+					account_id: 'account-checking',
+					name: 'Business checking',
+					mask: '1212',
+					type: 'depository',
+					subtype: 'checking',
+					balances: {
+						current: checkingBalance,
+						available: checkingBalance - 50,
+						iso_currency_code: 'USD',
+						unofficial_currency_code: null
+					}
+				},
+				{
+					account_id: 'account-savings',
+					name: 'Rainy day savings',
+					mask: '3434',
+					type: 'depository',
+					subtype: 'savings',
+					balances: {
+						current: 5_000,
+						available: 5_000,
+						iso_currency_code: 'USD',
+						unofficial_currency_code: null
+					}
+				},
+				{
+					account_id: 'account-brokerage',
+					name: 'Taxable brokerage',
+					mask: '5656',
+					type: 'investment',
+					subtype: 'brokerage',
+					balances: {
+						current: brokerageBalance,
+						available: 420,
+						iso_currency_code: 'USD',
+						unofficial_currency_code: null
+					}
+				}
+			]
 		}
 	};
 }
@@ -125,6 +186,10 @@ describe.sequential('Plaid transaction history', () => {
 		resetCryptoStateForTests();
 		resetPlaidClientForTests();
 		vi.clearAllMocks();
+		plaidMocks.accountsGet.mockResolvedValue({
+			data: { accounts: liabilityResponse().data.accounts }
+		});
+		plaidMocks.investmentsHoldingsGet.mockResolvedValue({ data: { holdings: [] } });
 		plaidMocks.itemGet.mockRejectedValue(new Error('Institution metadata unavailable'));
 	});
 
@@ -141,7 +206,7 @@ describe.sequential('Plaid transaction history', () => {
 		rmSync(temporaryDirectory, { recursive: true, force: true });
 	});
 
-	it('requests Transactions for new Items and explicit consent for existing Items', async () => {
+	it('requests broad account consent for new and existing Items', async () => {
 		plaidMocks.linkTokenCreate.mockResolvedValue({
 			data: { link_token: 'test-link-value', expiration: '2026-08-28T00:00:00.000Z' }
 		});
@@ -149,7 +214,8 @@ describe.sequential('Plaid transaction history', () => {
 		await createPlaidLinkToken();
 		expect(plaidMocks.linkTokenCreate).toHaveBeenLastCalledWith(
 			expect.objectContaining({
-				products: ['liabilities', 'transactions'],
+				products: ['transactions'],
+				additional_consented_products: ['liabilities', 'investments'],
 				transactions: { days_requested: 730 }
 			})
 		);
@@ -164,6 +230,51 @@ describe.sequential('Plaid transaction history', () => {
 			expect.objectContaining({
 				access_token: 'test-access-value',
 				additional_consented_products: ['transactions']
+			})
+		);
+
+		await createPlaidUpdateToken(itemId);
+		expect(plaidMocks.linkTokenCreate).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				access_token: 'test-access-value',
+				additional_consented_products: ['transactions', 'investments'],
+				update: { account_selection_enabled: true }
+			})
+		);
+	});
+
+	it('keeps core account linking available when optional Plaid products are disabled', async () => {
+		const unavailableProduct = {
+			response: { data: { error_code: 'PRODUCT_NOT_ENABLED' } }
+		};
+		plaidMocks.linkTokenCreate.mockRejectedValueOnce(unavailableProduct).mockResolvedValueOnce({
+			data: { link_token: 'fallback-link-value', expiration: '2026-08-28T00:00:00.000Z' }
+		});
+
+		await createPlaidLinkToken();
+		expect(plaidMocks.linkTokenCreate).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({
+				products: ['transactions'],
+				additional_consented_products: ['liabilities']
+			})
+		);
+
+		const itemId = await savePlaidItem(
+			'provider-item-fallback',
+			'test-access-value',
+			'Synthetic Bank'
+		);
+		plaidMocks.linkTokenCreate.mockRejectedValueOnce(unavailableProduct).mockResolvedValueOnce({
+			data: { link_token: 'fallback-update-value', expiration: '2026-08-28T00:00:00.000Z' }
+		});
+
+		await createPlaidUpdateToken(itemId);
+		expect(plaidMocks.linkTokenCreate).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				access_token: 'test-access-value',
+				additional_consented_products: ['transactions'],
+				update: { account_selection_enabled: true }
 			})
 		);
 	});
@@ -203,6 +314,94 @@ describe.sequential('Plaid transaction history', () => {
 		expect(card.issuerLogoUrl).toBe(`data:image/png;base64,${logoBase64}`);
 	});
 
+	it('imports bank and brokerage accounts and refreshes balances automatically', async () => {
+		const itemId = await savePlaidItem(
+			'provider-item-accounts',
+			'test-access-value',
+			'Synthetic Bank'
+		);
+		plaidMocks.accountsGet.mockResolvedValueOnce(mixedAccountsResponse());
+		plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
+		plaidMocks.investmentsHoldingsGet.mockResolvedValueOnce({
+			data: {
+				holdings: [
+					{ account_id: 'account-brokerage', cost_basis: 6_800 },
+					{ account_id: 'account-brokerage', cost_basis: 200 }
+				]
+			}
+		});
+
+		const firstSync = await syncPlaidItem(itemId);
+		expect(firstSync).toMatchObject({ count: 1, accountCount: 3 });
+		const accounts = await listFinancialAccounts();
+		expect(accounts).toHaveLength(3);
+		expect(accounts).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					source: 'plaid',
+					accountType: 'checking',
+					currentBalanceCents: 125_000,
+					plaidConnectionId: itemId
+				}),
+				expect.objectContaining({
+					source: 'plaid',
+					accountType: 'brokerage',
+					currentBalanceCents: 840_000,
+					costBasisCents: 700_000
+				})
+			])
+		);
+
+		const checking = accounts.find((account) => account.accountType === 'checking');
+		expect(checking).toBeDefined();
+		await updateFinancialAccount(checking!.id, {
+			nickname: 'Operating cash',
+			ownerType: 'business',
+			openedDate: '2025-01-02',
+			notes: 'Primary operating account'
+		});
+		await expect(
+			updateFinancialAccount(checking!.id, { currentBalanceCents: 999_999 })
+		).rejects.toMatchObject({ code: 'PLAID_ACCOUNT_READ_ONLY', status: 409 });
+
+		plaidMocks.accountsGet.mockResolvedValueOnce(mixedAccountsResponse(1_575, 8_900));
+		plaidMocks.investmentsHoldingsGet.mockResolvedValueOnce({
+			data: { holdings: [{ account_id: 'account-brokerage', cost_basis: 7_250 }] }
+		});
+		await syncPlaidItem(itemId);
+		const refreshed = await listFinancialAccounts();
+		expect(refreshed.find((account) => account.id === checking!.id)).toMatchObject({
+			nickname: 'Operating cash',
+			ownerType: 'business',
+			openedDate: '2025-01-02',
+			notes: 'Primary operating account',
+			currentBalanceCents: 157_500
+		});
+		expect(refreshed.find((account) => account.accountType === 'brokerage')).toMatchObject({
+			currentBalanceCents: 890_000,
+			costBasisCents: 725_000
+		});
+		expect(await listCards()).toHaveLength(1);
+	});
+
+	it('keeps brokerage balances when Investments holdings are unavailable', async () => {
+		const itemId = await savePlaidItem(
+			'provider-item-brokerage-balance',
+			'test-access-value',
+			'Synthetic Brokerage'
+		);
+		plaidMocks.accountsGet.mockResolvedValueOnce(mixedAccountsResponse());
+		plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
+		plaidMocks.investmentsHoldingsGet.mockRejectedValueOnce({
+			response: { data: { error_code: 'PRODUCT_NOT_ENABLED' } }
+		});
+
+		await syncPlaidItem(itemId);
+		expect(
+			(await listFinancialAccounts()).find((account) => account.accountType === 'brokerage')
+		).toMatchObject({ currentBalanceCents: 840_000, costBasisCents: null });
+	});
+
 	it('keeps user-entered rewards when a Plaid card refreshes', async () => {
 		const itemId = await savePlaidItem(
 			'provider-item-rewards',
@@ -218,9 +417,11 @@ describe.sequential('Plaid transaction history', () => {
 			updateCardRewardsSchema.parse({
 				rewardProgramName: 'Synthetic points',
 				rewardValueCents: 9_876,
+				rewardType: 'points',
+				rewardBaseRate: 1,
 				rewardCategories: [
-					{ name: 'Dining', rate: '3x' },
-					{ name: 'Groceries', rate: '5%' }
+					{ name: 'Dining', multiplier: 3, matchCategory: 'dining' },
+					{ name: 'Groceries', multiplier: 5, matchCategory: 'groceries' }
 				]
 			})
 		);
@@ -233,9 +434,51 @@ describe.sequential('Plaid transaction history', () => {
 			rewardValueCents: 9_876
 		});
 		expect(refreshedCard.rewardCategories).toMatchObject([
-			{ name: 'Dining', rate: '3x' },
-			{ name: 'Groceries', rate: '5%' }
+			{ name: 'Dining', multiplier: 3, matchCategory: 'dining' },
+			{ name: 'Groceries', multiplier: 5, matchCategory: 'groceries' }
 		]);
+	});
+
+	it('estimates earned rewards for each eligible transaction', async () => {
+		const itemId = await savePlaidItem(
+			'provider-item-earned-rewards',
+			'test-access-value',
+			'Synthetic Bank'
+		);
+		plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
+		plaidMocks.transactionsSync.mockResolvedValueOnce({
+			data: {
+				added: [
+					transaction('transaction-dining', 12.34, 'Synthetic restaurant', '2020-04-20'),
+					transaction('transaction-payment', -50, 'Synthetic payment', '2020-04-19')
+				],
+				modified: [],
+				removed: [],
+				next_cursor: 'cursor-rewards',
+				has_more: false,
+				transactions_update_status: 'HISTORICAL_UPDATE_COMPLETE'
+			}
+		});
+
+		await syncPlaidItem(itemId, { enableTransactions: true });
+		const [card] = await listCards();
+		await updateCardRewards(
+			card.id,
+			updateCardRewardsSchema.parse({
+				rewardType: 'points',
+				rewardBaseRate: 1,
+				rewardCategories: [{ name: 'Dining', multiplier: 3, matchCategory: 'dining' }]
+			})
+		);
+
+		const history = await listCardTransactions(card.id);
+		expect(history.transactions[0].rewardEstimate).toEqual({
+			type: 'points',
+			amount: 37,
+			rate: 3,
+			categoryName: 'Dining'
+		});
+		expect(history.transactions[1].rewardEstimate).toBeNull();
 	});
 
 	it('paginates, persists, modifies, and removes encrypted card transactions', async () => {
