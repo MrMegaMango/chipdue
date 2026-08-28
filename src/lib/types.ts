@@ -11,6 +11,7 @@ export interface Card {
 	source: CardSource;
 	nickname: string;
 	issuer: string | null;
+	issuerLogoUrl: string | null;
 	last4: string | null;
 	currency: string;
 	statementBalanceCents: number | null;

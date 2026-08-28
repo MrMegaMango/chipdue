@@ -7,6 +7,7 @@ const card: Card = {
 	source: 'manual',
 	nickname: 'Daily, card',
 	issuer: null,
+	issuerLogoUrl: null,
 	last4: '1234',
 	currency: 'USD',
 	statementBalanceCents: 12_345,

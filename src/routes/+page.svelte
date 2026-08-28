@@ -119,6 +119,7 @@
 		id: string;
 		nickname: string;
 		issuer: string | null;
+		issuerLogoUrl: string | null;
 		last4: string | null;
 		source: CardSource;
 		statementBalanceCents: number | null;
@@ -1504,6 +1505,10 @@
 		return connection.institutionName?.trim() || 'Connected institution';
 	}
 
+	function connectionLogoUrl(connection: PlaidConnection): string | null {
+		return cards.find((card) => card.plaidConnectionId === connection.id)?.issuerLogoUrl ?? null;
+	}
+
 	async function disconnectPlaid(connection: PlaidConnection): Promise<void> {
 		if (busyAction) return;
 		const epoch = privateStateEpoch;
@@ -2118,7 +2123,13 @@
 							<article class:overdue={status.tone === 'danger'} class="credit-card">
 								<header class="card-header">
 									<div class="card-identity">
-										{#if cardBrand === 'venmo'}
+										{#if card.issuerLogoUrl}
+											<img
+												class="issuer-logo"
+												src={card.issuerLogoUrl}
+												alt={`${card.issuer ?? card.nickname} logo`}
+											/>
+										{:else if cardBrand === 'venmo'}
 											<img
 												class="issuer-logo issuer-logo-venmo"
 												src={asset('/brands/venmo.svg')}
@@ -2439,14 +2450,24 @@
 								</div>
 								<ul class="connection-list">
 									{#each plaidConnections as connection (connection.id)}
+										{@const institutionLogoUrl = connectionLogoUrl(connection)}
 										<li>
 											<div class="connection-details">
-												<span class="institution-icon" aria-hidden="true">
-													<svg viewBox="0 0 20 20">
-														<path d="m3 8 7-4 7 4M5 9.5v5M8.3 9.5v5m3.4-5v5m3.3-5v5M3 16.5h14"
-														></path>
-													</svg>
-												</span>
+												{#if institutionLogoUrl}
+													<span class="institution-icon institution-logo">
+														<img
+															src={institutionLogoUrl}
+															alt={`${connectionLabel(connection)} logo`}
+														/>
+													</span>
+												{:else}
+													<span class="institution-icon" aria-hidden="true">
+														<svg viewBox="0 0 20 20">
+															<path d="m3 8 7-4 7 4M5 9.5v5M8.3 9.5v5m3.4-5v5m3.3-5v5M3 16.5h14"
+															></path>
+														</svg>
+													</span>
+												{/if}
 												<span>
 													<strong>{connectionLabel(connection)}</strong>
 													<small class:attention={connection.status === 'needs_update'}>
@@ -4490,6 +4511,20 @@
 		stroke-width: 1.6;
 		stroke-linecap: round;
 		stroke-linejoin: round;
+	}
+
+	.institution-logo {
+		overflow: hidden;
+		padding: 3px;
+		background: white;
+	}
+
+	.institution-logo img {
+		display: block;
+		width: 100%;
+		height: 100%;
+		border-radius: 5px;
+		object-fit: contain;
 	}
 
 	.connection-details > span:last-child {

@@ -6,7 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const plaidMocks = vi.hoisted(() => ({
 	linkTokenCreate: vi.fn(),
 	liabilitiesGet: vi.fn(),
-	transactionsSync: vi.fn()
+	transactionsSync: vi.fn(),
+	itemGet: vi.fn(),
+	institutionsGetById: vi.fn()
 }));
 
 vi.mock('plaid', async (importOriginal) => {
@@ -24,6 +26,14 @@ vi.mock('plaid', async (importOriginal) => {
 
 			transactionsSync(request: unknown) {
 				return plaidMocks.transactionsSync(request);
+			}
+
+			itemGet(request: unknown) {
+				return plaidMocks.itemGet(request);
+			}
+
+			institutionsGetById(request: unknown) {
+				return plaidMocks.institutionsGetById(request);
 			}
 		}
 	};
@@ -114,6 +124,7 @@ describe.sequential('Plaid transaction history', () => {
 		resetCryptoStateForTests();
 		resetPlaidClientForTests();
 		vi.clearAllMocks();
+		plaidMocks.itemGet.mockRejectedValue(new Error('Institution metadata unavailable'));
 	});
 
 	afterEach(() => {
@@ -154,6 +165,41 @@ describe.sequential('Plaid transaction history', () => {
 				additional_consented_products: ['transactions']
 			})
 		);
+	});
+
+	it('stores Plaid institution branding with synced cards', async () => {
+		const logoBase64 =
+			'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+		const itemId = await savePlaidItem(
+			'provider-item-brand',
+			'test-access-value',
+			'Original institution name'
+		);
+		plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
+		plaidMocks.itemGet.mockResolvedValue({
+			data: {
+				item: {
+					institution_id: 'ins_brand',
+					institution_name: 'Institution from Item'
+				}
+			}
+		});
+		plaidMocks.institutionsGetById.mockResolvedValue({
+			data: {
+				institution: { name: 'Institution from Plaid', logo: logoBase64 }
+			}
+		});
+
+		await syncPlaidItem(itemId);
+
+		expect(plaidMocks.institutionsGetById).toHaveBeenCalledWith({
+			institution_id: 'ins_brand',
+			country_codes: ['US'],
+			options: { include_optional_metadata: true }
+		});
+		const [card] = await listCards();
+		expect(card.issuer).toBe('Institution from Plaid');
+		expect(card.issuerLogoUrl).toBe(`data:image/png;base64,${logoBase64}`);
 	});
 
 	it('paginates, persists, modifies, and removes encrypted card transactions', async () => {

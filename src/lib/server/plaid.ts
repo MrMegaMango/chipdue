@@ -10,6 +10,7 @@ import {
 	type Transaction,
 	type TransactionsUpdateStatus
 } from 'plaid';
+import { Buffer } from 'node:buffer';
 import type { PlaidConnection } from '$lib/types';
 import type { TransactionHistoryStatus } from '$lib/types';
 import {
@@ -38,6 +39,7 @@ const TRANSACTION_HISTORY_DAYS = 730;
 const MAX_TRANSACTION_SYNC_PAGES = 100;
 const MAX_TRANSACTION_SYNC_RESTARTS = 3;
 const MAX_STORED_TRANSACTIONS_PER_CARD = 10_000;
+const MAX_INSTITUTION_LOGO_BYTES = 256_000;
 let cachedClient: { signature: string; client: PlaidApi } | undefined;
 
 function plaidConfiguration(): {
@@ -219,6 +221,45 @@ function safeText(value: string | null | undefined, maximum: number): string | n
 	return normalized ? normalized.slice(0, maximum) : null;
 }
 
+function safeInstitutionLogo(value: string | null | undefined): string | null {
+	if (typeof value !== 'string') return null;
+	const normalized = value.trim();
+	if (!normalized || normalized.length > 350_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized)) {
+		return null;
+	}
+	const bytes = Buffer.from(normalized, 'base64');
+	if (bytes.length < 8 || bytes.length > MAX_INSTITUTION_LOGO_BYTES) return null;
+	const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+	if (!pngSignature.every((byte, index) => bytes[index] === byte)) return null;
+	return bytes.toString('base64');
+}
+
+async function institutionBrand(
+	accessToken: string,
+	fallbackName: string | null
+): Promise<{ name: string | null; logoBase64: string | null }> {
+	let name = fallbackName;
+	try {
+		const itemResponse = await getPlaidClient().itemGet({ access_token: accessToken });
+		name = safeText(itemResponse.data.item.institution_name, 80) ?? name;
+		const institutionId = safeText(itemResponse.data.item.institution_id, 128);
+		if (!institutionId) return { name, logoBase64: null };
+
+		const institutionResponse = await getPlaidClient().institutionsGetById({
+			institution_id: institutionId,
+			country_codes: [CountryCode.Us],
+			options: { include_optional_metadata: true }
+		});
+		return {
+			name: safeText(institutionResponse.data.institution.name, 80) ?? name,
+			logoBase64: safeInstitutionLogo(institutionResponse.data.institution.logo)
+		};
+	} catch {
+		// Branding is presentational and must never prevent balances or activity from syncing.
+		return { name, logoBase64: null };
+	}
+}
+
 function transactionSnapshot(transaction: Transaction): StoredPlaidTransaction | null {
 	const transactionId = safeText(transaction.transaction_id, 256);
 	const date = safeDate(transaction.date);
@@ -340,7 +381,10 @@ export async function syncPlaidItem(
 ): Promise<{ syncedAt: string; count: number; transactionCount: number }> {
 	const item = await getPrivatePlaidItem(localItemId);
 	try {
-		const response = await getPlaidClient().liabilitiesGet({ access_token: item.accessToken });
+		const [response, brand] = await Promise.all([
+			getPlaidClient().liabilitiesGet({ access_token: item.accessToken }),
+			institutionBrand(item.accessToken, item.institutionName)
+		]);
 		let transactionState = await readPlaidTransactionState(localItemId);
 		if (options.enableTransactions || transactionState.enabled) {
 			try {
@@ -379,7 +423,8 @@ export async function syncPlaidItem(
 			snapshots.push({
 				accountId: account.account_id,
 				nickname: account.name.trim().slice(0, 80) || 'Credit card',
-				issuer: item.institutionName,
+				issuer: brand.name,
+				issuerLogoBase64: brand.logoBase64,
 				last4: safeLast4(account.mask),
 				currency: safeCurrency(
 					account.balances.iso_currency_code ?? account.balances.unofficial_currency_code

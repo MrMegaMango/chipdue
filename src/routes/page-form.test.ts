@@ -174,8 +174,10 @@ describe('issuer branding', () => {
 		expect(cardBrandForIssuer(null)).toBeNull();
 	});
 
-	it('serves the Venmo wordmark locally instead of loading a third-party image', () => {
+	it('shows stored Plaid institution logos and keeps a local Venmo fallback', () => {
 		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+		expect(source).toContain('{#if card.issuerLogoUrl}');
+		expect(source).toContain('connectionLogoUrl(connection)');
 		expect(source).toContain("asset('/brands/venmo.svg')");
 		expect(source).not.toContain('paypalobjects.com');
 	});

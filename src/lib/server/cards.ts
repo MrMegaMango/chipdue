@@ -10,6 +10,7 @@ import type { CreateManualCardData, UpdateManualCardData } from './schemas';
 interface CardPayload {
 	nickname: string;
 	issuer: string | null;
+	issuerLogoBase64?: string | null;
 	last4: string | null;
 	currency: string;
 	statementBalanceCents: number | null;
@@ -123,6 +124,17 @@ function isStoredTransactionHistory(value: unknown): value is StoredTransactionH
 	);
 }
 
+function isStoredIssuerLogo(value: unknown): value is string | null | undefined {
+	return (
+		value === undefined ||
+		value === null ||
+		(typeof value === 'string' &&
+			value.length > 0 &&
+			value.length <= 350_000 &&
+			/^[A-Za-z0-9+/]+={0,2}$/.test(value))
+	);
+}
+
 function decodePayload(row: CardRow): CardPayload {
 	const payload = decryptJson<CardPayload>(row.payload_enc, `card:${row.id}`);
 	if (
@@ -139,6 +151,9 @@ function decodePayload(row: CardRow): CardPayload {
 	) {
 		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
 	}
+	if (!isStoredIssuerLogo(payload.issuerLogoBase64)) {
+		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
+	}
 	return payload;
 }
 
@@ -149,6 +164,9 @@ function rowToCard(row: CardRow): Card {
 		source: row.source,
 		nickname: payload.nickname,
 		issuer: payload.issuer,
+		issuerLogoUrl: payload.issuerLogoBase64
+			? `data:image/png;base64,${payload.issuerLogoBase64}`
+			: null,
 		last4: payload.last4,
 		currency: payload.currency,
 		statementBalanceCents: payload.statementBalanceCents,
@@ -182,6 +200,7 @@ function snapshotPayload(snapshot: PlaidCardSnapshot): CardPayload {
 	return {
 		nickname: snapshot.nickname,
 		issuer: snapshot.issuer,
+		...(snapshot.issuerLogoBase64 ? { issuerLogoBase64: snapshot.issuerLogoBase64 } : {}),
 		last4: snapshot.last4,
 		currency: snapshot.currency,
 		statementBalanceCents: snapshot.statementBalanceCents,
