@@ -2346,7 +2346,6 @@
 					<path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"></path>
 				</svg>
 			</div>
-			<p class="section-kicker">Private cloud</p>
 			<h1 id="login-title">Unlock your dashboard</h1>
 			<p class="auth-intro">
 				{googleOnlyMode
@@ -2547,8 +2546,7 @@
 					</div>
 				{:else}
 					<div>
-						<p class="section-kicker">Dashboard</p>
-						<h1 id="page-title">Financial command center</h1>
+						<p id="page-title" class="section-kicker">Dashboard</p>
 					</div>
 				{/if}
 				<div class:hero-action-stack={showOnboardingHero}>
@@ -3410,9 +3408,7 @@
 
 		<footer class="site-footer">
 			<span>ChipDue</span>
-			<span
-				>Open source · {authMode === 'cloud' ? 'Private cloud' : 'Local first'} · No analytics</span
-			>
+			<span>Open source · No analytics</span>
 		</footer>
 	</div>
 
@@ -4158,15 +4154,10 @@
 		background: var(--red-soft);
 	}
 
-	.auth-card > .section-kicker,
 	.auth-card > h1,
 	.auth-card > .auth-intro,
 	.auth-error-card {
 		text-align: center;
-	}
-
-	.auth-card > .section-kicker {
-		margin-bottom: 0.4rem;
 	}
 
 	.auth-card h1 {
@@ -4647,14 +4638,6 @@
 
 	.dashboard-toolbar .section-kicker {
 		margin-bottom: 0.25rem;
-	}
-
-	.dashboard-toolbar h1 {
-		margin: 0;
-		font-size: clamp(1.75rem, 3vw, 2.35rem);
-		font-weight: 740;
-		line-height: 1.05;
-		letter-spacing: -0.045em;
 	}
 
 	.dashboard-actions {

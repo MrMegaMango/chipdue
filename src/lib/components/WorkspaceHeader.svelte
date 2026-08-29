@@ -38,10 +38,6 @@
 	</nav>
 
 	<div class="header-controls">
-		<div class="privacy-status" title="Financial data is never kept in browser storage">
-			<span></span>
-			<strong>{mode === 'cloud' ? 'Private cloud' : 'Private'}</strong>
-		</div>
 		{#if mode === 'cloud' && onlogout}
 			<button type="button" onclick={onlogout} disabled={loggingOut}>
 				{loggingOut ? 'Logging out…' : 'Log out'}
@@ -142,26 +138,6 @@
 		justify-self: end;
 	}
 
-	.privacy-status {
-		display: flex;
-		gap: 0.48rem;
-		align-items: center;
-		color: var(--muted);
-		font-size: 0.67rem;
-	}
-
-	.privacy-status > span {
-		width: 7px;
-		height: 7px;
-		border-radius: 50%;
-		background: var(--positive);
-		box-shadow: 0 0 0 4px rgba(8, 127, 117, 0.12);
-	}
-
-	.privacy-status strong {
-		font-weight: 690;
-	}
-
 	button {
 		min-height: 34px;
 		padding: 0.4rem 0.65rem;
@@ -200,8 +176,7 @@
 	}
 
 	@media (max-width: 480px) {
-		.brand-copy small,
-		.privacy-status strong {
+		.brand-copy small {
 			display: none;
 		}
 

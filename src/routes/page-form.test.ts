@@ -321,7 +321,8 @@ describe('returning-user dashboard', () => {
 		expect(source).toContain('workspaceBonuses.length === 0');
 		expect(source).toContain('{#if showOnboardingHero}');
 		expect(source).toContain('class:dashboard-toolbar={!showOnboardingHero}');
-		expect(source).toContain('Financial command center');
+		expect(source).toContain('<p id="page-title" class="section-kicker">Dashboard</p>');
+		expect(source).not.toContain('Financial command center');
 		expect(source).toContain('class:visually-hidden={!showOnboardingHero}');
 	});
 });
