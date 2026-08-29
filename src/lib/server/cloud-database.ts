@@ -3,6 +3,7 @@ import { verifyCloudRoleBoundary } from './cloud-role.js';
 import { CLOUD_SCHEMA_VERSION, verifyCloudSchemaCatalog } from './cloud-schema.js';
 import { AppError } from './errors';
 import { getCloudRuntimeConfig } from './runtime';
+import { LEGACY_TENANT_ID, tenantReference } from './tenant';
 
 export { CLOUD_MIGRATION_STATEMENTS, CLOUD_SCHEMA_VERSION } from './cloud-schema.js';
 
@@ -79,6 +80,12 @@ export async function ensureCloudSchema(): Promise<void> {
 					503
 				);
 			}
+			await adapter.query(
+				`INSERT INTO public.carddue_metadata (key, value)
+				 VALUES ('tenant_scope_v2_legacy_ref', $1)
+				 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+				[tenantReference(LEGACY_TENANT_ID)]
+			);
 		})().catch((error) => {
 			schemaPromise = undefined;
 			if (error instanceof AppError) throw error;
