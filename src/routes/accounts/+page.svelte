@@ -984,7 +984,7 @@
 						<path d="M5 11v3.5M8.3 12.5V16m3.4-3.5V16m3.3-5v3.5M3 17h14"></path>
 					</svg>
 					{connections.length > 0
-						? 'Manage connections'
+						? 'Add connection'
 						: plaidConfigured
 							? 'Connect Plaid'
 							: 'Set up Plaid'}

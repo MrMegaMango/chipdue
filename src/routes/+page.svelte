@@ -2624,7 +2624,7 @@
 										<path d="M3 8.5 10 5l7 3.5L10 12 3 8.5Z"></path>
 										<path d="M5 11v3.5M8.3 12.5V16m3.4-3.5V16m3.3-5v3.5M3 17h14"></path>
 									</svg>
-									Manage connections
+									Add connection
 								</a>
 								<button
 									class="button button-primary"

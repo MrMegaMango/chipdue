@@ -175,9 +175,9 @@ describe('financial workspace navigation', () => {
 			'class="finance-button secondary" type="button" onclick={openAdd}'
 		);
 		expect(actionsSource.indexOf('Add manually')).toBeLessThan(
-			actionsSource.indexOf('Manage connections')
+			actionsSource.indexOf('Add connection')
 		);
-		expect(actionsSource.indexOf('Manage connections')).toBeLessThan(
+		expect(actionsSource.indexOf('Add connection')).toBeLessThan(
 			actionsSource.indexOf('Sync connections')
 		);
 		expect(actionsSource).toContain('M10 4v12M4 10h12');
@@ -189,7 +189,7 @@ describe('financial workspace navigation', () => {
 	it('uses the same connected-state actions on cards and accounts', () => {
 		expect(dashboardSource).toContain("currentSection === 'cards' && plaid.connectedItems > 0");
 		expect(dashboardSource).toContain("href={resolve('/settings#plaid-connections')}");
-		expect(dashboardSource).toContain('Manage connections');
+		expect(dashboardSource).toContain('Add connection');
 		expect(dashboardSource.match(/onclick=\{syncConnections\}/g)).toHaveLength(1);
 		expect(dashboardSource).not.toContain("'Connect another'");
 		expect(accountsSource).toContain("syncing ? 'Syncing…' : 'Sync connections'");
