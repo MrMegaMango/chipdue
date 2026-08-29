@@ -267,7 +267,10 @@ describe('issuer branding', () => {
 		expect(cardBrandForIssuer('VENMO')).toBe('venmo');
 		expect(cardBrandForIssuer('Chase')).toBe('chase');
 		expect(cardBrandForIssuer('JPMorgan Chase Bank')).toBe('chase');
+		expect(cardBrandForIssuer('Wells Fargo')).toBe('wells-fargo');
+		expect(cardBrandForIssuer('WELLS   FARGO BANK')).toBe('wells-fargo');
 		expect(cardBrandForIssuer('Venmoney Bank')).toBeNull();
+		expect(cardBrandForIssuer('Wellspring Fargo Bank')).toBeNull();
 		expect(cardBrandForIssuer(null)).toBeNull();
 	});
 

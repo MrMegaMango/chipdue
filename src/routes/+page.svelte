@@ -97,9 +97,12 @@
 		return value === GOOGLE_BOOTSTRAP_CONTINUE_TO;
 	}
 
-	export function cardBrandForIssuer(issuer: string | null): 'chase' | 'venmo' | null {
+	export function cardBrandForIssuer(
+		issuer: string | null
+	): 'chase' | 'venmo' | 'wells-fargo' | null {
 		if (!issuer) return null;
 		if (/\bvenmo\b/i.test(issuer)) return 'venmo';
+		if (/\bwells\s+fargo\b/i.test(issuer)) return 'wells-fargo';
 		if (/\bchase\b/i.test(issuer)) return 'chase';
 		return null;
 	}

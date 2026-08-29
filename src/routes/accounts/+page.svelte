@@ -176,6 +176,9 @@
 	function institutionLogoUrl(account: FinancialAccount): string | null {
 		if (account.institutionLogoUrl) return account.institutionLogoUrl;
 		if (/\bvenmo\b/i.test(account.institution ?? '')) return asset('/brands/venmo.svg');
+		if (/\bwells\s+fargo\b/i.test(account.institution ?? '')) {
+			return asset('/brands/wells-fargo.svg');
+		}
 		if (/\bchase\b/i.test(account.institution ?? '')) return asset('/brands/chase.svg');
 		return null;
 	}
