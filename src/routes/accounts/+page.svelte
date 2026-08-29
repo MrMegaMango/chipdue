@@ -250,6 +250,7 @@
 	function institutionLogoUrl(account: FinancialAccount): string | null {
 		if (account.institutionLogoUrl) return account.institutionLogoUrl;
 		if (/\bvenmo\b/i.test(account.institution ?? '')) return asset('/brands/venmo.svg');
+		if (/\bvio\s+bank\b/i.test(account.institution ?? '')) return asset('/brands/vio-bank.svg');
 		if (/\bwells\s+fargo\b/i.test(account.institution ?? '')) {
 			return asset('/brands/wells-fargo.svg');
 		}

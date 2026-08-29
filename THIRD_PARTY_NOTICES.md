@@ -20,3 +20,8 @@ MIT license.
 by [Simple Icons](https://simpleicons.org/) under CC0 1.0. Wells Fargo and its
 logo are trademarks of Wells Fargo & Company. Trademark rights are not granted
 by the Simple Icons license or this repository's MIT license.
+
+`static/brands/vio-bank.svg` is derived from the official Vio Bank site icon
+published on [viobank.com](https://www.viobank.com/). Vio Bank and its logo are
+trademarks of MidFirst Bank. That asset is not offered under this repository's
+MIT license.

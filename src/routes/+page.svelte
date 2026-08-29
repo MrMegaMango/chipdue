@@ -99,9 +99,10 @@
 
 	export function cardBrandForIssuer(
 		issuer: string | null
-	): 'chase' | 'venmo' | 'wells-fargo' | null {
+	): 'chase' | 'venmo' | 'vio-bank' | 'wells-fargo' | null {
 		if (!issuer) return null;
 		if (/\bvenmo\b/i.test(issuer)) return 'venmo';
+		if (/\bvio\s+bank\b/i.test(issuer)) return 'vio-bank';
 		if (/\bwells\s+fargo\b/i.test(issuer)) return 'wells-fargo';
 		if (/\bchase\b/i.test(issuer)) return 'chase';
 		return null;
@@ -2935,7 +2936,7 @@
 												class:issuer-logo-venmo={cardBrand === 'venmo'}
 												class="issuer-logo"
 												src={fallbackInstitutionLogoUrl(card.issuer)}
-												alt={cardBrand === 'venmo' ? 'Venmo' : 'Chase'}
+												alt={`${card.issuer ?? card.nickname} logo`}
 											/>
 										{/if}
 										<h3>{card.nickname}</h3>

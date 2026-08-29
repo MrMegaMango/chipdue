@@ -110,6 +110,7 @@ describe('financial workspace navigation', () => {
 
 	it('shows institution branding on account cards', () => {
 		expect(accountsSource).toContain('account.institutionLogoUrl');
+		expect(accountsSource).toContain("asset('/brands/vio-bank.svg')");
 		expect(accountsSource).toContain("asset('/brands/wells-fargo.svg')");
 		expect(accountsSource).toContain('class="institution-mark"');
 		expect(accountsSource).toContain('alt={`${account.institution ?? account.nickname} logo`}');

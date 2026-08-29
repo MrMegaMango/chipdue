@@ -1,0 +1,12 @@
+<svg role="img" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+	<title>Vio Bank</title>
+	<rect width="256" height="256" rx="28" fill="#fff" />
+	<path fill="#717174" d="M6 92h34l27 68 27-68h34L82 190H52L6 92Z" />
+	<path fill="#717174" d="M106 92h25v98h-25z" />
+	<path
+		fill="#717174"
+		fill-rule="evenodd"
+		d="M196 91a50 50 0 1 1 0 100 50 50 0 0 1 0-100Zm0 25a25 25 0 1 0 0 50 25 25 0 0 0 0-50Z"
+	/>
+	<path fill="#ff5f00" d="M130 43h122L130 93V43Z" />
+</svg>
