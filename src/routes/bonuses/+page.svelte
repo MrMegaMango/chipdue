@@ -745,7 +745,7 @@
 											<dd>{formatDate(tracker.fundingDeadline)}</dd>
 										</div>
 										<div>
-											<dt>Maintain through</dt>
+											<dt>{tracker.offer.qualificationLabel}</dt>
 											<dd>{formatDate(tracker.qualificationDeadline)}</dd>
 										</div>
 										<div>

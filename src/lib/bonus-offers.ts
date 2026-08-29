@@ -1,6 +1,7 @@
 import type { AccountBonus, FinancialAccount, FinancialAccountTransaction } from '$lib/types';
 
-export type BonusTransactionRule = 'wells-fargo-business' | 'us-bank-business';
+export type BonusTransactionRule =
+	'capital-one-business' | 'wells-fargo-business' | 'us-bank-business';
 
 export interface BonusOfferTier {
 	thresholdCents: number;
@@ -16,7 +17,7 @@ export interface BonusOfferTemplate {
 	accountProduct: string;
 	versionLabel: string;
 	validFrom: string | null;
-	validThrough: string;
+	validThrough: string | null;
 	sourceUrl: string;
 	sourceVerifiedAt: string;
 	promoCode: string | null;
@@ -26,7 +27,8 @@ export interface BonusOfferTemplate {
 	qualificationDay: number;
 	transactionTarget: number;
 	transactionRule: BonusTransactionRule;
-	payoutRule: 'qualification-plus-30' | 'qualification-month-end-plus-30';
+	qualificationLabel: string;
+	payoutRule: 'qualification-plus-30' | 'qualification-plus-90' | 'qualification-month-end-plus-30';
 	requirements(openedDate: string): string[];
 	notes: string;
 	activityNote: string;
@@ -60,6 +62,7 @@ export interface BonusTracker {
 const WELLS_FARGO_SOURCE = 'https://accountoffers.wellsfargo.com/business-checking-bonus/';
 const US_BANK_SOURCE =
 	'https://www.usbank.com/business-banking/banking-products/business-bank-accounts/business-checking-account.html';
+const CAPITAL_ONE_SOURCE = 'https://www.capitalone.com/small-business/bank/bizchecking500/';
 
 export const WELLS_FARGO_BUSINESS_BONUS_TIERS: BonusOfferTier[] = [
 	{ thresholdCents: 250_000, rewardCents: 40_000, label: '$2,500 balance' },
@@ -73,6 +76,10 @@ const US_BANK_ESSENTIALS_TIER: BonusOfferTier[] = [
 
 const US_BANK_PLATINUM_TIER: BonusOfferTier[] = [
 	{ thresholdCents: 2_500_000, rewardCents: 120_000, label: '$25,000 daily balance' }
+];
+
+const CAPITAL_ONE_BUSINESS_TIER: BonusOfferTier[] = [
+	{ thresholdCents: 500_000, rewardCents: 50_000, label: '$5,000 end-of-day balance' }
 ];
 
 function addDays(value: string, days: number): string {
@@ -129,6 +136,19 @@ function usBankRequirements(balance: string, openedDate: string): string[] {
 	];
 }
 
+function capitalOneRequirements(openedDate: string): string[] {
+	const fundingDeadline = dayOfOffer(openedDate, 30);
+	const qualificationDeadline = dayOfOffer(openedDate, 90);
+	const payoutDate = addDays(qualificationDeadline, 90);
+	return [
+		'Confirm the account was opened online with promo code SBOFFER500',
+		`Deposit at least $5,000 from outside Capital One by ${formatDate(fundingDeadline)}`,
+		`Maintain a minimum $5,000 end-of-day balance for at least 60 days within the first 90 days, ending ${formatDate(qualificationDeadline)}`,
+		`Complete 10 qualifying electronic transactions by ${formatDate(qualificationDeadline)}`,
+		`Keep the account open and in good standing through the conservative payout date of ${formatDate(payoutDate)}`
+	];
+}
+
 export const BONUS_OFFER_CATALOG: BonusOfferTemplate[] = [
 	{
 		id: 'wells-fargo-business-checking-2026-09-08',
@@ -148,6 +168,7 @@ export const BONUS_OFFER_CATALOG: BonusOfferTemplate[] = [
 		qualificationDay: 60,
 		transactionTarget: 5,
 		transactionRule: 'wells-fargo-business',
+		qualificationLabel: 'Maintain through',
 		payoutRule: 'qualification-plus-30',
 		requirements: wellsFargoRequirements,
 		notes:
@@ -173,6 +194,7 @@ export const BONUS_OFFER_CATALOG: BonusOfferTemplate[] = [
 		qualificationDay: 60,
 		transactionTarget: 6,
 		transactionRule: 'us-bank-business',
+		qualificationLabel: 'Maintain through',
 		payoutRule: 'qualification-month-end-plus-30',
 		requirements: (openedDate) => usBankRequirements('$5,000', openedDate),
 		notes:
@@ -198,12 +220,39 @@ export const BONUS_OFFER_CATALOG: BonusOfferTemplate[] = [
 		qualificationDay: 60,
 		transactionTarget: 6,
 		transactionRule: 'us-bank-business',
+		qualificationLabel: 'Maintain through',
 		payoutRule: 'qualification-month-end-plus-30',
 		requirements: (openedDate) => usBankRequirements('$25,000', openedDate),
 		notes:
 			'Official Q3DIG26 terms require $25,000 in new money from outside U.S. Bank within 30 days, a $25,000 daily balance through day 60, and 6 qualifying posted transactions. For weekend or federal-holiday openings, U.S. Bank treats the next business day as the opening date. Existing businesses with a U.S. Bank business checking account, or one closed in the prior 12 months, are not eligible. Limit one bonus per business; other restrictions and taxes may apply.',
 		activityNote:
 			'Verify the six transactions in U.S. Bank. Eligible activity includes debit purchases, ACH/wires, Zelle, mobile check deposits, eligible check debits, business bill pay, and Payment Solutions. Internal U.S. Bank transfers, other person-to-person payments, and credit-card transfers do not count.'
+	},
+	{
+		id: 'capital-one-business-checking-sboffer500-2026',
+		institution: 'Capital One',
+		institutionAliases: ['Capital One', 'Capital One Bank'],
+		name: 'Capital One business checking bonus ($500)',
+		accountProduct: 'Basic or Enhanced Business Checking',
+		versionLabel: 'SBOFFER500 · active Aug 29, 2026',
+		validFrom: null,
+		validThrough: null,
+		sourceUrl: CAPITAL_ONE_SOURCE,
+		sourceVerifiedAt: '2026-08-29',
+		promoCode: 'SBOFFER500',
+		rewardCents: 50_000,
+		tiers: CAPITAL_ONE_BUSINESS_TIER,
+		fundingDay: 30,
+		qualificationDay: 90,
+		transactionTarget: 10,
+		transactionRule: 'capital-one-business',
+		qualificationLabel: 'Complete by',
+		payoutRule: 'qualification-plus-90',
+		requirements: capitalOneRequirements,
+		notes:
+			'Official SBOFFER500 terms require an online Basic or Enhanced Business Checking opening, at least $5,000 from outside Capital One within 30 days, a $5,000 minimum end-of-day balance for at least 60 days within the first 90 days, and 10 qualifying electronic transactions within 90 days. Capital One may end or change the offer before acceptance, and eligibility restrictions and taxes may apply.',
+		activityNote:
+			'Verify all ten transactions in Capital One. Only electronic wires, remote check deposits, ACH, and qualifying instant transfers count; internal Capital One transfers do not.'
 	}
 ];
 
@@ -226,7 +275,10 @@ export function getBonusOfferTemplate(id: string | null): BonusOfferTemplate | n
 
 export function isOfferDateEligible(offer: BonusOfferTemplate, openedDate: string | null): boolean {
 	if (!openedDate) return true;
-	return (!offer.validFrom || openedDate >= offer.validFrom) && openedDate <= offer.validThrough;
+	return (
+		(!offer.validFrom || openedDate >= offer.validFrom) &&
+		(!offer.validThrough || openedDate <= offer.validThrough)
+	);
 }
 
 export function getCompatibleBonusOffers(
@@ -250,7 +302,9 @@ export function buildBonusOfferDraft(
 	const expectedPayoutDate =
 		offer.payoutRule === 'qualification-plus-30'
 			? addDays(qualificationDeadline, 30)
-			: endOfMonthPlusDays(qualificationDeadline, 30);
+			: offer.payoutRule === 'qualification-plus-90'
+				? addDays(qualificationDeadline, 90)
+				: endOfMonthPlusDays(qualificationDeadline, 30);
 	return {
 		name: offer.name,
 		institution: offer.institution,
@@ -351,6 +405,31 @@ export function isLikelyUsBankQualifyingTransaction(
 	return Boolean(transaction.merchantName || detailed);
 }
 
+export function isLikelyCapitalOneQualifyingTransaction(
+	transaction: FinancialAccountTransaction,
+	openedDate: string,
+	qualificationDeadline: string
+): boolean {
+	if (!isInQualificationWindow(transaction, openedDate, qualificationDeadline)) return false;
+	const text = normalizedTransactionText(transaction);
+	const primary = transaction.categoryPrimary?.toUpperCase() ?? '';
+	const detailed = transaction.categoryDetailed?.toUpperCase() ?? '';
+	const combined = `${text} ${detailed}`;
+	if (
+		/CAPITAL ONE|INTERNAL TRANSFER|TRANSFER BETWEEN|ATM|CASH WITHDRAWAL|CASH ADVANCE|DEBIT CARD|CARD PURCHASE|BILL PAY|CREDIT CARD|CARDMEMBER|ZELLE|VENMO|CASH APP|PAYPAL|PERSON TO PERSON|\bP2P\b/.test(
+			combined
+		)
+	) {
+		return false;
+	}
+	if (
+		/\bACH\b|\bWIRE\b|REMOTE CHECK DEPOSIT|MOBILE CHECK DEPOSIT|INSTANT TRANSFER/.test(combined)
+	) {
+		return true;
+	}
+	return ['TRANSFER_IN', 'TRANSFER_OUT'].includes(primary) && /TRANSFER|DEPOSIT/.test(detailed);
+}
+
 function resolveOffer(bonus: AccountBonus, account: FinancialAccount): BonusOfferTemplate | null {
 	const selected = getBonusOfferTemplate(bonus.offerTemplateId);
 	if (selected) return selected;
@@ -402,7 +481,9 @@ export function buildBonusTracker(
 	const classifier =
 		offer.transactionRule === 'wells-fargo-business'
 			? isLikelyWellsFargoQualifyingTransaction
-			: isLikelyUsBankQualifyingTransaction;
+			: offer.transactionRule === 'capital-one-business'
+				? isLikelyCapitalOneQualifyingTransaction
+				: isLikelyUsBankQualifyingTransaction;
 	return {
 		offer,
 		account,

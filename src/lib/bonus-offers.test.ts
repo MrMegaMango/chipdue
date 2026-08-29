@@ -5,6 +5,7 @@ import {
 	buildBonusTracker,
 	getBonusOfferTemplate,
 	getCompatibleBonusOffers,
+	isLikelyCapitalOneQualifyingTransaction,
 	isLikelyUsBankQualifyingTransaction,
 	isLikelyWellsFargoQualifyingTransaction
 } from './bonus-offers';
@@ -147,6 +148,35 @@ describe('versioned business bonus offer catalog', () => {
 			offer: { id: 'us-bank-business-essentials-q3-2026' }
 		});
 	});
+
+	it('tracks the current Capital One SBOFFER500 promotion', () => {
+		const capitalOneAccount = {
+			...account,
+			institution: 'Capital One',
+			nickname: 'Business Basic Checking',
+			currentBalanceCents: 501_075
+		};
+		const offer = getCompatibleBonusOffers(capitalOneAccount)[0];
+		expect(offer).toMatchObject({
+			id: 'capital-one-business-checking-sboffer500-2026',
+			promoCode: 'SBOFFER500',
+			transactionTarget: 10,
+			qualificationLabel: 'Complete by'
+		});
+		expect(buildBonusOfferDraft(offer!, '2026-08-01')).toMatchObject({
+			rewardCents: 50_000,
+			requirementDeadline: '2026-10-29',
+			expectedPayoutDate: '2027-01-27',
+			safeToCloseDate: '2027-01-28',
+			requirements: [
+				expect.stringContaining('SBOFFER500'),
+				expect.stringContaining('Aug 30, 2026'),
+				expect.stringContaining('at least 60 days'),
+				expect.stringContaining('10 qualifying electronic transactions'),
+				expect.stringContaining('Jan 27, 2027')
+			]
+		});
+	});
 });
 
 describe('conservative posted-activity classifiers', () => {
@@ -203,5 +233,29 @@ describe('conservative posted-activity classifiers', () => {
 				isLikelyUsBankQualifyingTransaction(entry, '2026-08-27', '2026-10-25')
 			)
 		).toHaveLength(3);
+	});
+
+	it('counts only likely Capital One electronic transfers and deposits', () => {
+		const candidates = [
+			transaction({ name: 'External ACH credit', merchantName: null }),
+			transaction({ name: 'Incoming wire transfer', merchantName: null }),
+			transaction({ name: 'Remote check deposit', merchantName: null }),
+			transaction({
+				name: 'External transfer',
+				merchantName: null,
+				categoryPrimary: 'TRANSFER_IN',
+				categoryDetailed: 'TRANSFER_IN_ACCOUNT_TRANSFER'
+			}),
+			transaction({ name: 'Capital One internal transfer', merchantName: null }),
+			transaction({ name: 'Debit card purchase', merchantName: 'Coffee shop' }),
+			transaction({ name: 'Zelle transfer', merchantName: null }),
+			transaction({ pending: true }),
+			transaction({ date: '2026-11-01' })
+		];
+		expect(
+			candidates.filter((entry) =>
+				isLikelyCapitalOneQualifyingTransaction(entry, '2026-08-01', '2026-10-29')
+			)
+		).toHaveLength(4);
 	});
 });
