@@ -602,6 +602,7 @@ describe.sequential('Plaid transaction history', () => {
 	});
 
 	it('classifies Blue Cash Preferred purchases without asking for a card selection', async () => {
+		const rewardYear = new Date().getUTCFullYear();
 		const itemId = await savePlaidItem(
 			'provider-item-amex-rewards',
 			'test-access-value',
@@ -623,28 +624,28 @@ describe.sequential('Plaid transaction history', () => {
 			data: {
 				added: [
 					{
-						...transaction('amex-grocery', 100, 'Synthetic grocery', '2026-08-20'),
+						...transaction('amex-grocery', 100, 'Synthetic grocery', `${rewardYear}-08-20`),
 						personal_finance_category: {
 							primary: 'FOOD_AND_DRINK',
 							detailed: 'FOOD_AND_DRINK_GROCERIES'
 						}
 					},
 					{
-						...transaction('amex-streaming', 20, 'Synthetic streaming', '2026-08-19'),
+						...transaction('amex-streaming', 20, 'Synthetic streaming', `${rewardYear}-08-19`),
 						personal_finance_category: {
 							primary: 'ENTERTAINMENT',
 							detailed: 'ENTERTAINMENT_TV_AND_MOVIES'
 						}
 					},
 					{
-						...transaction('amex-gas', 50, 'Synthetic gas', '2026-08-18'),
+						...transaction('amex-gas', 50, 'Synthetic gas', `${rewardYear}-08-18`),
 						personal_finance_category: {
 							primary: 'TRANSPORTATION',
 							detailed: 'TRANSPORTATION_GAS'
 						}
 					},
 					{
-						...transaction('amex-transit', 30, 'Synthetic transit', '2026-08-17'),
+						...transaction('amex-transit', 30, 'Synthetic transit', `${rewardYear}-08-17`),
 						personal_finance_category: {
 							primary: 'TRANSPORTATION',
 							detailed: 'TRANSPORTATION_PUBLIC_TRANSIT'
@@ -682,6 +683,14 @@ describe.sequential('Plaid transaction history', () => {
 			expect.objectContaining({ rate: 6, amount: 120 }),
 			expect.objectContaining({ rate: 3, amount: 150 }),
 			expect.objectContaining({ rate: 3, amount: 90 })
+		]);
+		expect(history.rewardCategorySpending).toEqual([
+			expect.objectContaining({
+				year: rewardYear,
+				spentCents: 10_000,
+				capCents: 600_000,
+				remainingCents: 590_000
+			})
 		]);
 	});
 

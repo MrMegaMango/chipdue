@@ -189,6 +189,9 @@ describe('card activity preview', () => {
 		expect(source).toContain('View all activity');
 		expect(source).toContain('?limit=${RECENT_ACTIVITY_LIMIT}');
 		expect(source).toContain('onclick={() => openTransactionHistory(card)}');
+		expect(source).toContain('of ${wholeDollarMoney.format(spending.capCents / 100)} spent in');
+		expect(source).toContain('role="progressbar"');
+		expect(source).toContain('rewardCategorySpendingByCard');
 	});
 
 	it('keeps both activity header labels on one compact line', () => {

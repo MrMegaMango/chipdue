@@ -60,6 +60,14 @@ export interface CardRewardCategory {
 	annualSpendCapCents: number | null;
 }
 
+export interface CardRewardCategorySpend {
+	categoryId: string;
+	year: number;
+	spentCents: number;
+	capCents: number;
+	remainingCents: number;
+}
+
 export interface CardTransactionRewardEstimate {
 	type: CardRewardType;
 	amount: number;

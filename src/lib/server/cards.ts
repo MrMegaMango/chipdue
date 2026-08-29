@@ -13,6 +13,7 @@ import type {
 	Card,
 	CardRewardCategory,
 	CardRewardCategoryMatch,
+	CardRewardCategorySpend,
 	CardRewardType,
 	CardTransaction,
 	CardTransactionRewardEstimate,
@@ -1209,11 +1210,51 @@ function transactionRewardEstimate(
 	};
 }
 
+function rewardCategorySpending(
+	transactions: StoredFinancialTransaction[],
+	rewards: NormalizedCardRewards,
+	year: number
+): CardRewardCategorySpend[] {
+	const yearPrefix = `${year}-`;
+	return rewards.categories.flatMap((category) => {
+		const capCents = category.annualSpendCapCents;
+		const matchCategory = category.matchCategory;
+		if (!capCents || !matchCategory) return [];
+
+		const spentCents = Math.max(
+			0,
+			transactions.reduce((total, transaction) => {
+				if (
+					transaction.pending ||
+					!transaction.date.startsWith(yearPrefix) ||
+					(transaction.categoryPrimary !== null &&
+						NON_REWARD_TRANSACTION_CATEGORIES.has(transaction.categoryPrimary.toUpperCase())) ||
+					!transactionMatchesRewardCategory(transaction, matchCategory)
+				) {
+					return total;
+				}
+				return total + transaction.amountCents;
+			}, 0)
+		);
+
+		return [
+			{
+				categoryId: category.id,
+				year,
+				spentCents,
+				capCents,
+				remainingCents: Math.max(0, capCents - spentCents)
+			}
+		];
+	});
+}
+
 export async function listCardTransactions(
 	cardId: string,
 	limit = 500
 ): Promise<{
 	transactions: CardTransaction[];
+	rewardCategorySpending: CardRewardCategorySpend[];
 	status: TransactionHistoryStatus;
 	lastSyncedAt: string | null;
 }> {
@@ -1256,6 +1297,11 @@ export async function listCardTransactions(
 		);
 	}
 	const rewards = effectiveRewardsForPayload(payload);
+	const rewardCategorySpend = rewardCategorySpending(
+		history.transactions,
+		rewards,
+		new Date().getUTCFullYear()
+	);
 	const rankedRates =
 		rewards.calculation === 'venmo_spend_ranked'
 			? venmoRankedRewardRates(history.transactions, payload.statementDate)
@@ -1286,5 +1332,10 @@ export async function listCardTransactions(
 			(left, right) => right.date.localeCompare(left.date) || left.name.localeCompare(right.name)
 		)
 		.slice(0, limit);
-	return { transactions, status: history.status, lastSyncedAt: row.last_synced_at };
+	return {
+		transactions,
+		rewardCategorySpending: rewardCategorySpend,
+		status: history.status,
+		lastSyncedAt: row.last_synced_at
+	};
 }

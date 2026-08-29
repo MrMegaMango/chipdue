@@ -250,6 +250,13 @@
 		matchCategory: CardRewardCategoryMatch | null;
 		annualSpendCapCents?: number | null;
 	};
+	type CardRewardCategorySpend = {
+		categoryId: string;
+		year: number;
+		spentCents: number;
+		capCents: number;
+		remainingCents: number;
+	};
 	type EditableRewardCategory = {
 		id?: string;
 		name: string;
@@ -273,6 +280,7 @@
 
 	type TransactionHistoryResponse = {
 		transactions: CardTransaction[];
+		rewardCategorySpending: CardRewardCategorySpend[];
 		status: Exclude<CardView['transactionHistoryStatus'], null>;
 		lastSyncedAt: string | null;
 	};
@@ -375,6 +383,12 @@
 		currency: 'USD',
 		maximumFractionDigits: 0
 	});
+	const compactMoney = new Intl.NumberFormat('en-US', {
+		style: 'currency',
+		currency: 'USD',
+		minimumFractionDigits: 0,
+		maximumFractionDigits: 2
+	});
 
 	const fullDate = new Intl.DateTimeFormat('en-US', {
 		month: 'short',
@@ -472,6 +486,9 @@
 	let calendarDialogOpen = $state(false);
 	let calendarCloseButton = $state<HTMLButtonElement>();
 	let recentActivityByCard = $state<Record<string, CardTransaction[]>>({});
+	let rewardCategorySpendingByCard = $state<
+		Record<string, Record<string, CardRewardCategorySpend>>
+	>({});
 	let recentActivityLoadingByCard = $state<Record<string, boolean>>({});
 	let recentActivityErrorByCard = $state<Record<string, boolean>>({});
 	let notice = $state('');
@@ -1021,6 +1038,7 @@
 		calendarDialogOpen = false;
 		calendarCloseButton = undefined;
 		recentActivityByCard = {};
+		rewardCategorySpendingByCard = {};
 		recentActivityLoadingByCard = {};
 		recentActivityErrorByCard = {};
 		recentActivityLoadVersion += 1;
@@ -1105,6 +1123,7 @@
 			(card) => card.source === 'connected' && card.transactionHistoryEnabled
 		);
 		recentActivityByCard = {};
+		rewardCategorySpendingByCard = {};
 		recentActivityErrorByCard = {};
 		recentActivityLoadingByCard = Object.fromEntries(eligibleCards.map((card) => [card.id, true]));
 
@@ -1123,6 +1142,15 @@
 					recentActivityByCard = {
 						...recentActivityByCard,
 						[card.id]: payload.transactions
+					};
+					rewardCategorySpendingByCard = {
+						...rewardCategorySpendingByCard,
+						[card.id]: Object.fromEntries(
+							(payload.rewardCategorySpending ?? []).map((spending) => [
+								spending.categoryId,
+								spending
+							])
+						)
 					};
 				} catch {
 					if (!isPrivateEpochCurrent(expectedEpoch) || loadVersion !== recentActivityLoadVersion) {
@@ -1207,6 +1235,14 @@
 
 	function formatAnnualSpendCap(cents: number): string {
 		return `${wholeDollarMoney.format(cents / 100)} annual spend cap`;
+	}
+
+	function formatRewardCategorySpending(spending: CardRewardCategorySpend): string {
+		return `${compactMoney.format(spending.spentCents / 100)} of ${wholeDollarMoney.format(spending.capCents / 100)} spent in ${spending.year}`;
+	}
+
+	function rewardCategorySpendPercent(spending: CardRewardCategorySpend): number {
+		return Math.min(100, Math.round((spending.spentCents / spending.capCents) * 100));
 	}
 
 	function formatDate(value: string | null): string {
@@ -2814,11 +2850,30 @@
 										{#if card.rewardCategories.length > 0}
 											<ul>
 												{#each card.rewardCategories as category (category.id)}
+													{@const categorySpending =
+														rewardCategorySpendingByCard[card.id]?.[category.id]}
 													<li>
 														<div>
 															<span>{category.name}</span>
 															{#if category.annualSpendCapCents}
-																<small>{formatAnnualSpendCap(category.annualSpendCapCents)}</small>
+																{#if categorySpending}
+																	<small>{formatRewardCategorySpending(categorySpending)}</small>
+																	<span
+																		class="reward-cap-meter"
+																		role="progressbar"
+																		aria-label={`${category.name}: ${formatRewardCategorySpending(categorySpending)}`}
+																		aria-valuemin="0"
+																		aria-valuemax="100"
+																		aria-valuenow={rewardCategorySpendPercent(categorySpending)}
+																	>
+																		<span
+																			style:width={`${rewardCategorySpendPercent(categorySpending)}%`}
+																		></span>
+																	</span>
+																{:else}
+																	<small>{formatAnnualSpendCap(category.annualSpendCapCents)}</small
+																	>
+																{/if}
 															{/if}
 														</div>
 														<strong>{formatRewardRate(category.multiplier, card.rewardType)}</strong
@@ -3637,11 +3692,29 @@
 									</h3>
 									<ul>
 										{#each rewardsCard.rewardCategories as category (category.id)}
+											{@const categorySpending =
+												rewardCategorySpendingByCard[rewardsCard.id]?.[category.id]}
 											<li>
 												<div>
 													<span>{category.name}</span>
 													{#if category.annualSpendCapCents}
-														<small>{formatAnnualSpendCap(category.annualSpendCapCents)}</small>
+														{#if categorySpending}
+															<small>{formatRewardCategorySpending(categorySpending)}</small>
+															<span
+																class="reward-cap-meter"
+																role="progressbar"
+																aria-label={`${category.name}: ${formatRewardCategorySpending(categorySpending)}`}
+																aria-valuemin="0"
+																aria-valuemax="100"
+																aria-valuenow={rewardCategorySpendPercent(categorySpending)}
+															>
+																<span
+																	style:width={`${rewardCategorySpendPercent(categorySpending)}%`}
+																></span>
+															</span>
+														{:else}
+															<small>{formatAnnualSpendCap(category.annualSpendCapCents)}</small>
+														{/if}
 													{/if}
 												</div>
 												<strong
@@ -5261,6 +5334,23 @@
 		color: var(--accent);
 		font-size: 0.67rem;
 		font-variant-numeric: tabular-nums;
+	}
+
+	.reward-cap-meter {
+		display: block;
+		width: 100%;
+		height: 3px;
+		margin-top: 0.08rem;
+		overflow: hidden;
+		border-radius: 999px;
+		background: #e5def5;
+	}
+
+	.reward-cap-meter > span {
+		display: block;
+		height: 100%;
+		border-radius: inherit;
+		background: var(--accent);
 	}
 
 	.card-activity-preview {
