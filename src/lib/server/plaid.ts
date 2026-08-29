@@ -767,6 +767,7 @@ export async function syncPlaidItem(
 				accountId: account.account_id,
 				nickname: account.name.trim().slice(0, 80) || 'Financial account',
 				institution: brand.name,
+				institutionLogoBase64: brand.logoBase64,
 				accountType,
 				last4: safeLast4(account.mask),
 				currency: safeCurrency(

@@ -61,6 +61,7 @@ export interface ConnectedFinancialAccountSnapshot {
 	accountId: string;
 	nickname: string;
 	institution: string | null;
+	institutionLogoBase64: string | null;
 	accountType: 'checking' | 'savings' | 'brokerage' | 'cash_management' | 'other';
 	last4: string | null;
 	currency: string;
@@ -76,6 +77,14 @@ const dateSchema = z
 	.nullable();
 const nullableTextSchema = z.string().nullable();
 const nullableCentsSchema = z.number().int().nullable();
+const institutionLogoSchema = z
+	.string()
+	.min(1)
+	.max(350_000)
+	.regex(/^[A-Za-z0-9+/]+={0,2}$/)
+	.nullable()
+	.optional()
+	.default(null);
 const investmentHoldingSchema = z.object({
 	name: z.string(),
 	tickerSymbol: nullableTextSchema,
@@ -146,6 +155,7 @@ const accountPayloadSchema = z.object({
 	recordType: z.literal('account'),
 	nickname: z.string(),
 	institution: nullableTextSchema,
+	institutionLogoBase64: institutionLogoSchema,
 	accountType: financialAccountTypeSchema,
 	ownerType: financialAccountOwnerSchema,
 	status: financialAccountStatusSchema,
@@ -212,6 +222,9 @@ function rowToAccount(row: PrivateRecordRow, payload: AccountPayload): Financial
 		source: publicSourceForStoredSource(row.source),
 		nickname: payload.nickname,
 		institution: payload.institution,
+		institutionLogoUrl: payload.institutionLogoBase64
+			? `data:image/png;base64,${payload.institutionLogoBase64}`
+			: null,
 		accountType: payload.accountType,
 		ownerType: payload.ownerType,
 		status: payload.status,
@@ -373,7 +386,17 @@ export async function createFinancialAccount(
 ): Promise<FinancialAccount> {
 	const id = randomUUID();
 	const now = new Date().toISOString();
-	await insertRecord(id, { recordType: 'account', ...input, hidden: false, holdings: [] }, now);
+	await insertRecord(
+		id,
+		{
+			recordType: 'account',
+			...input,
+			institutionLogoBase64: null,
+			hidden: false,
+			holdings: []
+		},
+		now
+	);
 	return getFinancialAccount(id);
 }
 
@@ -406,6 +429,7 @@ export async function updateFinancialAccount(
 		recordType: 'account',
 		nickname: changes.nickname ?? existing.nickname,
 		institution: changes.institution === undefined ? existing.institution : changes.institution,
+		institutionLogoBase64: existingPayload.institutionLogoBase64,
 		accountType: changes.accountType ?? existing.accountType,
 		ownerType: changes.ownerType ?? existing.ownerType,
 		status: changes.status ?? existing.status,
@@ -448,6 +472,8 @@ function connectedAccountPayload(
 		recordType: 'account',
 		nickname: existing?.nickname ?? snapshot.nickname,
 		institution: snapshot.institution,
+		institutionLogoBase64:
+			snapshot.institutionLogoBase64 ?? existing?.institutionLogoBase64 ?? null,
 		accountType: snapshot.accountType,
 		ownerType: existing?.ownerType ?? 'personal',
 		status: existing?.status ?? 'active',

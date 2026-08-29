@@ -187,6 +187,7 @@ describe.sequential('private local persistence', () => {
 					accountId: 'provider-account-brokerage',
 					nickname: accountName,
 					institution: institutionName,
+					institutionLogoBase64: null,
 					accountType: 'brokerage',
 					last4: '9876',
 					currency: 'USD',

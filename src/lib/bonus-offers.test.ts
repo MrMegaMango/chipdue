@@ -14,6 +14,7 @@ const account: FinancialAccount = {
 	source: 'connected',
 	nickname: 'Business checking',
 	institution: 'Wells Fargo',
+	institutionLogoUrl: null,
 	accountType: 'checking',
 	ownerType: 'business',
 	status: 'active',

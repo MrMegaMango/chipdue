@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { resolve } from '$app/paths';
+	import { asset, resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import { getCompatibleBonusOffers } from '$lib/bonus-offers';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
@@ -171,6 +171,13 @@
 			openedDate: '',
 			notes: ''
 		};
+	}
+
+	function institutionLogoUrl(account: FinancialAccount): string | null {
+		if (account.institutionLogoUrl) return account.institutionLogoUrl;
+		if (/\bvenmo\b/i.test(account.institution ?? '')) return asset('/brands/venmo.svg');
+		if (/\bchase\b/i.test(account.institution ?? '')) return asset('/brands/chase.svg');
+		return null;
 	}
 
 	async function initialize(): Promise<void> {
@@ -853,6 +860,7 @@
 								<div class="finance-grid">
 									{#each accountGroup.accounts as account (account.id)}
 										{@const bonusOffers = availableBonusOffers(account)}
+										{@const logoUrl = institutionLogoUrl(account)}
 										<article
 											class:brokerage-detail={account.accountType === 'brokerage' &&
 												account.source === 'connected'}
@@ -860,13 +868,27 @@
 											class="finance-card"
 										>
 											<header>
-												<div>
-													<h4>{account.nickname}</h4>
-													<p>
-														{account.institution ?? 'Institution not entered'}{account.last4
-															? ` · •••• ${account.last4}`
-															: ''}
-													</p>
+												<div class="account-identity">
+													<span class:institution-logo={logoUrl} class="institution-mark">
+														{#if logoUrl}
+															<img
+																src={logoUrl}
+																alt={`${account.institution ?? account.nickname} logo`}
+															/>
+														{:else}
+															<svg viewBox="0 0 24 24" aria-hidden="true">
+																<path d="M3 9h18M5 9V7l7-4 7 4v2M5 20h14M7 9v8m5-8v8m5-8v8" />
+															</svg>
+														{/if}
+													</span>
+													<div>
+														<h4>{account.nickname}</h4>
+														<p>
+															{account.institution ?? 'Institution not entered'}{account.last4
+																? ` · •••• ${account.last4}`
+																: ''}
+														</p>
+													</div>
 												</div>
 												<div class="account-pills">
 													<span
@@ -1448,6 +1470,54 @@
 		font-size: 1rem;
 		font-weight: 750;
 		letter-spacing: -0.025em;
+	}
+
+	.account-identity {
+		display: flex;
+		min-width: 0;
+		gap: 0.7rem;
+		align-items: center;
+	}
+
+	.account-identity > div {
+		min-width: 0;
+	}
+
+	.institution-mark {
+		display: grid;
+		width: 38px;
+		height: 38px;
+		padding: 8px;
+		box-sizing: border-box;
+		border: 1px solid var(--line);
+		border-radius: 10px;
+		color: var(--accent-dark);
+		background: var(--accent-soft);
+		flex: 0 0 auto;
+		place-items: center;
+	}
+
+	.institution-mark svg {
+		width: 21px;
+		height: 21px;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.7;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+	}
+
+	.institution-mark.institution-logo {
+		padding: 4px;
+		background: white;
+	}
+
+	.institution-mark img {
+		display: block;
+		width: 100%;
+		height: 100%;
+		border-radius: 6px;
+		object-fit: contain;
 	}
 
 	.finance-card.brokerage-detail {

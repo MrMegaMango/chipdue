@@ -169,6 +169,7 @@ export interface FinancialAccount {
 	source: FinancialAccountSource;
 	nickname: string;
 	institution: string | null;
+	institutionLogoUrl: string | null;
 	accountType: FinancialAccountType;
 	ownerType: FinancialAccountOwner;
 	status: FinancialAccountStatus;

@@ -322,9 +322,10 @@ describe.sequential('Plaid transaction history', () => {
 		);
 	});
 
-	it('stores Plaid institution branding with synced cards', async () => {
+	it('stores Plaid institution branding with synced cards and accounts', async () => {
 		const logoBase64 =
 			'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+		plaidMocks.accountsGet.mockResolvedValueOnce(mixedAccountsResponse());
 		const itemId = await savePlaidItem(
 			'provider-item-brand',
 			'test-access-value',
@@ -355,6 +356,14 @@ describe.sequential('Plaid transaction history', () => {
 		const [card] = await listCards();
 		expect(card.issuer).toBe('Institution from Plaid');
 		expect(card.issuerLogoUrl).toBe(`data:image/png;base64,${logoBase64}`);
+		expect(await listFinancialAccounts()).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					institution: 'Institution from Plaid',
+					institutionLogoUrl: `data:image/png;base64,${logoBase64}`
+				})
+			])
+		);
 	});
 
 	it('imports bank and brokerage accounts and refreshes balances automatically', async () => {

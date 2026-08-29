@@ -23,6 +23,12 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain('account.holdings');
 	});
 
+	it('shows institution branding on account cards', () => {
+		expect(accountsSource).toContain('account.institutionLogoUrl');
+		expect(accountsSource).toContain('class="institution-mark"');
+		expect(accountsSource).toContain('alt={`${account.institution ?? account.nickname} logo`}');
+	});
+
 	it('separates cash and brokerage accounts into distinct groups', () => {
 		expect(accountsSource).toContain("title: 'Cash accounts'");
 		expect(accountsSource).toContain("account.accountType !== 'brokerage'");
