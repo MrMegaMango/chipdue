@@ -190,14 +190,26 @@
 			{
 				id: 'business',
 				title: 'Business',
-				accounts: groupAccounts.filter((account) => account.ownerType === 'business')
+				accounts: sortAccountsByValue(
+					groupAccounts.filter((account) => account.ownerType === 'business')
+				)
 			},
 			{
 				id: 'personal',
 				title: 'Personal',
-				accounts: groupAccounts.filter((account) => account.ownerType === 'personal')
+				accounts: sortAccountsByValue(
+					groupAccounts.filter((account) => account.ownerType === 'personal')
+				)
 			}
 		];
+	}
+
+	function sortAccountsByValue(groupAccounts: FinancialAccount[]): FinancialAccount[] {
+		return [...groupAccounts].sort((left, right) => {
+			if (left.currentBalanceCents === null) return right.currentBalanceCents === null ? 0 : 1;
+			if (right.currentBalanceCents === null) return -1;
+			return right.currentBalanceCents - left.currentBalanceCents;
+		});
 	}
 
 	function institutionLogoUrl(account: FinancialAccount): string | null {

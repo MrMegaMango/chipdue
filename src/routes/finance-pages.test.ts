@@ -78,6 +78,16 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain("account.ownerType === 'personal'");
 	});
 
+	it('orders account cards by value within each ownership group', () => {
+		expect(accountsSource).toContain('sortAccountsByValue(');
+		expect(accountsSource).toContain(
+			'return right.currentBalanceCents - left.currentBalanceCents;'
+		);
+		expect(accountsSource).toContain(
+			'if (left.currentBalanceCents === null) return right.currentBalanceCents === null ? 0 : 1;'
+		);
+	});
+
 	it('shows provider activity and explains the open-order limitation', () => {
 		expect(accountsSource).toContain("'Recent activity'");
 		expect(accountsSource).toContain("'Investment activity'");
