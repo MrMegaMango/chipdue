@@ -157,6 +157,37 @@ describe.sequential('encrypted financial records', () => {
 		]);
 	});
 
+	it('records non-brokerage balances for net worth history', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-08-01T12:00:00.000Z'));
+		const account = await createFinancialAccount(
+			createFinancialAccountSchema.parse({
+				nickname: 'Everyday checking',
+				accountType: 'checking',
+				currentBalanceCents: 100_000
+			})
+		);
+
+		vi.setSystemTime(new Date('2026-08-05T12:00:00.000Z'));
+		await updateFinancialAccount(account.id, { currentBalanceCents: 112_500 });
+		const [updated] = await listFinancialAccounts();
+
+		expect(updated.balanceHistory).toEqual([
+			{
+				recordedAt: '2026-08-01T12:00:00.000Z',
+				balanceCents: 100_000,
+				netContributionsCents: null,
+				source: 'observed'
+			},
+			{
+				recordedAt: '2026-08-05T12:00:00.000Z',
+				balanceCents: 112_500,
+				netContributionsCents: null,
+				source: 'observed'
+			}
+		]);
+	});
+
 	it('replaces estimated points while preserving observed snapshots', async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date('2026-08-05T12:00:00.000Z'));

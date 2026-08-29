@@ -196,8 +196,10 @@
 		AUTOMATIC_CARD_REWARD_PROFILES,
 		type AutomaticCardRewardProfile
 	} from '$lib/card-reward-profiles';
+	import NetWorthChart from '$lib/components/NetWorthChart.svelte';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
 	import { financialProviderName } from '$lib/financial-data';
+	import type { FinancialAccount } from '$lib/types';
 
 	type PageSection = 'overview' | 'cards' | 'settings';
 	const currentSection: PageSection = $derived(
@@ -334,7 +336,7 @@
 		};
 	};
 
-	type WorkspaceAccount = { id: string };
+	type WorkspaceAccount = FinancialAccount;
 	type WorkspaceBonus = {
 		id: string;
 		name: string;
@@ -558,6 +560,9 @@
 		interestSavingTargets.filter((target) => target.source === 'current').length
 	);
 	const dueSoonCount = $derived(cards.filter((card) => isDueSoon(card)).length);
+	const trackedCardBalanceCents = $derived(
+		cards.reduce((total, card) => total + (card.currentBalanceCents ?? 0), 0)
+	);
 	const calendarCards = $derived(
 		cards
 			.filter((card): card is CardView & { dueDate: string } => Boolean(card.dueDate))
@@ -2744,6 +2749,14 @@
 					</div>
 				</article>
 			</section>
+
+			{#if currentSection === 'overview'}
+				<NetWorthChart
+					accounts={workspaceAccounts}
+					cardBalanceCents={trackedCardBalanceCents}
+					loading={!hasLoadedWorkspace || !hasLoadedCards}
+				/>
+			{/if}
 
 			<section
 				class="workspace-modules"

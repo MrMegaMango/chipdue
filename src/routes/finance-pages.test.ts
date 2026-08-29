@@ -6,6 +6,10 @@ const balanceHistoryChartSource = readFileSync(
 	new URL('../lib/components/BalanceHistoryChart.svelte', import.meta.url),
 	'utf8'
 );
+const netWorthChartSource = readFileSync(
+	new URL('../lib/components/NetWorthChart.svelte', import.meta.url),
+	'utf8'
+);
 const bonusesSource = readFileSync(new URL('./bonuses/+page.svelte', import.meta.url), 'utf8');
 const dashboardSource = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
 const etradeSource = readFileSync(new URL('./etrade/+page.svelte', import.meta.url), 'utf8');
@@ -53,6 +57,16 @@ describe('financial workspace navigation', () => {
 		expect(dashboardSource).toContain("href={resolve('/bonuses')}");
 		expect(dashboardSource).toContain('Payments &amp; deadlines');
 		expect(dashboardSource).toContain('activeBonusValueCents');
+	});
+
+	it('shows net worth history on the overview', () => {
+		expect(dashboardSource).toContain('NetWorthChart');
+		expect(dashboardSource).toContain('accounts={workspaceAccounts}');
+		expect(dashboardSource).toContain('cardBalanceCents={trackedCardBalanceCents}');
+		expect(netWorthChartSource).toContain('Net worth over time');
+		expect(netWorthChartSource).toContain('Current net worth');
+		expect(netWorthChartSource).toContain('Net worth history range');
+		expect(netWorthChartSource).toContain('Older gaps use the earliest known balance');
 	});
 
 	it('supports personal, business, and brokerage account tracking', () => {

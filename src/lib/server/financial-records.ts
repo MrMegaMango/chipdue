@@ -221,12 +221,10 @@ type PrivateRecordPayload = AccountPayload | BonusPayload;
 
 function appendBalanceHistoryPoint(
 	history: AccountBalanceHistoryPoint[],
-	accountType: AccountPayload['accountType'],
 	balanceCents: number | null,
 	netContributionsCents: number | null,
 	recordedAt: string
 ): AccountBalanceHistoryPoint[] {
-	if (accountType !== 'brokerage') return [];
 	if (balanceCents === null || !Number.isFinite(new Date(recordedAt).getTime())) return history;
 
 	const next = [
@@ -245,18 +243,19 @@ function accountBalanceHistory(
 	payload: AccountPayload,
 	row: Pick<PrivateRecordRow, 'last_synced_at' | 'updated_at' | 'created_at'>
 ): AccountBalanceHistoryPoint[] {
-	if (payload.accountType !== 'brokerage') return [];
 	const netContributionsCents = accountNetContributions(payload);
 	if (payload.balanceHistory.length > 0) {
 		return payload.balanceHistory.map((point, index) => ({
 			...point,
 			source: point.source ?? 'observed',
 			netContributionsCents:
-				point.netContributionsCents === undefined
-					? index === payload.balanceHistory.length - 1
-						? netContributionsCents
-						: null
-					: point.netContributionsCents
+				payload.accountType !== 'brokerage'
+					? null
+					: point.netContributionsCents === undefined
+						? index === payload.balanceHistory.length - 1
+							? netContributionsCents
+							: null
+						: point.netContributionsCents
 		}));
 	}
 	if (payload.currentBalanceCents === null) return [];
@@ -529,7 +528,6 @@ export async function createFinancialAccount(
 			hidden: false,
 			balanceHistory: appendBalanceHistoryPoint(
 				[],
-				input.accountType,
 				input.currentBalanceCents,
 				input.netContributionsCents,
 				now
@@ -576,12 +574,12 @@ export async function updateFinancialAccount(
 			? existing.netContributionsCents
 			: changes.netContributionsCents;
 	const shouldRecordBalance =
-		accountType === 'brokerage' &&
 		currentBalanceCents !== null &&
-		(existing.accountType !== 'brokerage' ||
+		(existing.accountType !== accountType ||
 			(changes.currentBalanceCents !== undefined &&
 				changes.currentBalanceCents !== existing.currentBalanceCents) ||
-			(changes.netContributionsCents !== undefined &&
+			(accountType === 'brokerage' &&
+				changes.netContributionsCents !== undefined &&
 				changes.netContributionsCents !== existing.netContributionsCents));
 	const now = new Date().toISOString();
 	const payload: AccountPayload = {
@@ -604,14 +602,11 @@ export async function updateFinancialAccount(
 		balanceHistory: shouldRecordBalance
 			? appendBalanceHistoryPoint(
 					accountBalanceHistory(existingPayload, row),
-					accountType,
 					currentBalanceCents,
-					netContributionsCents,
+					accountType === 'brokerage' ? netContributionsCents : null,
 					now
 				)
-			: accountType === 'brokerage'
-				? accountBalanceHistory(existingPayload, row)
-				: [],
+			: accountBalanceHistory(existingPayload, row),
 		holdings: existing.holdings,
 		transactionHistory: existingPayload.transactionHistory,
 		openedDate: changes.openedDate === undefined ? existing.openedDate : changes.openedDate,
@@ -660,9 +655,8 @@ function connectedAccountPayload(
 		netContributionsCents,
 		balanceHistory: appendBalanceHistoryPoint(
 			history,
-			snapshot.accountType,
 			snapshot.currentBalanceCents,
-			netContributionsCents,
+			snapshot.accountType === 'brokerage' ? netContributionsCents : null,
 			syncedAt
 		),
 		holdings: snapshot.holdings ?? existingPayload?.holdings ?? [],
