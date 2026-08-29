@@ -2311,6 +2311,7 @@
 
 	.account-toolbar-actions {
 		justify-content: flex-end;
+		flex-wrap: nowrap;
 	}
 
 	.empty-account-actions {
@@ -2375,6 +2376,17 @@
 		color: var(--muted);
 		background: var(--paper-soft);
 		cursor: not-allowed;
+	}
+
+	@media (max-width: 900px) {
+		.finance-toolbar {
+			align-items: stretch;
+			flex-direction: column;
+		}
+
+		.account-toolbar-actions {
+			justify-content: flex-start;
+		}
 	}
 
 	@media (max-width: 620px) {

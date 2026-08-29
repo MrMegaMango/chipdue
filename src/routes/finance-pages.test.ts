@@ -182,6 +182,8 @@ describe('financial workspace navigation', () => {
 		);
 		expect(actionsSource).toContain('M10 4v12M4 10h12');
 		expect(actionsSource).toContain('M16 7a6.5 6.5 0 1 0 .2 5.5M16 3v4h-4');
+		expect(accountsSource).toContain('flex-wrap: nowrap');
+		expect(accountsSource).toContain('@media (max-width: 900px)');
 	});
 
 	it('matches the cards toolbar scale and button geometry', () => {
