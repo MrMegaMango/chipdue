@@ -995,8 +995,77 @@
 			grid-row: 1;
 		}
 
-		.date-breakdown table {
-			min-width: 560px;
+		.date-breakdown thead {
+			position: absolute;
+			width: 1px;
+			height: 1px;
+			padding: 0;
+			margin: -1px;
+			overflow: hidden;
+			clip: rect(0, 0, 0, 0);
+			white-space: nowrap;
+			border: 0;
+		}
+
+		.date-breakdown tbody {
+			display: block;
+		}
+
+		.date-breakdown tbody tr {
+			display: grid;
+			grid-template-columns: minmax(0, 1fr) auto;
+			gap: 0.14rem 0.75rem;
+			padding: 0.58rem 0.9rem;
+			border-bottom: 1px solid rgba(214, 207, 196, 0.72);
+		}
+
+		.date-breakdown tbody th,
+		.date-breakdown tbody td {
+			padding: 0;
+			border: 0;
+		}
+
+		.date-breakdown tbody th {
+			grid-row: 1 / span 2;
+		}
+
+		.date-breakdown tbody td:nth-child(2),
+		.date-breakdown tbody td:nth-child(3) {
+			text-align: right;
+		}
+
+		.date-breakdown tbody td:nth-child(2) {
+			grid-column: 2;
+			grid-row: 1;
+		}
+
+		.date-breakdown tbody td:nth-child(3) {
+			grid-column: 2;
+			grid-row: 2;
+		}
+
+		.date-breakdown tbody td:nth-child(2)::before,
+		.date-breakdown tbody td:nth-child(3)::before {
+			margin-right: 0.3rem;
+			color: var(--faint);
+			font-family: inherit;
+			font-size: 0.48rem;
+			font-weight: 600;
+			text-transform: uppercase;
+		}
+
+		.date-breakdown tbody td:nth-child(2)::before {
+			content: 'Balance';
+		}
+
+		.date-breakdown tbody td:nth-child(3)::before {
+			content: 'Change';
+		}
+
+		.date-breakdown tbody td:nth-child(4) {
+			grid-column: 1 / -1;
+			grid-row: 3;
+			margin-top: 0.16rem;
 		}
 	}
 
