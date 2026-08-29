@@ -88,6 +88,14 @@ describe('financial workspace navigation', () => {
 		);
 	});
 
+	it('shows APY only for accounts with an entered interest rate', () => {
+		expect(accountsSource).toContain('{#if account.apyBasisPoints !== null}');
+		expect(accountsSource).toContain('<dt>APY</dt>');
+		expect(accountsSource).toContain('formatApy(account.apyBasisPoints)');
+		expect(accountsSource).toContain('<label for="account-apy">APY (%)</label>');
+		expect(accountsSource).toContain('Leave blank if this account does not earn interest.');
+	});
+
 	it('shows provider activity and explains the open-order limitation', () => {
 		expect(accountsSource).toContain("'Recent activity'");
 		expect(accountsSource).toContain("'Investment activity'");

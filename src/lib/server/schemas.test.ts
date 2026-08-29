@@ -73,6 +73,7 @@ describe('financial workspace validation', () => {
 				nickname: 'Business checking',
 				accountType: 'checking',
 				ownerType: 'business',
+				apyBasisPoints: 425,
 				last4: '1234'
 			}).success
 		).toBe(true);
@@ -84,6 +85,9 @@ describe('financial workspace validation', () => {
 				last4: '12345678'
 			}).success
 		).toBe(false);
+		expect(updateFinancialAccountSchema.safeParse({ apyBasisPoints: 425 }).success).toBe(true);
+		expect(updateFinancialAccountSchema.safeParse({ apyBasisPoints: -1 }).success).toBe(false);
+		expect(updateFinancialAccountSchema.safeParse({ apyBasisPoints: 425.5 }).success).toBe(false);
 	});
 
 	it('validates bonus milestones and bounded requirements', () => {

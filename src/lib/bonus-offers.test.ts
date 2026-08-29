@@ -22,6 +22,7 @@ const account: FinancialAccount = {
 	last4: '1234',
 	currency: 'USD',
 	currentBalanceCents: 1_250_000,
+	apyBasisPoints: null,
 	costBasisCents: null,
 	netContributionsCents: null,
 	balanceHistory: [],

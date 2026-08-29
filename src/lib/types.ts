@@ -195,6 +195,7 @@ export interface FinancialAccount {
 	last4: string | null;
 	currency: string;
 	currentBalanceCents: number | null;
+	apyBasisPoints: number | null;
 	costBasisCents: number | null;
 	netContributionsCents: number | null;
 	balanceHistory: AccountBalanceHistoryPoint[];

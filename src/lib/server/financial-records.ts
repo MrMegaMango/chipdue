@@ -177,6 +177,7 @@ const accountPayloadSchema = z.object({
 	last4: nullableTextSchema,
 	currency: z.string(),
 	currentBalanceCents: nullableCentsSchema,
+	apyBasisPoints: z.number().int().min(0).max(100_000).nullable().optional().default(null),
 	costBasisCents: nullableCentsSchema,
 	netContributionsCents: nullableCentsSchema.optional(),
 	balanceHistory: z
@@ -362,6 +363,7 @@ function rowToAccount(row: PrivateRecordRow, payload: AccountPayload): Financial
 		last4: payload.last4,
 		currency: payload.currency,
 		currentBalanceCents: payload.currentBalanceCents,
+		apyBasisPoints: payload.apyBasisPoints,
 		costBasisCents: payload.costBasisCents,
 		netContributionsCents: accountNetContributions(payload),
 		balanceHistory: accountBalanceHistory(payload, row),
@@ -594,6 +596,8 @@ export async function updateFinancialAccount(
 		last4: changes.last4 === undefined ? existing.last4 : changes.last4,
 		currency: changes.currency ?? existing.currency,
 		currentBalanceCents,
+		apyBasisPoints:
+			changes.apyBasisPoints === undefined ? existing.apyBasisPoints : changes.apyBasisPoints,
 		costBasisCents:
 			changes.costBasisCents === undefined ? existing.costBasisCents : changes.costBasisCents,
 		netContributionsCents: accountType === 'brokerage' ? netContributionsCents : null,
@@ -651,6 +655,7 @@ function connectedAccountPayload(
 		last4: snapshot.last4,
 		currency: snapshot.currency,
 		currentBalanceCents: snapshot.currentBalanceCents,
+		apyBasisPoints: existingPayload?.apyBasisPoints ?? null,
 		costBasisCents: snapshot.costBasisCents ?? existingPayload?.costBasisCents ?? null,
 		netContributionsCents,
 		balanceHistory: appendBalanceHistoryPoint(

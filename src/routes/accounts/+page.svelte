@@ -40,6 +40,7 @@
 		status: FinancialAccountStatus;
 		last4: string;
 		currentBalance: number | undefined;
+		apyPercent: number | undefined;
 		costBasis: number | undefined;
 		netContributions: number | undefined;
 		openedDate: string;
@@ -178,6 +179,7 @@
 			status: 'active',
 			last4: '',
 			currentBalance: undefined,
+			apyPercent: undefined,
 			costBasis: undefined,
 			netContributions: undefined,
 			openedDate: '',
@@ -282,8 +284,16 @@
 		return value === undefined || !Number.isFinite(value) ? null : Math.round(value * 100);
 	}
 
+	function basisPoints(value: number | undefined): number | null {
+		return value === undefined || !Number.isFinite(value) ? null : Math.round(value * 100);
+	}
+
 	function formatMoney(value: number | null): string {
 		return value === null ? 'Not entered' : money.format(value / 100);
+	}
+
+	function formatApy(value: number): string {
+		return `${(value / 100).toFixed(2)}%`;
 	}
 
 	function formatHoldingMoney(value: number, currency: string, maximumFractionDigits = 2): string {
@@ -531,6 +541,7 @@
 			last4: account.last4 ?? '',
 			currentBalance:
 				account.currentBalanceCents === null ? undefined : account.currentBalanceCents / 100,
+			apyPercent: account.apyBasisPoints === null ? undefined : account.apyBasisPoints / 100,
 			costBasis: account.costBasisCents === null ? undefined : account.costBasisCents / 100,
 			netContributions:
 				account.netContributionsCents === null ? undefined : account.netContributionsCents / 100,
@@ -560,6 +571,7 @@
 		const annotations = {
 			nickname: form.nickname.trim(),
 			ownerType: form.ownerType,
+			apyBasisPoints: basisPoints(form.apyPercent),
 			costBasisCents: form.accountType === 'brokerage' ? cents(form.costBasis) : null,
 			netContributionsCents: form.accountType === 'brokerage' ? cents(form.netContributions) : null,
 			openedDate: form.openedDate || null,
@@ -1093,6 +1105,12 @@
 																<dt>Account type</dt>
 																<dd>{typeLabel(account.accountType)}</dd>
 															</div>
+															{#if account.apyBasisPoints !== null}
+																<div class="apy-detail">
+																	<dt>APY</dt>
+																	<dd>{formatApy(account.apyBasisPoints)}</dd>
+																</div>
+															{/if}
 															<div>
 																<dt>Ownership</dt>
 																<dd>
@@ -1548,6 +1566,20 @@
 							disabled={dialogAccount?.source === 'connected'}
 						/>
 					</div>
+					<div class="finance-field">
+						<label for="account-apy">APY (%)</label>
+						<input
+							id="account-apy"
+							type="number"
+							min="0"
+							max="1000"
+							step="0.01"
+							inputmode="decimal"
+							bind:value={form.apyPercent}
+							placeholder="4.25"
+						/>
+						<small>Leave blank if this account does not earn interest.</small>
+					</div>
 					{#if form.accountType === 'brokerage'}
 						<div class="finance-field">
 							<label for="account-contributions">
@@ -1664,6 +1696,10 @@
 	}
 
 	dd.gain {
+		color: var(--positive);
+	}
+
+	.finance-details .apy-detail dd {
 		color: var(--positive);
 	}
 

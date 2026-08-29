@@ -47,6 +47,7 @@ describe.sequential('encrypted financial records', () => {
 				institution: 'Example Bank',
 				accountType: 'checking',
 				ownerType: 'business',
+				apyBasisPoints: 425,
 				currentBalanceCents: 125_000
 			})
 		);
@@ -61,7 +62,12 @@ describe.sequential('encrypted financial records', () => {
 
 		expect(await listCards()).toEqual([]);
 		expect(await listFinancialAccounts()).toMatchObject([
-			{ nickname: 'Operating account', ownerType: 'business', hidden: false }
+			{
+				nickname: 'Operating account',
+				ownerType: 'business',
+				apyBasisPoints: 425,
+				hidden: false
+			}
 		]);
 		expect(await listBonuses()).toMatchObject([
 			{ name: 'Business checking bonus', accountId: account.id }
@@ -253,7 +259,10 @@ describe.sequential('encrypted financial records', () => {
 		]);
 
 		vi.setSystemTime(new Date('2026-08-03T12:00:00.000Z'));
-		await updateFinancialAccount(account.id, { netContributionsCents: 200_000 });
+		await updateFinancialAccount(account.id, {
+			netContributionsCents: 200_000,
+			apyBasisPoints: 425
+		});
 		await replaceConnectedFinancialAccounts(
 			'plaid',
 			connectionId,
@@ -261,6 +270,7 @@ describe.sequential('encrypted financial records', () => {
 			'2026-08-04T12:00:00.000Z'
 		);
 		[account] = await listFinancialAccounts();
+		expect(account.apyBasisPoints).toBe(425);
 		expect(account.netContributionsCents).toBe(200_000);
 		expect(account.balanceHistory.slice(-2)).toEqual([
 			{
