@@ -970,12 +970,20 @@
 				</p>
 			</div>
 			<div class="account-toolbar-actions">
+				<button class="finance-button secondary" type="button" onclick={openAdd}>
+					<svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 4v12M4 10h12"></path></svg>
+					Add manually
+				</button>
 				{#if plaidConfigured}
 					<a
 						class="finance-button"
 						class:secondary={connections.length > 0}
 						href={resolve('/settings#plaid-connections')}
 					>
+						<svg aria-hidden="true" viewBox="0 0 20 20">
+							<path d="M3 8.5 10 5l7 3.5L10 12 3 8.5Z"></path>
+							<path d="M5 11v3.5M8.3 12.5V16m3.4-3.5V16m3.3-5v3.5M3 17h14"></path>
+						</svg>
 						{connections.length > 0 ? 'Manage connections' : 'Connect a provider'}
 					</a>
 				{/if}
@@ -986,12 +994,12 @@
 						onclick={syncConnectedAccounts}
 						disabled={syncing}
 					>
+						<svg class:spinning={syncing} aria-hidden="true" viewBox="0 0 20 20">
+							<path d="M16 7a6.5 6.5 0 1 0 .2 5.5M16 3v4h-4"></path>
+						</svg>
 						{syncing ? 'Syncing…' : 'Sync accounts'}
 					</button>
 				{/if}
-				<button class="finance-button secondary" type="button" onclick={openAdd}
-					>+ Add manually</button
-				>
 			</div>
 		</section>
 
@@ -2376,7 +2384,16 @@
 
 		.account-toolbar-actions {
 			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
 			width: 100%;
+		}
+
+		.account-toolbar-actions > :last-child:nth-child(3) {
+			grid-column: 1 / -1;
+		}
+
+		.account-toolbar-actions > :only-child {
+			grid-column: 1 / -1;
 		}
 
 		.finance-section-heading {

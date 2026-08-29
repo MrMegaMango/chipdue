@@ -2,6 +2,10 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const accountsSource = readFileSync(new URL('./accounts/+page.svelte', import.meta.url), 'utf8');
+const financePagesStylesSource = readFileSync(
+	new URL('../lib/finance-pages.css', import.meta.url),
+	'utf8'
+);
 const balanceHistoryChartSource = readFileSync(
 	new URL('../lib/components/BalanceHistoryChart.svelte', import.meta.url),
 	'utf8'
@@ -156,6 +160,13 @@ describe('financial workspace navigation', () => {
 	});
 
 	it('prioritizes automatic account updates over manual entry', () => {
+		const actionsSource = accountsSource.slice(
+			accountsSource.indexOf('class="account-toolbar-actions"'),
+			accountsSource.indexOf(
+				'</section>',
+				accountsSource.indexOf('class="account-toolbar-actions"')
+			)
+		);
 		expect(accountsSource).toContain('class:secondary={connections.length > 0}');
 		expect(accountsSource).toContain(
 			'class="finance-button"\n\t\t\t\t\t\ttype="button"\n\t\t\t\t\t\tonclick={syncConnectedAccounts}'
@@ -163,6 +174,27 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain(
 			'class="finance-button secondary" type="button" onclick={openAdd}'
 		);
+		expect(actionsSource.indexOf('Add manually')).toBeLessThan(
+			actionsSource.indexOf('Manage connections')
+		);
+		expect(actionsSource.indexOf('Manage connections')).toBeLessThan(
+			actionsSource.indexOf('Sync accounts')
+		);
+		expect(actionsSource).toContain('M10 4v12M4 10h12');
+		expect(actionsSource).toContain('M16 7a6.5 6.5 0 1 0 .2 5.5M16 3v4h-4');
+	});
+
+	it('matches the cards toolbar scale and button geometry', () => {
+		for (const marker of [
+			'font-size: clamp(1.7rem, 3vw, 2.2rem)',
+			'padding: 1.65rem 0 5rem',
+			'min-height: 43px',
+			'border-radius: 7px',
+			'font-size: 0.82rem',
+			'text-decoration: none'
+		]) {
+			expect(financePagesStylesSource).toContain(marker);
+		}
 	});
 
 	it('shows provider activity and explains the open-order limitation', () => {
