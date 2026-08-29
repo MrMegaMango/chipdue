@@ -67,6 +67,7 @@ export interface ConnectedFinancialAccountSnapshot {
 	last4: string | null;
 	currency: string;
 	currentBalanceCents: number | null;
+	apyBasisPoints?: number | null;
 	costBasisCents: number | null;
 	holdings: InvestmentHolding[] | null;
 	transactionHistory?: StoredTransactionHistory;
@@ -178,6 +179,8 @@ const accountPayloadSchema = z.object({
 	currency: z.string(),
 	currentBalanceCents: nullableCentsSchema,
 	apyBasisPoints: z.number().int().min(0).max(100_000).nullable().optional().default(null),
+	apySource: z.enum(['provider', 'manual']).nullable().optional().default(null),
+	apyUpdatedAt: nullableTextSchema.optional().default(null),
 	costBasisCents: nullableCentsSchema,
 	netContributionsCents: nullableCentsSchema.optional(),
 	balanceHistory: z
@@ -218,6 +221,19 @@ const bonusPayloadSchema = z.object({
 type AccountPayload = z.infer<typeof accountPayloadSchema>;
 type BonusPayload = z.infer<typeof bonusPayloadSchema>;
 type PrivateRecordPayload = AccountPayload | BonusPayload;
+
+function accountApySource(payload: AccountPayload): FinancialAccount['apySource'] {
+	if (payload.apyBasisPoints === null) return null;
+	return payload.apySource ?? 'manual';
+}
+
+function accountApyUpdatedAt(payload: AccountPayload, row: PrivateRecordRow): string | null {
+	if (payload.apyBasisPoints === null) return null;
+	return (
+		payload.apyUpdatedAt ??
+		(accountApySource(payload) === 'provider' ? row.last_synced_at : row.updated_at)
+	);
+}
 
 function appendBalanceHistoryPoint(
 	history: AccountBalanceHistoryPoint[],
@@ -363,6 +379,8 @@ function rowToAccount(row: PrivateRecordRow, payload: AccountPayload): Financial
 		currency: payload.currency,
 		currentBalanceCents: payload.currentBalanceCents,
 		apyBasisPoints: payload.apyBasisPoints,
+		apySource: accountApySource(payload),
+		apyUpdatedAt: accountApyUpdatedAt(payload, row),
 		costBasisCents: payload.costBasisCents,
 		netContributionsCents: accountNetContributions(payload),
 		balanceHistory: accountBalanceHistory(payload, row),
@@ -526,6 +544,8 @@ export async function createFinancialAccount(
 			...input,
 			institutionLogoBase64: null,
 			hidden: false,
+			apySource: input.apyBasisPoints === null ? null : 'manual',
+			apyUpdatedAt: input.apyBasisPoints === null ? null : now,
 			balanceHistory: appendBalanceHistoryPoint(
 				[],
 				input.currentBalanceCents,
@@ -582,6 +602,8 @@ export async function updateFinancialAccount(
 				changes.netContributionsCents !== undefined &&
 				changes.netContributionsCents !== existing.netContributionsCents));
 	const now = new Date().toISOString();
+	const apyBasisPoints =
+		changes.apyBasisPoints === undefined ? existing.apyBasisPoints : changes.apyBasisPoints;
 	const payload: AccountPayload = {
 		recordType: 'account',
 		nickname: changes.nickname ?? existing.nickname,
@@ -594,8 +616,19 @@ export async function updateFinancialAccount(
 		last4: changes.last4 === undefined ? existing.last4 : changes.last4,
 		currency: changes.currency ?? existing.currency,
 		currentBalanceCents,
-		apyBasisPoints:
-			changes.apyBasisPoints === undefined ? existing.apyBasisPoints : changes.apyBasisPoints,
+		apyBasisPoints,
+		apySource:
+			changes.apyBasisPoints === undefined
+				? accountApySource(existingPayload)
+				: apyBasisPoints === null
+					? null
+					: 'manual',
+		apyUpdatedAt:
+			changes.apyBasisPoints === undefined
+				? accountApyUpdatedAt(existingPayload, row)
+				: apyBasisPoints === null
+					? null
+					: now,
 		costBasisCents:
 			changes.costBasisCents === undefined ? existing.costBasisCents : changes.costBasisCents,
 		netContributionsCents: accountType === 'brokerage' ? netContributionsCents : null,
@@ -636,6 +669,12 @@ function connectedAccountPayload(
 	const existingPayload = existing?.payload;
 	const history = existingPayload ? accountBalanceHistory(existingPayload, existing.row) : [];
 	const netContributionsCents = existingPayload?.netContributionsCents ?? null;
+	const providerApyBasisPoints = snapshot.apyBasisPoints ?? null;
+	const manualApyBasisPoints =
+		existingPayload && accountApySource(existingPayload) === 'manual'
+			? existingPayload.apyBasisPoints
+			: null;
+	const apyBasisPoints = providerApyBasisPoints ?? manualApyBasisPoints;
 	return {
 		...tenantPayloadFields(),
 		recordType: 'account',
@@ -650,7 +689,15 @@ function connectedAccountPayload(
 		last4: snapshot.last4,
 		currency: snapshot.currency,
 		currentBalanceCents: snapshot.currentBalanceCents,
-		apyBasisPoints: existingPayload?.apyBasisPoints ?? null,
+		apyBasisPoints,
+		apySource:
+			providerApyBasisPoints !== null ? 'provider' : apyBasisPoints !== null ? 'manual' : null,
+		apyUpdatedAt:
+			providerApyBasisPoints !== null
+				? syncedAt
+				: existingPayload && manualApyBasisPoints !== null
+					? accountApyUpdatedAt(existingPayload, existing.row)
+					: null,
 		costBasisCents: snapshot.costBasisCents ?? existingPayload?.costBasisCents ?? null,
 		netContributionsCents,
 		balanceHistory: appendBalanceHistoryPoint(

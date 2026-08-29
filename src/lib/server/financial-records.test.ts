@@ -66,6 +66,8 @@ describe.sequential('encrypted financial records', () => {
 				nickname: 'Operating account',
 				ownerType: 'business',
 				apyBasisPoints: 425,
+				apySource: 'manual',
+				apyUpdatedAt: expect.any(String),
 				hidden: false
 			}
 		]);
@@ -301,7 +303,11 @@ describe.sequential('encrypted financial records', () => {
 			'2026-08-04T12:00:00.000Z'
 		);
 		[account] = await listFinancialAccounts();
-		expect(account.apyBasisPoints).toBe(425);
+		expect(account).toMatchObject({
+			apyBasisPoints: 425,
+			apySource: 'manual',
+			apyUpdatedAt: '2026-08-03T12:00:00.000Z'
+		});
 		expect(account.netContributionsCents).toBe(200_000);
 		expect(account.balanceHistory.slice(-2)).toEqual([
 			{
@@ -317,5 +323,31 @@ describe.sequential('encrypted financial records', () => {
 				source: 'observed'
 			}
 		]);
+
+		await replaceConnectedFinancialAccounts(
+			'plaid',
+			connectionId,
+			[{ ...snapshot, currentBalanceCents: 280_000, apyBasisPoints: 510 }],
+			'2026-08-05T12:00:00.000Z'
+		);
+		[account] = await listFinancialAccounts();
+		expect(account).toMatchObject({
+			apyBasisPoints: 510,
+			apySource: 'provider',
+			apyUpdatedAt: '2026-08-05T12:00:00.000Z'
+		});
+
+		await replaceConnectedFinancialAccounts(
+			'plaid',
+			connectionId,
+			[{ ...snapshot, currentBalanceCents: 280_000, apyBasisPoints: null }],
+			'2026-08-06T12:00:00.000Z'
+		);
+		[account] = await listFinancialAccounts();
+		expect(account).toMatchObject({
+			apyBasisPoints: null,
+			apySource: null,
+			apyUpdatedAt: null
+		});
 	});
 });

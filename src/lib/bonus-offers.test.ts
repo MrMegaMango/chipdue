@@ -24,6 +24,8 @@ const account: FinancialAccount = {
 	currency: 'USD',
 	currentBalanceCents: 1_250_000,
 	apyBasisPoints: null,
+	apySource: null,
+	apyUpdatedAt: null,
 	costBasisCents: null,
 	netContributionsCents: null,
 	balanceHistory: [],

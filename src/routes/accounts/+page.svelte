@@ -308,6 +308,17 @@
 		return `${(value / 100).toFixed(2)}%`;
 	}
 
+	function formatApyFreshness(account: FinancialAccount): string {
+		const sourceLabel =
+			account.apySource === 'provider'
+				? `Institution rate via ${financialProviderName(account.connectionProvider)}`
+				: 'Manual rate';
+		if (!account.apyUpdatedAt) return sourceLabel;
+		const parsed = new Date(account.apyUpdatedAt);
+		if (!Number.isFinite(parsed.getTime())) return sourceLabel;
+		return `${sourceLabel} · ${account.apySource === 'provider' ? 'checked' : 'updated'} ${dateTime.format(parsed)}`;
+	}
+
 	function formatHoldingMoney(value: number, currency: string, maximumFractionDigits = 2): string {
 		return new Intl.NumberFormat('en-US', {
 			style: 'currency',
@@ -580,10 +591,17 @@
 		const editingAccount = editingId
 			? accounts.find((account) => account.id === editingId)
 			: undefined;
+		const enteredApyBasisPoints = basisPoints(form.apyPercent);
+		const apyAnnotation =
+			!editingAccount ||
+			(editingAccount.apySource !== 'provider' &&
+				enteredApyBasisPoints !== editingAccount.apyBasisPoints)
+				? { apyBasisPoints: enteredApyBasisPoints }
+				: {};
 		const annotations = {
 			nickname: form.nickname.trim(),
 			ownerType: form.ownerType,
-			apyBasisPoints: basisPoints(form.apyPercent),
+			...apyAnnotation,
 			costBasisCents: form.accountType === 'brokerage' ? cents(form.costBasis) : null,
 			netContributionsCents: form.accountType === 'brokerage' ? cents(form.netContributions) : null,
 			openedDate: form.openedDate || null,
@@ -1187,7 +1205,10 @@
 															{#if account.apyBasisPoints !== null}
 																<div class="apy-detail">
 																	<dt>APY</dt>
-																	<dd>{formatApy(account.apyBasisPoints)}</dd>
+																	<dd>
+																		<strong>{formatApy(account.apyBasisPoints)}</strong>
+																		<small>{formatApyFreshness(account)}</small>
+																	</dd>
 																</div>
 															{/if}
 															{#if account.accountType !== 'brokerage'}
@@ -1660,8 +1681,15 @@
 							inputmode="decimal"
 							bind:value={form.apyPercent}
 							placeholder="4.25"
+							disabled={dialogAccount?.apySource === 'provider'}
 						/>
-						<small>Leave blank if this account does not earn interest.</small>
+						<small>
+							{dialogAccount?.apySource === 'provider'
+								? 'Updated automatically from the institution during each Plaid sync.'
+								: dialogAccount?.source === 'connected'
+									? 'Plaid is not reporting an APY for this account. Enter a manual fallback if needed.'
+									: 'Leave blank if this account does not earn interest.'}
+						</small>
 					</div>
 					{#if form.accountType === 'brokerage'}
 						<div class="finance-field">
@@ -1783,7 +1811,22 @@
 	}
 
 	.finance-details .apy-detail dd {
+		overflow: visible;
 		color: var(--positive);
+		white-space: normal;
+	}
+
+	.finance-details .apy-detail strong,
+	.finance-details .apy-detail small {
+		display: block;
+	}
+
+	.finance-details .apy-detail small {
+		margin-top: 0.15rem;
+		color: var(--faint);
+		font-size: 0.54rem;
+		font-weight: 560;
+		line-height: 1.35;
 	}
 
 	.account-group + .account-group {

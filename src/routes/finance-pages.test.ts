@@ -155,8 +155,14 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain('{#if account.apyBasisPoints !== null}');
 		expect(accountsSource).toContain('<dt>APY</dt>');
 		expect(accountsSource).toContain('formatApy(account.apyBasisPoints)');
+		expect(accountsSource).toContain('Institution rate via');
+		expect(accountsSource).toContain('formatApyFreshness(account)');
+		expect(accountsSource).toContain("disabled={dialogAccount?.apySource === 'provider'}");
+		expect(accountsSource).toContain(
+			'Updated automatically from the institution during each Plaid sync.'
+		);
 		expect(accountsSource).toContain('<label for="account-apy">APY (%)</label>');
-		expect(accountsSource).toContain('Leave blank if this account does not earn interest.');
+		expect(accountsSource).toContain('Enter a manual fallback if needed.');
 	});
 
 	it('prioritizes automatic account updates over manual entry', () => {

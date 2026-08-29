@@ -138,7 +138,11 @@ function liabilityResponse() {
 	};
 }
 
-function mixedAccountsResponse(checkingBalance = 1_250, brokerageBalance = 8_400) {
+function mixedAccountsResponse(
+	checkingBalance = 1_250,
+	brokerageBalance = 8_400,
+	savingsApy: number | null = 4.25
+) {
 	return {
 		data: {
 			accounts: [
@@ -149,6 +153,7 @@ function mixedAccountsResponse(checkingBalance = 1_250, brokerageBalance = 8_400
 					mask: '1212',
 					type: 'depository',
 					subtype: 'checking',
+					apy: null,
 					balances: {
 						current: checkingBalance,
 						available: checkingBalance - 50,
@@ -162,6 +167,7 @@ function mixedAccountsResponse(checkingBalance = 1_250, brokerageBalance = 8_400
 					mask: '3434',
 					type: 'depository',
 					subtype: 'savings',
+					apy: savingsApy,
 					balances: {
 						current: 5_000,
 						available: 5_000,
@@ -175,6 +181,7 @@ function mixedAccountsResponse(checkingBalance = 1_250, brokerageBalance = 8_400
 					mask: '5656',
 					type: 'investment',
 					subtype: 'brokerage',
+					apy: null,
 					balances: {
 						current: brokerageBalance,
 						available: 420,
@@ -672,6 +679,13 @@ describe.sequential('Plaid transaction history', () => {
 				}),
 				expect.objectContaining({
 					source: 'connected',
+					accountType: 'savings',
+					apyBasisPoints: 425,
+					apySource: 'provider',
+					apyUpdatedAt: firstSync.syncedAt
+				}),
+				expect.objectContaining({
+					source: 'connected',
 					accountType: 'brokerage',
 					currentBalanceCents: 840_000,
 					costBasisCents: 700_000,
@@ -708,7 +722,7 @@ describe.sequential('Plaid transaction history', () => {
 			updateFinancialAccount(checking!.id, { currentBalanceCents: 999_999 })
 		).rejects.toMatchObject({ code: 'CONNECTED_ACCOUNT_READ_ONLY', status: 409 });
 
-		plaidMocks.accountsGet.mockResolvedValueOnce(mixedAccountsResponse(1_575, 8_900));
+		plaidMocks.accountsGet.mockResolvedValueOnce(mixedAccountsResponse(1_575, 8_900, 4.1));
 		plaidMocks.investmentsHoldingsGet.mockResolvedValueOnce({
 			data: {
 				holdings: [
@@ -733,7 +747,7 @@ describe.sequential('Plaid transaction history', () => {
 				]
 			}
 		});
-		await syncPlaidItem(itemId);
+		const secondSync = await syncPlaidItem(itemId);
 		const refreshed = await listFinancialAccounts();
 		expect(refreshed.find((account) => account.id === checking!.id)).toMatchObject({
 			nickname: 'Operating cash',
@@ -747,6 +761,11 @@ describe.sequential('Plaid transaction history', () => {
 			currentBalanceCents: 890_000,
 			costBasisCents: 725_000,
 			holdings: [expect.objectContaining({ tickerSymbol: 'EXMPL', priceMicros: 181_250_000 })]
+		});
+		expect(refreshed.find((account) => account.accountType === 'savings')).toMatchObject({
+			apyBasisPoints: 410,
+			apySource: 'provider',
+			apyUpdatedAt: secondSync.syncedAt
 		});
 		expect(await listCards()).toHaveLength(1);
 	});

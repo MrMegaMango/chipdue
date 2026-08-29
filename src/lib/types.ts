@@ -124,6 +124,7 @@ export type FinancialAccountType =
 export type FinancialAccountOwner = 'personal' | 'business';
 export type FinancialAccountStatus = 'planned' | 'active' | 'closed';
 export type FinancialAccountSource = FinancialRecordSource;
+export type FinancialAccountApySource = 'provider' | 'manual';
 
 export interface InvestmentHolding {
 	name: string;
@@ -196,6 +197,8 @@ export interface FinancialAccount {
 	currency: string;
 	currentBalanceCents: number | null;
 	apyBasisPoints: number | null;
+	apySource: FinancialAccountApySource | null;
+	apyUpdatedAt: string | null;
 	costBasisCents: number | null;
 	netContributionsCents: number | null;
 	balanceHistory: AccountBalanceHistoryPoint[];

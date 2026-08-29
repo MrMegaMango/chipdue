@@ -321,6 +321,12 @@ function amountToCents(value: number | null): number | null {
 	return Number.isSafeInteger(cents) && Math.abs(cents) <= 100_000_000_000 ? cents : null;
 }
 
+function apyToBasisPoints(value: number | null | undefined): number | null {
+	if (value === null || value === undefined || !Number.isFinite(value) || value <= 0) return null;
+	const basisPoints = Math.round(value * 100);
+	return Number.isSafeInteger(basisPoints) && basisPoints <= 100_000 ? basisPoints : null;
+}
+
 function priceToMicros(value: number): number | null {
 	if (!Number.isFinite(value)) return null;
 	const micros = Math.round(value * 1_000_000);
@@ -825,6 +831,7 @@ export async function syncPlaidItem(
 					account.balances.iso_currency_code ?? account.balances.unofficial_currency_code
 				),
 				currentBalanceCents: amountToCents(account.balances.current),
+				apyBasisPoints: apyToBasisPoints(account.apy),
 				costBasisCents:
 					accountType === 'brokerage'
 						? (investmentCostBasis.get(account.account_id) ?? null)
