@@ -181,7 +181,7 @@ describe('versioned business bonus offer catalog', () => {
 		});
 	});
 
-	it('calculates earned value automatically from lifecycle and verified tracker evidence', () => {
+	it('counts earned value only after a posted bonus reward reaches the connected account', () => {
 		const capitalOneAccount = {
 			...account,
 			institution: 'Capital One',
@@ -203,21 +203,43 @@ describe('versioned business bonus offer catalog', () => {
 				date: '2026-08-01'
 			})
 		);
-		const tracker = buildBonusTracker(capitalOneBonus, capitalOneAccount, transactions);
+		const qualifiedTracker = buildBonusTracker(capitalOneBonus, capitalOneAccount, transactions);
 
-		expect(automaticEarnedValueCents(capitalOneBonus, tracker, new Date(2026, 7, 28))).toBe(0);
-		expect(automaticEarnedValueCents(capitalOneBonus, tracker, new Date(2026, 7, 29))).toBe(50_000);
-		expect(automaticEarnedValueCents({ ...capitalOneBonus, status: 'qualified' }, null)).toBe(
-			50_000
-		);
-		expect(automaticEarnedValueCents({ ...capitalOneBonus, status: 'active' }, null)).toBe(0);
+		expect(qualifiedTracker).toMatchObject({
+			currentTier: { rewardCents: 50_000 },
+			likelyQualifyingTransactions: expect.arrayContaining([expect.any(Object)]),
+			postedRewardCents: null
+		});
+		expect(automaticEarnedValueCents(capitalOneBonus, qualifiedTracker)).toBe(0);
 		expect(
-			automaticEarnedValueCents(
-				{ ...capitalOneBonus, status: 'abandoned' },
-				tracker,
-				new Date(2026, 7, 29)
-			)
+			automaticEarnedValueCents({ ...capitalOneBonus, status: 'qualified' }, qualifiedTracker)
 		).toBe(0);
+
+		const paidTracker = buildBonusTracker(capitalOneBonus, capitalOneAccount, [
+			...transactions,
+			transaction({
+				name: 'SBOFFER500 promotional bonus',
+				merchantName: null,
+				amountCents: -50_000,
+				date: '2026-11-10'
+			})
+		]);
+		expect(paidTracker).toMatchObject({ postedRewardCents: 50_000 });
+		expect(automaticEarnedValueCents(capitalOneBonus, paidTracker)).toBe(50_000);
+
+		const unrelatedCreditTracker = buildBonusTracker(capitalOneBonus, capitalOneAccount, [
+			...transactions,
+			transaction({
+				name: 'External ACH credit',
+				merchantName: null,
+				amountCents: -50_000,
+				date: '2026-11-10'
+			})
+		]);
+		expect(automaticEarnedValueCents(capitalOneBonus, unrelatedCreditTracker)).toBe(0);
+
+		expect(automaticEarnedValueCents({ ...capitalOneBonus, status: 'active' }, null)).toBe(0);
+		expect(automaticEarnedValueCents({ ...capitalOneBonus, status: 'paid' }, null)).toBe(50_000);
 	});
 });
 

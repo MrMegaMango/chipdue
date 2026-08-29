@@ -57,33 +57,15 @@ export interface BonusTracker {
 	latestPayoutDate: string | null;
 	safeToCloseDate: string | null;
 	likelyQualifyingTransactions: FinancialAccountTransaction[];
+	postedRewardCents: number | null;
 }
-
-const EARNED_BONUS_STATUSES = new Set<AccountBonus['status']>(['qualified', 'pending', 'paid']);
 
 export function automaticEarnedValueCents(
 	bonus: AccountBonus,
-	tracker: BonusTracker | null,
-	today = new Date()
+	tracker: BonusTracker | null
 ): number {
-	if (bonus.paidDate || EARNED_BONUS_STATUSES.has(bonus.status)) {
-		return bonus.rewardCents ?? 0;
-	}
-	if (
-		bonus.status !== 'active' ||
-		!tracker ||
-		tracker.account.source !== 'connected' ||
-		!tracker.currentTier ||
-		!tracker.qualificationDeadline ||
-		tracker.likelyQualifyingTransactions.length < tracker.offer.transactionTarget
-	) {
-		return 0;
-	}
-	const todayKey = [today.getFullYear(), today.getMonth() + 1, today.getDate()]
-		.map((part, index) => (index === 0 ? String(part) : String(part).padStart(2, '0')))
-		.join('-');
-	if (todayKey < tracker.qualificationDeadline) return 0;
-	return Math.min(tracker.currentTier.rewardCents, bonus.rewardCents ?? tracker.offer.rewardCents);
+	if (tracker?.account.source === 'connected') return tracker.postedRewardCents ?? 0;
+	return bonus.paidDate || bonus.status === 'paid' ? (bonus.rewardCents ?? 0) : 0;
 }
 
 const WELLS_FARGO_SOURCE = 'https://accountoffers.wellsfargo.com/business-checking-bonus/';
@@ -351,6 +333,32 @@ function normalizedTransactionText(transaction: FinancialAccountTransaction): st
 		.trim();
 }
 
+function postedBonusRewardCents(
+	bonus: AccountBonus,
+	offer: BonusOfferTemplate,
+	transactions: FinancialAccountTransaction[]
+): number | null {
+	const tierRewards = new Set(offer.tiers.map((tier) => tier.rewardCents));
+	const promoCode = offer.promoCode?.toUpperCase() ?? '';
+	const matches = transactions
+		.filter(
+			(transaction) =>
+				!transaction.pending &&
+				transaction.amountCents < 0 &&
+				transaction.date >= (bonus.openedDate ?? '') &&
+				tierRewards.has(Math.abs(transaction.amountCents))
+		)
+		.filter((transaction) => {
+			const text = normalizedTransactionText(transaction);
+			return (
+				/BONUS|PROMO(?:TION|TIONAL)?|INCENTIVE|REWARD/.test(text) ||
+				Boolean(promoCode && text.includes(promoCode))
+			);
+		})
+		.map((transaction) => Math.abs(transaction.amountCents));
+	return matches.length > 0 ? Math.max(...matches) : null;
+}
+
 function isInQualificationWindow(
 	transaction: FinancialAccountTransaction,
 	openedDate: string,
@@ -527,6 +535,7 @@ export function buildBonusTracker(
 		safeToCloseDate: bonus.safeToCloseDate ?? draft.safeToCloseDate,
 		likelyQualifyingTransactions: transactions.filter((transaction) =>
 			classifier(transaction, bonus.openedDate!, qualificationDeadline)
-		)
+		),
+		postedRewardCents: postedBonusRewardCents(bonus, offer, transactions)
 	};
 }
