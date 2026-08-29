@@ -54,6 +54,7 @@
 	font-weight: 700;
 	line-height: 1;
 	text-decoration: none;
+	white-space: nowrap;
 	background: var(--accent);
 	box-shadow: 3px 3px 0 #1f2f86;
 	cursor: pointer;

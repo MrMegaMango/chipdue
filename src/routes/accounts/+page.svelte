@@ -2310,6 +2310,7 @@
 	}
 
 	.account-toolbar-actions {
+		flex: 0 0 auto;
 		justify-content: flex-end;
 		flex-wrap: nowrap;
 	}

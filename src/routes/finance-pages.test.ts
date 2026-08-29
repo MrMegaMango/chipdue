@@ -193,7 +193,8 @@ describe('financial workspace navigation', () => {
 			'min-height: 43px',
 			'border-radius: 7px',
 			'font-size: 0.82rem',
-			'text-decoration: none'
+			'text-decoration: none',
+			'white-space: nowrap'
 		]) {
 			expect(financePagesStylesSource).toContain(marker);
 		}
