@@ -13,3 +13,12 @@ keywords = ["access-", "link-", "public-"]
 id = "private-home-path"
 description = "Absolute user home path"
 regex = '''(?:/home/[A-Za-z0-9._-]+/|[A-Za-z]:[\\/]Users[\\/][^\\/\r\n]+[\\/])'''
+
+# Default Gitleaks mistakes two descriptive TypeScript identifiers for Plaid secret keys.
+# This exception covers only the reviewed commit containing those identifiers.
+[[rules]]
+id = "plaid-secret-key"
+
+[[rules.allowlists]]
+description = "Reviewed TypeScript identifier false positives"
+commits = ["1fdafbafd3a4a28cc3e95788c141db9e4fee4816"]
