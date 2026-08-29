@@ -1857,7 +1857,11 @@
 			plaidSetupEditing = false;
 			await Promise.all([refreshPlaidStatus(true, epoch), refreshCards(true, epoch)]);
 			if (isPrivateEpochCurrent(epoch)) {
-				showNotice('Your Plaid developer account is ready. You can connect an institution now.');
+				showNotice(
+					plaid.connectedItems > 0
+						? 'Future Plaid connections will use the new developer account. Existing connections keep their original account.'
+						: 'Your Plaid developer account is ready. You can connect an institution now.'
+				);
 			}
 		} catch (error) {
 			if (isPrivateEpochCurrent(epoch)) {
@@ -3156,7 +3160,7 @@
 										<p class="section-kicker">Your own connection allowance</p>
 										<h3 id="plaid-setup-title">
 											{plaid.configured
-												? 'Replace your Plaid credentials'
+												? 'Change your Plaid credentials'
 												: 'Connect your Plaid developer account'}
 										</h3>
 									</div>
@@ -3164,7 +3168,7 @@
 								</div>
 								<p>
 									{plaid.configured
-										? 'Re-enter the same client ID to rotate its Production secret. To change Plaid teams, disconnect your institutions first.'
+										? 'Future institutions use the newly saved Plaid team. Existing institutions stay securely attached to the team that created them.'
 										: 'Create a free personal Plaid team, enable its Trial plan, then add its Production credentials here. Its ten-Item trial allowance belongs only to you.'}
 								</p>
 								<a
@@ -3251,7 +3255,7 @@
 									onclick={() => {
 										plaidSetupEditing = true;
 										void tick().then(() => document.getElementById('plaid-client-id')?.focus());
-									}}>Replace</button
+									}}>Change</button
 								>
 							</div>
 						{/if}

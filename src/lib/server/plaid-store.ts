@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { FinancialConnection } from '$lib/types';
 import { cloudQuery } from './cloud-database';
-import { decryptSecret, encryptSecret, privateUuid } from './crypto';
+import { decryptJson, decryptSecret, encryptJson, encryptSecret, privateUuid } from './crypto';
 import { getDatabase } from './database';
 import { AppError } from './errors';
+import type { PlaidClientConfiguration } from './plaid-config';
 import { getRuntimeMode } from './runtime';
 import {
 	currentTenantId,
@@ -24,6 +25,18 @@ interface PlaidItemRow extends Record<string, unknown> {
 	created_at: string;
 }
 
+interface PlaidItemIdentityRow extends Record<string, unknown> {
+	id: string;
+	item_ref: string;
+}
+
+interface StoredPlaidItemConfiguration {
+	version: 1;
+	clientId: string;
+	secret: string;
+	environment: 'sandbox' | 'production';
+}
+
 interface PublicPlaidItemRow extends Record<string, unknown> {
 	id: string;
 	item_ref: string;
@@ -41,9 +54,142 @@ export interface PrivatePlaidItem {
 	status: 'healthy' | 'needs_update';
 	lastSyncedAt: string | null;
 	createdAt: string;
+	configuration: PlaidClientConfiguration | null;
 }
 
-function decodeItem(row: PlaidItemRow): PrivatePlaidItem {
+const ITEM_CONFIGURATION_KEY_PREFIX = 'plaid_item_config_v1:';
+
+function itemConfigurationKey(tenantId: string, itemId: string): string {
+	return `${ITEM_CONFIGURATION_KEY_PREFIX}${tenantId}:${itemId}`;
+}
+
+function itemConfigurationContext(tenantId: string, itemId: string): string {
+	return `plaid-item-config:${tenantId}:${itemId}`;
+}
+
+function validCredential(value: unknown): value is string {
+	return typeof value === 'string' && value.length >= 8 && value.length <= 256;
+}
+
+function parseItemConfiguration(
+	value: string,
+	tenantId: string,
+	itemId: string
+): PlaidClientConfiguration {
+	const configuration = decryptJson<Partial<StoredPlaidItemConfiguration>>(
+		value,
+		itemConfigurationContext(tenantId, itemId)
+	);
+	if (
+		configuration?.version !== 1 ||
+		!validCredential(configuration.clientId) ||
+		!validCredential(configuration.secret) ||
+		!['sandbox', 'production'].includes(configuration.environment ?? '')
+	) {
+		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
+	}
+	return {
+		clientId: configuration.clientId,
+		secret: configuration.secret,
+		environment: configuration.environment as 'sandbox' | 'production'
+	};
+}
+
+async function readItemConfiguration(
+	itemId: string,
+	tenantId: string
+): Promise<PlaidClientConfiguration | null> {
+	const key = itemConfigurationKey(tenantId, itemId);
+	const row =
+		getRuntimeMode() === 'cloud'
+			? (
+					await cloudQuery<{ value: string }>(
+						`SELECT value FROM public.carddue_metadata WHERE key = $1`,
+						[key]
+					)
+				)[0]
+			: (getDatabase().prepare(`SELECT value FROM metadata WHERE key = ?`).get(key) as
+					{ value: string } | undefined);
+	return row ? parseItemConfiguration(row.value, tenantId, itemId) : null;
+}
+
+async function saveItemConfiguration(
+	itemId: string,
+	tenantId: string,
+	configuration: PlaidClientConfiguration,
+	overwrite = true
+): Promise<void> {
+	const key = itemConfigurationKey(tenantId, itemId);
+	const encrypted = encryptJson(
+		{
+			version: 1,
+			clientId: configuration.clientId,
+			secret: configuration.secret,
+			environment: configuration.environment
+		},
+		itemConfigurationContext(tenantId, itemId)
+	);
+	if (getRuntimeMode() === 'cloud') {
+		await cloudQuery(
+			overwrite
+				? `INSERT INTO public.carddue_metadata AS current_config (key, value)
+				   VALUES ($1, $2)
+				   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`
+				: `INSERT INTO public.carddue_metadata (key, value) VALUES ($1, $2)
+				   ON CONFLICT (key) DO NOTHING`,
+			[key, encrypted]
+		);
+		return;
+	}
+	getDatabase()
+		.prepare(
+			overwrite
+				? `INSERT INTO metadata (key, value) VALUES (?, ?)
+				   ON CONFLICT (key) DO UPDATE SET value = excluded.value`
+				: `INSERT OR IGNORE INTO metadata (key, value) VALUES (?, ?)`
+		)
+		.run(key, encrypted);
+}
+
+async function listItemIdentityRows(): Promise<PlaidItemIdentityRow[]> {
+	return getRuntimeMode() === 'cloud'
+		? await cloudQuery<PlaidItemIdentityRow>(
+				`SELECT id::text, item_ref FROM public.carddue_plaid_items
+				 WHERE tenant_ref = $1 ORDER BY created_at`,
+				[tenantReference()]
+			)
+		: (getDatabase()
+				.prepare(`SELECT id, item_ref FROM plaid_items ORDER BY created_at`)
+				.all() as PlaidItemIdentityRow[]);
+}
+
+export async function preparePlaidItemsForConfigurationChange(
+	current: PlaidClientConfiguration,
+	candidate: PlaidClientConfiguration
+): Promise<void> {
+	const tenantId = currentTenantId();
+	const sameClient = current.clientId === candidate.clientId;
+	const rows = (await listItemIdentityRows()).filter((row) =>
+		plaidItemBelongsToCurrentTenant(row.item_ref)
+	);
+	await Promise.all(
+		rows.map(async (row) => {
+			const stored = await readItemConfiguration(row.id, tenantId);
+			if (!stored) {
+				await saveItemConfiguration(row.id, tenantId, sameClient ? candidate : current, false);
+				return;
+			}
+			if (stored.clientId === candidate.clientId) {
+				await saveItemConfiguration(row.id, tenantId, candidate);
+			}
+		})
+	);
+}
+
+function decodeItem(
+	row: PlaidItemRow,
+	configuration: PlaidClientConfiguration | null
+): PrivatePlaidItem {
 	return {
 		id: row.id,
 		itemId: decryptSecret(row.item_id_enc, `plaid-item-id:${row.id}`),
@@ -53,7 +199,8 @@ function decodeItem(row: PlaidItemRow): PrivatePlaidItem {
 			: null,
 		status: row.status,
 		lastSyncedAt: row.last_synced_at,
-		createdAt: row.created_at
+		createdAt: row.created_at,
+		configuration
 	};
 }
 
@@ -91,6 +238,7 @@ export async function listPlaidConnections(): Promise<FinancialConnection[]> {
 }
 
 export async function getPrivatePlaidItem(id: string): Promise<PrivatePlaidItem> {
+	const tenantId = currentTenantId();
 	const row =
 		getRuntimeMode() === 'cloud'
 			? (
@@ -111,13 +259,14 @@ export async function getPrivatePlaidItem(id: string): Promise<PrivatePlaidItem>
 	if (!row || !plaidItemBelongsToCurrentTenant(row.item_ref)) {
 		throw new AppError('PLAID_ITEM_NOT_FOUND', 'Connection not found.', 404);
 	}
-	return decodeItem(row);
+	return decodeItem(row, await readItemConfiguration(id, tenantId));
 }
 
 export async function savePlaidItem(
 	itemId: string,
 	accessToken: string,
-	institutionName: string | null
+	institutionName: string | null,
+	configuration?: PlaidClientConfiguration
 ): Promise<string> {
 	const tenantId = currentTenantId();
 	const reference = plaidItemReference(itemId, tenantId);
@@ -186,6 +335,7 @@ export async function savePlaidItem(
 			)
 			.run(id, reference, itemIdEncrypted, accessTokenEncrypted, institutionEncrypted, now, now);
 	}
+	if (configuration) await saveItemConfiguration(id, tenantId, configuration);
 	return id;
 }
 
@@ -223,6 +373,7 @@ export async function markPlaidItemNeedsUpdate(id: string): Promise<void> {
 }
 
 export async function removeLocalPlaidItem(id: string): Promise<void> {
+	const tenantId = currentTenantId();
 	if (getRuntimeMode() === 'cloud') {
 		const rows = await cloudQuery<{ id: string }>(
 			`DELETE FROM public.carddue_plaid_items
@@ -230,11 +381,17 @@ export async function removeLocalPlaidItem(id: string): Promise<void> {
 			[tenantReference(), id]
 		);
 		if (!rows[0]) throw new AppError('PLAID_ITEM_NOT_FOUND', 'Connection not found.', 404);
+		await cloudQuery(`DELETE FROM public.carddue_metadata WHERE key = $1`, [
+			itemConfigurationKey(tenantId, id)
+		]);
 	} else {
 		const result = getDatabase().prepare(`DELETE FROM plaid_items WHERE id = ?`).run(id);
 		if (result.changes !== 1) {
 			throw new AppError('PLAID_ITEM_NOT_FOUND', 'Connection not found.', 404);
 		}
+		getDatabase()
+			.prepare(`DELETE FROM metadata WHERE key = ?`)
+			.run(itemConfigurationKey(tenantId, id));
 	}
 }
 

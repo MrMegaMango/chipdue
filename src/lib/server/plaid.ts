@@ -37,6 +37,7 @@ import {
 	listPlaidConnections,
 	markPlaidItemNeedsUpdate,
 	markPlaidItemSynced,
+	preparePlaidItemsForConfigurationChange,
 	publicPlaidConnection,
 	removeLocalPlaidItem,
 	savePlaidItem
@@ -46,6 +47,7 @@ import {
 	isInstallationPlaidConfigured,
 	requirePlaidConfiguration,
 	savePersonalPlaidConfiguration,
+	type PlaidClientConfiguration,
 	type PlaidConfiguration
 } from './plaid-config';
 import { providerAccountReference } from './provider-storage';
@@ -75,7 +77,7 @@ export async function plaidConfigurationStatus(): Promise<{
 
 export { isInstallationPlaidConfigured };
 
-function clientForConfiguration(config: PlaidConfiguration): PlaidApi {
+function clientForConfiguration(config: PlaidClientConfiguration): PlaidApi {
 	const signature = `${config.environment}:${config.clientId}:${config.secret}`;
 	if (cachedClient?.signature === signature) return cachedClient.client;
 
@@ -95,6 +97,12 @@ function clientForConfiguration(config: PlaidConfiguration): PlaidApi {
 
 async function getPlaidClient(): Promise<PlaidApi> {
 	return clientForConfiguration(await requirePlaidConfiguration());
+}
+
+async function getPlaidClientForItem(
+	item: Awaited<ReturnType<typeof getPrivatePlaidItem>>
+): Promise<PlaidApi> {
+	return clientForConfiguration(item.configuration ?? (await requirePlaidConfiguration()));
 }
 
 function plaidErrorCode(error: unknown): string | null {
@@ -185,7 +193,7 @@ export async function createPlaidTransactionsUpdateToken(
 	localItemId: string
 ): Promise<{ linkToken: string; expiration: string }> {
 	const item = await getPrivatePlaidItem(localItemId);
-	const client = await getPlaidClient();
+	const client = await getPlaidClientForItem(item);
 	try {
 		const response = await client.linkTokenCreate({
 			...(await baseLinkTokenRequest()),
@@ -203,7 +211,7 @@ export async function createPlaidUpdateToken(
 	localItemId: string
 ): Promise<{ linkToken: string; expiration: string }> {
 	const item = await getPrivatePlaidItem(localItemId);
-	const client = await getPlaidClient();
+	const client = await getPlaidClientForItem(item);
 	const request = {
 		...(await baseLinkTokenRequest()),
 		access_token: item.accessToken,
@@ -248,7 +256,8 @@ export async function exchangePlaidPublicToken(
 	publicToken: string,
 	institutionName: string | null
 ): Promise<{ connection: FinancialConnection; synced: boolean }> {
-	const client = await getPlaidClient();
+	const configuration = await requirePlaidConfiguration();
+	const client = clientForConfiguration(configuration);
 	let itemId: string;
 	let accessToken: string;
 	try {
@@ -260,7 +269,7 @@ export async function exchangePlaidPublicToken(
 		throw await sanitizedPlaidError(error);
 	}
 
-	const localItemId = await savePlaidItem(itemId, accessToken, institutionName);
+	const localItemId = await savePlaidItem(itemId, accessToken, institutionName, configuration);
 	return { connection: await publicPlaidConnection(localItemId), synced: false };
 }
 
@@ -607,7 +616,7 @@ export async function syncPlaidItem(
 ): Promise<{ syncedAt: string; count: number; accountCount: number; transactionCount: number }> {
 	const item = await getPrivatePlaidItem(localItemId);
 	try {
-		const client = await getPlaidClient();
+		const client = await getPlaidClientForItem(item);
 		const [accountsResponse, brand] = await Promise.all([
 			client.accountsGet({ access_token: item.accessToken }),
 			institutionBrand(client, item.accessToken, item.institutionName)
@@ -847,7 +856,7 @@ export async function syncAllPlaidItems(): Promise<{
 export async function disconnectPlaidItem(localItemId: string): Promise<void> {
 	const item = await getPrivatePlaidItem(localItemId);
 	try {
-		await (await getPlaidClient()).itemRemove({ access_token: item.accessToken });
+		await (await getPlaidClientForItem(item)).itemRemove({ access_token: item.accessToken });
 	} catch (error) {
 		if (error instanceof AppError) throw error;
 		const code = plaidErrorCode(error);
@@ -868,10 +877,10 @@ export async function configurePersonalPlaid(
 		getPlaidConfiguration(),
 		listPlaidConnections()
 	]);
-	if (connections.length > 0 && (!current || current.clientId !== normalizedClientId)) {
+	if (connections.length > 0 && !current) {
 		throw new AppError(
 			'PLAID_CONFIGURATION_IN_USE',
-			'Disconnect existing institutions before changing Plaid teams.',
+			'Existing institutions are missing their Plaid configuration.',
 			409
 		);
 	}
@@ -896,6 +905,9 @@ export async function configurePersonalPlaid(
 		);
 	}
 
+	if (current && connections.length > 0) {
+		await preparePlaidItemsForConfigurationChange(current, candidate);
+	}
 	await savePersonalPlaidConfiguration(normalizedClientId, normalizedSecret);
 	cachedClient = undefined;
 	return plaidConfigurationStatus();

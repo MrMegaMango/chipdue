@@ -11,8 +11,10 @@ const plaidMocks = vi.hoisted(() => ({
 	investmentsTransactionsGet: vi.fn(),
 	transactionsSync: vi.fn(),
 	itemGet: vi.fn(),
+	itemPublicTokenExchange: vi.fn(),
 	institutionsGet: vi.fn(),
-	institutionsGetById: vi.fn()
+	institutionsGetById: vi.fn(),
+	clientCalls: [] as Array<{ method: string; clientId: string; secret: string }>
 }));
 
 vi.mock('plaid', async (importOriginal) => {
@@ -20,11 +22,25 @@ vi.mock('plaid', async (importOriginal) => {
 	return {
 		...actual,
 		PlaidApi: class {
+			private readonly clientId: string;
+			private readonly secret: string;
+
+			constructor(configuration: { baseOptions?: { headers?: Record<string, string> } }) {
+				this.clientId = configuration.baseOptions?.headers?.['PLAID-CLIENT-ID'] ?? '';
+				this.secret = configuration.baseOptions?.headers?.['PLAID-SECRET'] ?? '';
+			}
+
+			private record(method: string) {
+				plaidMocks.clientCalls.push({ method, clientId: this.clientId, secret: this.secret });
+			}
+
 			accountsGet(request: unknown) {
+				this.record('accountsGet');
 				return plaidMocks.accountsGet(request);
 			}
 
 			linkTokenCreate(request: unknown) {
+				this.record('linkTokenCreate');
 				return plaidMocks.linkTokenCreate(request);
 			}
 
@@ -46,6 +62,11 @@ vi.mock('plaid', async (importOriginal) => {
 
 			itemGet(request: unknown) {
 				return plaidMocks.itemGet(request);
+			}
+
+			itemPublicTokenExchange(request: unknown) {
+				this.record('itemPublicTokenExchange');
+				return plaidMocks.itemPublicTokenExchange(request);
 			}
 
 			institutionsGet(request: unknown) {
@@ -72,6 +93,7 @@ import {
 	createPlaidLinkToken,
 	createPlaidTransactionsUpdateToken,
 	createPlaidUpdateToken,
+	exchangePlaidPublicToken,
 	resetPlaidClientForTests,
 	syncPlaidItem
 } from './plaid';
@@ -207,6 +229,7 @@ describe.sequential('Plaid transaction history', () => {
 		resetCryptoStateForTests();
 		resetPlaidClientForTests();
 		vi.clearAllMocks();
+		plaidMocks.clientCalls.length = 0;
 		plaidMocks.accountsGet.mockResolvedValue({
 			data: { accounts: liabilityResponse().data.accounts }
 		});
@@ -247,6 +270,92 @@ describe.sequential('Plaid transaction history', () => {
 		const durableMetadata = JSON.stringify(getDatabase().prepare('SELECT * FROM metadata').all());
 		expect(durableMetadata).not.toContain('personal-client-id');
 		expect(durableMetadata).not.toContain('personal-production-secret');
+	});
+
+	it('routes future links to a new Plaid team without breaking existing Items', async () => {
+		plaidMocks.institutionsGet.mockResolvedValue({ data: { institutions: [] } });
+		plaidMocks.itemPublicTokenExchange.mockResolvedValue({
+			data: { item_id: 'provider-item-original-team', access_token: 'original-access-token' }
+		});
+		plaidMocks.linkTokenCreate.mockResolvedValue({
+			data: { link_token: 'test-link-value', expiration: '2026-08-28T00:00:00.000Z' }
+		});
+
+		await configurePersonalPlaid('original-client-id', 'original-production-secret');
+		const { connection } = await exchangePlaidPublicToken('public-token', 'Original Bank');
+		await configurePersonalPlaid('next-client-id', 'next-production-secret');
+
+		plaidMocks.clientCalls.length = 0;
+		await createPlaidUpdateToken(connection.id);
+		await createPlaidLinkToken();
+
+		expect(plaidMocks.clientCalls).toEqual([
+			{
+				method: 'linkTokenCreate',
+				clientId: 'original-client-id',
+				secret: 'original-production-secret'
+			},
+			{
+				method: 'linkTokenCreate',
+				clientId: 'next-client-id',
+				secret: 'next-production-secret'
+			}
+		]);
+		const durableMetadata = JSON.stringify(getDatabase().prepare('SELECT * FROM metadata').all());
+		expect(durableMetadata).not.toContain('original-production-secret');
+		expect(durableMetadata).not.toContain('next-production-secret');
+	});
+
+	it('pins pre-upgrade Items to the original Plaid team before switching', async () => {
+		plaidMocks.institutionsGet.mockResolvedValue({ data: { institutions: [] } });
+		plaidMocks.linkTokenCreate.mockResolvedValue({
+			data: { link_token: 'test-link-value', expiration: '2026-08-28T00:00:00.000Z' }
+		});
+
+		await configurePersonalPlaid('legacy-client-id', 'legacy-production-secret');
+		const legacyItemId = await savePlaidItem(
+			'provider-item-before-routing-upgrade',
+			'legacy-access-token',
+			'Legacy Bank'
+		);
+		await configurePersonalPlaid('future-client-id', 'future-production-secret');
+
+		plaidMocks.clientCalls.length = 0;
+		await createPlaidUpdateToken(legacyItemId);
+
+		expect(plaidMocks.clientCalls).toEqual([
+			{
+				method: 'linkTokenCreate',
+				clientId: 'legacy-client-id',
+				secret: 'legacy-production-secret'
+			}
+		]);
+	});
+
+	it('refreshes stored credentials when a previous Plaid team is selected again', async () => {
+		plaidMocks.institutionsGet.mockResolvedValue({ data: { institutions: [] } });
+		plaidMocks.itemPublicTokenExchange.mockResolvedValue({
+			data: { item_id: 'provider-item-rotated-team', access_token: 'rotated-access-token' }
+		});
+		plaidMocks.linkTokenCreate.mockResolvedValue({
+			data: { link_token: 'test-link-value', expiration: '2026-08-28T00:00:00.000Z' }
+		});
+
+		await configurePersonalPlaid('returning-client-id', 'original-team-secret');
+		const { connection } = await exchangePlaidPublicToken('public-token', 'Returning Bank');
+		await configurePersonalPlaid('temporary-client-id', 'temporary-team-secret');
+		await configurePersonalPlaid('returning-client-id', 'rotated-team-secret');
+
+		plaidMocks.clientCalls.length = 0;
+		await createPlaidUpdateToken(connection.id);
+
+		expect(plaidMocks.clientCalls).toEqual([
+			{
+				method: 'linkTokenCreate',
+				clientId: 'returning-client-id',
+				secret: 'rotated-team-secret'
+			}
+		]);
 	});
 
 	it('requests broad account consent for new and existing Items', async () => {

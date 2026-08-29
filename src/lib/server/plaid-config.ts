@@ -7,10 +7,13 @@ import { currentTenantId, LEGACY_TENANT_ID } from './tenant';
 
 export type PlaidEnvironmentName = 'sandbox' | 'production';
 
-export interface PlaidConfiguration {
+export interface PlaidClientConfiguration {
 	clientId: string;
 	secret: string;
 	environment: PlaidEnvironmentName;
+}
+
+export interface PlaidConfiguration extends PlaidClientConfiguration {
 	source: 'personal' | 'installation';
 }
 
