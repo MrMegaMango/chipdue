@@ -36,6 +36,8 @@ describe('financial workspace navigation', () => {
 		expect(balanceHistoryChartSource).toContain("class:return-loss={area.kind === 'loss'}");
 		expect(balanceHistoryChartSource).toContain('Portfolio value');
 		expect(balanceHistoryChartSource).toContain('Investment return');
+		expect(balanceHistoryChartSource).toContain('Estimated history');
+		expect(balanceHistoryChartSource).toContain('Observed snapshot');
 	});
 
 	it('shows institution branding on account cards', () => {
@@ -62,8 +64,10 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain('Plaid does not provide open-order data.');
 	});
 
-	it('adds a read-only official E*TRADE order connection', () => {
+	it('adds a read-only official E*TRADE data connection', () => {
 		expect(accountsSource).toContain("resolve('/api/accounts/[id]/orders'");
+		expect(accountsSource).toContain("resolve('/api/accounts/[id]/estimated-history'");
+		expect(accountsSource).toContain('Build 2-year estimate');
 		expect(accountsSource).not.toContain(
 			'<a class="finance-button secondary" href={resolve(\'/etrade\')}>E*TRADE orders</a>'
 		);

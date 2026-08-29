@@ -101,6 +101,7 @@ const investmentHoldingSchema = z.object({
 const balanceHistoryPointSchema = z.object({
 	recordedAt: z.string().refine((value) => Number.isFinite(new Date(value).getTime())),
 	balanceCents: z.number().int().min(-100_000_000_000).max(100_000_000_000),
+	source: z.enum(['observed', 'estimated']).optional(),
 	netContributionsCents: z
 		.number()
 		.int()
@@ -227,7 +228,10 @@ function appendBalanceHistoryPoint(
 	if (accountType !== 'brokerage') return [];
 	if (balanceCents === null || !Number.isFinite(new Date(recordedAt).getTime())) return history;
 
-	const next = [...history, { recordedAt, balanceCents, netContributionsCents }]
+	const next = [
+		...history,
+		{ recordedAt, balanceCents, netContributionsCents, source: 'observed' as const }
+	]
 		.sort((left, right) => left.recordedAt.localeCompare(right.recordedAt))
 		.filter(
 			(point, index, points) =>
@@ -245,6 +249,7 @@ function accountBalanceHistory(
 	if (payload.balanceHistory.length > 0) {
 		return payload.balanceHistory.map((point, index) => ({
 			...point,
+			source: point.source ?? 'observed',
 			netContributionsCents:
 				point.netContributionsCents === undefined
 					? index === payload.balanceHistory.length - 1
@@ -258,9 +263,50 @@ function accountBalanceHistory(
 		{
 			recordedAt: row.last_synced_at ?? row.updated_at ?? row.created_at,
 			balanceCents: payload.currentBalanceCents,
-			netContributionsCents
+			netContributionsCents,
+			source: 'observed'
 		}
 	];
+}
+
+export async function replaceEstimatedFinancialAccountHistory(
+	id: string,
+	estimatedPoints: AccountBalanceHistoryPoint[]
+): Promise<FinancialAccount> {
+	const row = await getRow(id);
+	const payload = row ? decodeRecord(row) : null;
+	if (!row || payload?.recordType !== 'account') {
+		throw new AppError('ACCOUNT_NOT_FOUND', 'Account not found.', 404);
+	}
+	if (payload.accountType !== 'brokerage') {
+		throw new AppError(
+			'ACCOUNT_NOT_BROKERAGE',
+			'Historical estimates require a brokerage account.',
+			409
+		);
+	}
+	const observed = accountBalanceHistory(payload, row).filter(
+		(point) => point.source === 'observed'
+	);
+	const firstObservedAt = observed[0]?.recordedAt ?? null;
+	const sanitized = estimatedPoints
+		.filter(
+			(point) =>
+				point.source === 'estimated' &&
+				Number.isSafeInteger(point.balanceCents) &&
+				Number.isFinite(Date.parse(point.recordedAt)) &&
+				(firstObservedAt === null || point.recordedAt < firstObservedAt)
+		)
+		.map((point) => ({ ...point, source: 'estimated' as const }));
+	const balanceHistory = [...sanitized, ...observed]
+		.sort((left, right) => left.recordedAt.localeCompare(right.recordedAt))
+		.filter(
+			(point, index, points) =>
+				index === points.length - 1 || point.recordedAt !== points[index + 1].recordedAt
+		)
+		.slice(-MAX_BALANCE_HISTORY_POINTS);
+	await updateRecord(id, { ...payload, balanceHistory }, new Date().toISOString());
+	return getFinancialAccount(id);
 }
 
 function accountNetContributions(payload: AccountPayload): number | null {

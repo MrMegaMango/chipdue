@@ -8,6 +8,7 @@
 	import { cashSweepAction, isCashSweepSecurity } from '$lib/investment-display';
 	import type {
 		BrokerageOrder,
+		BrokerageHistoryEstimateResponse,
 		BrokerageOrdersResponse,
 		FinancialConnection,
 		FinancialAccount,
@@ -88,6 +89,9 @@
 	let ordersByAccount = $state<Record<string, BrokerageOrdersResponse>>({});
 	let ordersLoadingByAccount = $state<Record<string, boolean>>({});
 	let ordersErrorByAccount = $state<Record<string, boolean>>({});
+	let historyEstimateLoadingByAccount = $state<Record<string, boolean>>({});
+	let historyEstimateErrorByAccount = $state<Record<string, string>>({});
+	let historyEstimateNoteByAccount = $state<Record<string, string>>({});
 	let syncing = $state(false);
 	let toast = $state('');
 	let toastError = $state(false);
@@ -614,6 +618,12 @@
 						resolve('/api/accounts/[id]/orders', { id: account.id })
 					);
 					ordersByAccount = { ...ordersByAccount, [account.id]: response };
+					if (
+						response.availability === 'available' &&
+						!account.balanceHistory.some((point) => point.source === 'estimated')
+					) {
+						await buildEstimatedHistory(account, true);
+					}
 				} catch {
 					ordersErrorByAccount = { ...ordersErrorByAccount, [account.id]: true };
 				} finally {
@@ -621,6 +631,47 @@
 				}
 			})
 		);
+	}
+
+	async function buildEstimatedHistory(account: FinancialAccount, silent = false): Promise<void> {
+		if (historyEstimateLoadingByAccount[account.id]) return;
+		historyEstimateLoadingByAccount = { ...historyEstimateLoadingByAccount, [account.id]: true };
+		historyEstimateErrorByAccount = { ...historyEstimateErrorByAccount, [account.id]: '' };
+		historyEstimateNoteByAccount = { ...historyEstimateNoteByAccount, [account.id]: '' };
+		try {
+			const response = await requestJson<BrokerageHistoryEstimateResponse>(
+				resolve('/api/accounts/[id]/estimated-history', { id: account.id }),
+				{ method: 'POST' }
+			);
+			if (response.availability !== 'available' || !response.account) {
+				throw new Error(
+					response.availability === 'authorization_required'
+						? 'Reconnect E*TRADE for today before building history.'
+						: 'E*TRADE history is not available for this account.'
+				);
+			}
+			accounts = accounts.map((item) => (item.id === account.id ? response.account! : item));
+			if (response.unpricedSymbols.length > 0) {
+				historyEstimateNoteByAccount = {
+					...historyEstimateNoteByAccount,
+					[account.id]: `No historical price was available for ${response.unpricedSymbols.join(', ')}; that portion remains anchored to its current value.`
+				};
+			}
+			if (!silent) {
+				showToast(
+					`Built ${response.estimatedPointCount} estimated daily portfolio values from E*TRADE activity.`
+				);
+			}
+		} catch (error) {
+			const message = readableError(error, 'Estimated history could not be built.');
+			historyEstimateErrorByAccount = { ...historyEstimateErrorByAccount, [account.id]: message };
+			if (!silent) showToast(message, { error: true });
+		} finally {
+			historyEstimateLoadingByAccount = {
+				...historyEstimateLoadingByAccount,
+				[account.id]: false
+			};
+		}
 	}
 
 	async function reloadAccounts(): Promise<void> {
@@ -972,6 +1023,41 @@
 													points={account.balanceHistory}
 													netContributionsCents={account.netContributionsCents}
 												/>
+												{#if isEtradeBrokerage(account) && account.source === 'connected'}
+													<div class="history-estimate-action">
+														<div>
+															<strong>E*TRADE estimated history</strong>
+															<span
+																>Uses activity and daily market closes; it is not broker-reported
+																performance.</span
+															>
+															{#if historyEstimateErrorByAccount[account.id]}
+																<small class="error"
+																	>{historyEstimateErrorByAccount[account.id]}</small
+																>
+															{:else if historyEstimateNoteByAccount[account.id]}
+																<small>{historyEstimateNoteByAccount[account.id]}</small>
+															{/if}
+														</div>
+														{#if ordersByAccount[account.id]?.availability === 'available'}
+															<button
+																type="button"
+																disabled={historyEstimateLoadingByAccount[account.id]}
+																onclick={() => buildEstimatedHistory(account)}
+															>
+																{historyEstimateLoadingByAccount[account.id]
+																	? 'Building…'
+																	: account.balanceHistory.some(
+																				(point) => point.source === 'estimated'
+																		  )
+																		? 'Refresh estimate'
+																		: 'Build 2-year estimate'}
+															</button>
+														{:else}
+															<a href={resolve('/etrade')}>Connect E*TRADE</a>
+														{/if}
+													</div>
+												{/if}
 											{/if}
 											{#if bonusOffers.length > 0}
 												<section class="bonus-offer-callout" aria-label="Verified bonus offers">
@@ -1693,6 +1779,58 @@
 		margin-top: 1rem;
 		padding-top: 0.9rem;
 		border-top: 1px solid var(--line);
+	}
+
+	.history-estimate-action {
+		display: flex;
+		gap: 1rem;
+		align-items: center;
+		justify-content: space-between;
+		margin-top: 0.55rem;
+		padding: 0.65rem 0.75rem;
+		border: 1px solid var(--line);
+		border-radius: 9px;
+		background: var(--paper-soft);
+	}
+
+	.history-estimate-action > div {
+		display: grid;
+		gap: 0.12rem;
+	}
+
+	.history-estimate-action strong {
+		font-size: 0.62rem;
+	}
+
+	.history-estimate-action span,
+	.history-estimate-action small {
+		color: var(--faint);
+		font-size: 0.54rem;
+		line-height: 1.4;
+	}
+
+	.history-estimate-action small.error {
+		color: var(--red);
+	}
+
+	.history-estimate-action button,
+	.history-estimate-action a {
+		flex: 0 0 auto;
+		padding: 0.42rem 0.58rem;
+		border: 1px solid var(--accent);
+		border-radius: 7px;
+		color: white;
+		font: inherit;
+		font-size: 0.56rem;
+		font-weight: 760;
+		text-decoration: none;
+		background: var(--accent);
+		cursor: pointer;
+	}
+
+	.history-estimate-action button:disabled {
+		opacity: 0.58;
+		cursor: wait;
 	}
 
 	.account-detail-heading {

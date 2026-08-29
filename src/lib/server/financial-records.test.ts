@@ -11,6 +11,7 @@ import {
 	listBonuses,
 	listFinancialAccounts,
 	replaceConnectedFinancialAccounts,
+	replaceEstimatedFinancialAccountHistory,
 	updateBonus,
 	updateFinancialAccount
 } from './financial-records';
@@ -132,18 +133,60 @@ describe.sequential('encrypted financial records', () => {
 			{
 				recordedAt: '2026-08-01T12:00:00.000Z',
 				balanceCents: 100_000,
-				netContributionsCents: 80_000
+				netContributionsCents: 80_000,
+				source: 'observed'
 			},
 			{
 				recordedAt: '2026-08-05T12:00:00.000Z',
 				balanceCents: 112_500,
-				netContributionsCents: 80_000
+				netContributionsCents: 80_000,
+				source: 'observed'
 			},
 			{
 				recordedAt: '2026-08-06T12:00:00.000Z',
 				balanceCents: 112_500,
-				netContributionsCents: 90_000
+				netContributionsCents: 90_000,
+				source: 'observed'
 			}
+		]);
+	});
+
+	it('replaces estimated points while preserving observed snapshots', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-08-05T12:00:00.000Z'));
+		const account = await createFinancialAccount(
+			createFinancialAccountSchema.parse({
+				nickname: 'Estimated brokerage',
+				accountType: 'brokerage',
+				currentBalanceCents: 120_000
+			})
+		);
+		await replaceEstimatedFinancialAccountHistory(account.id, [
+			{
+				recordedAt: '2026-08-01T20:00:00.000Z',
+				balanceCents: 100_000,
+				netContributionsCents: null,
+				source: 'estimated'
+			},
+			{
+				recordedAt: '2026-08-02T20:00:00.000Z',
+				balanceCents: 110_000,
+				netContributionsCents: null,
+				source: 'estimated'
+			}
+		]);
+		const refreshed = await replaceEstimatedFinancialAccountHistory(account.id, [
+			{
+				recordedAt: '2026-08-03T20:00:00.000Z',
+				balanceCents: 115_000,
+				netContributionsCents: null,
+				source: 'estimated'
+			}
+		]);
+
+		expect(refreshed.balanceHistory).toMatchObject([
+			{ recordedAt: '2026-08-03T20:00:00.000Z', source: 'estimated' },
+			{ recordedAt: '2026-08-05T12:00:00.000Z', source: 'observed' }
 		]);
 	});
 
@@ -186,12 +229,14 @@ describe.sequential('encrypted financial records', () => {
 			{
 				recordedAt: '2026-08-01T12:00:00.000Z',
 				balanceCents: 250_000,
-				netContributionsCents: null
+				netContributionsCents: null,
+				source: 'observed'
 			},
 			{
 				recordedAt: '2026-08-02T12:00:00.000Z',
 				balanceCents: 275_000,
-				netContributionsCents: null
+				netContributionsCents: null,
+				source: 'observed'
 			}
 		]);
 
@@ -209,12 +254,14 @@ describe.sequential('encrypted financial records', () => {
 			{
 				recordedAt: '2026-08-03T12:00:00.000Z',
 				balanceCents: 275_000,
-				netContributionsCents: 200_000
+				netContributionsCents: 200_000,
+				source: 'observed'
 			},
 			{
 				recordedAt: '2026-08-04T12:00:00.000Z',
 				balanceCents: 280_000,
-				netContributionsCents: 200_000
+				netContributionsCents: 200_000,
+				source: 'observed'
 			}
 		]);
 	});

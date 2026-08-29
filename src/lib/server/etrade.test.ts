@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FinancialAccount } from '$lib/types';
 import { resetCryptoStateForTests } from './crypto';
 import { closeDatabaseForTests } from './database';
@@ -12,6 +12,7 @@ import {
 	etradeStatus,
 	etradeTestHelpers,
 	oauthAuthorizationHeader,
+	rebuildEtradeBrokerageHistory,
 	setEtradeFetchForTests
 } from './etrade';
 import {
@@ -19,6 +20,9 @@ import {
 	getEtradeConfiguration,
 	saveEtradeAuthorization
 } from './etrade-store';
+import { createFinancialAccount } from './financial-records';
+import { setMarketHistoryFetchForTests } from './market-history';
+import { createFinancialAccountSchema } from './schemas';
 import { runAsTenant } from './tenant';
 
 const FIRST_TENANT = '10000000-0000-4000-8000-000000000001';
@@ -38,10 +42,13 @@ describe.sequential('E*TRADE read-only integration', () => {
 		resetCryptoStateForTests();
 		closeDatabaseForTests();
 		setEtradeFetchForTests();
+		setMarketHistoryFetchForTests();
 	});
 
 	afterEach(() => {
 		setEtradeFetchForTests();
+		setMarketHistoryFetchForTests();
+		vi.useRealTimers();
 		closeDatabaseForTests();
 		resetCryptoStateForTests();
 		rmSync(dataDirectory, { recursive: true, force: true });
@@ -252,5 +259,146 @@ describe.sequential('E*TRADE read-only integration', () => {
 			'00000000-0000-4000-8000-000000000002'
 		);
 		expect(new Set(secondOrder.map((order) => order.id)).size).toBe(2);
+	});
+
+	it('reduces portfolio and transaction responses to reconstruction inputs', () => {
+		const portfolio = etradeTestHelpers.parsePortfolio(
+			JSON.stringify({
+				PortfolioResponse: {
+					AccountPortfolio: {
+						totals: { cashBalance: 125.5 },
+						Position: {
+							Product: { symbol: 'SPY', securityType: 'EQ' },
+							quantity: 2.5,
+							marketValue: 1250
+						}
+					}
+				}
+			})
+		);
+		expect(portfolio).toEqual({
+			cashBalance: 125.5,
+			positions: [{ symbol: 'SPY', securityType: 'EQ', quantity: 2.5, marketValue: 1250 }],
+			totalPages: 1
+		});
+
+		const page = etradeTestHelpers.parseTransactions(
+			JSON.stringify({
+				TransactionListResponse: {
+					marker: 'next-page',
+					Transaction: {
+						transactionDate: 1_700_000_000_000,
+						amount: -500,
+						transactionType: 'Bought',
+						brokerage: {
+							quantity: 2,
+							product: { symbol: 'SPY', securityType: 'EQ' }
+						}
+					}
+				}
+			})
+		);
+		expect(page).toEqual({
+			marker: 'next-page',
+			transactions: [
+				{
+					date: '2023-11-14',
+					amount: -500,
+					transactionType: 'Bought',
+					symbol: 'SPY',
+					securityType: 'EQ',
+					quantity: 2
+				}
+			]
+		});
+	});
+
+	it('builds and stores a two-year estimated series without retaining raw responses', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-08-29T16:00:00.000Z'));
+		await configureEtrade('synthetic-key', 'synthetic-secret');
+		await saveEtradeAuthorization({
+			state: 'connected',
+			accessToken: 'synthetic-access-token',
+			accessTokenSecret: 'synthetic-access-secret',
+			authorizedAt: new Date().toISOString(),
+			authorizedEasternDay: '2026-08-29',
+			accountCount: 1
+		});
+		const account = await createFinancialAccount(
+			createFinancialAccountSchema.parse({
+				nickname: 'Brokerage',
+				institution: 'E*TRADE',
+				accountType: 'brokerage',
+				last4: '1234',
+				currentBalanceCents: 20_000,
+				netContributionsCents: 15_000
+			})
+		);
+		setEtradeFetchForTests(async (input) => {
+			const url = new URL(String(input));
+			if (url.pathname.endsWith('/accounts/list.json')) {
+				return new Response(
+					JSON.stringify({
+						AccountListResponse: {
+							Accounts: {
+								Account: {
+									accountId: '10001234',
+									accountIdKey: 'account-key',
+									accountName: 'Brokerage',
+									accountStatus: 'ACTIVE',
+									institutionType: 'BROKERAGE'
+								}
+							}
+						}
+					})
+				);
+			}
+			if (url.pathname.endsWith('/portfolio.json')) {
+				return new Response(
+					JSON.stringify({
+						PortfolioResponse: {
+							AccountPortfolio: {
+								totals: { cashBalance: 0 },
+								Position: {
+									Product: { symbol: 'SYN', securityType: 'EQ' },
+									quantity: 2,
+									marketValue: 200
+								}
+							}
+						}
+					})
+				);
+			}
+			return new Response(JSON.stringify({ TransactionListResponse: {} }));
+		});
+		setMarketHistoryFetchForTests(
+			async () =>
+				new Response(
+					JSON.stringify({
+						chart: {
+							result: [
+								{
+									timestamp: [
+										Date.parse('2026-08-27T00:00:00Z') / 1000,
+										Date.parse('2026-08-28T00:00:00Z') / 1000
+									],
+									indicators: { quote: [{ close: [50, 100] }] }
+								}
+							]
+						}
+					})
+				)
+		);
+
+		const response = await rebuildEtradeBrokerageHistory(account.id);
+
+		expect(response.availability).toBe('available');
+		expect(response.estimatedPointCount).toBe(2);
+		expect(response.account?.balanceHistory.map((point) => point.source)).toEqual([
+			'estimated',
+			'estimated',
+			'observed'
+		]);
 	});
 });

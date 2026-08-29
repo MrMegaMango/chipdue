@@ -141,6 +141,7 @@ export interface AccountBalanceHistoryPoint {
 	recordedAt: string;
 	balanceCents: number;
 	netContributionsCents: number | null;
+	source: 'observed' | 'estimated';
 }
 
 export interface BrokerageOrder {
@@ -167,6 +168,17 @@ export interface BrokerageOrdersResponse {
 	availability: BrokerageOrdersAvailability;
 	provider: 'etrade';
 	orders: BrokerageOrder[];
+	refreshedAt: string | null;
+}
+
+export interface BrokerageHistoryEstimateResponse {
+	availability: BrokerageOrdersAvailability;
+	provider: 'etrade';
+	account: FinancialAccount | null;
+	estimatedPointCount: number;
+	startDate: string | null;
+	endDate: string | null;
+	unpricedSymbols: string[];
 	refreshedAt: string | null;
 }
 

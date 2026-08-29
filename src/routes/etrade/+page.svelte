@@ -122,7 +122,8 @@
 				body: JSON.stringify({ verifier: verifier.trim() })
 			});
 			verifier = '';
-			notice = 'E*TRADE is connected for today. ChipDue can now read your open orders.';
+			notice =
+				'E*TRADE is connected for today. ChipDue can now read open orders and build estimated history.';
 		} catch (error) {
 			errorMessage = readableError(error, 'The E*TRADE verification code was not accepted.');
 		} finally {
@@ -198,10 +199,10 @@
 </script>
 
 <svelte:head>
-	<title>E*TRADE orders — ChipDue</title>
+	<title>E*TRADE data — ChipDue</title>
 	<meta
 		name="description"
-		content="Connect the official E*TRADE API to read open brokerage orders in ChipDue."
+		content="Connect the official E*TRADE API to read open brokerage orders and build estimated history in ChipDue."
 	/>
 </svelte:head>
 
@@ -214,10 +215,11 @@
 		<section class="finance-toolbar" aria-labelledby="etrade-title">
 			<div>
 				<p class="finance-kicker">Official brokerage connection</p>
-				<h1 id="etrade-title">E*TRADE open orders</h1>
+				<h1 id="etrade-title">E*TRADE data</h1>
 				<p>
-					ChipDue uses E*TRADE’s official API only to read account names and open orders. It does
-					not include code for placing, changing, or cancelling trades.
+					ChipDue uses E*TRADE’s official API to read account names, open orders, positions, and up
+					to two years of activity. It can build clearly labeled historical estimates, but does not
+					include code for placing, changing, or cancelling trades.
 				</p>
 			</div>
 			<a class="finance-button secondary" href={resolve('/accounts')}>Back to accounts</a>

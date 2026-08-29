@@ -1,6 +1,6 @@
 # ChipDue
 
-ChipDue is a privacy-first financial workspace for tracking bank and brokerage accounts, signup bonuses, investment performance, credit-card payments, and the deadlines that connect them. Optional financial-data connections can automatically sync eligible accounts, while manual entry remains available for every institution and bonus detail. Plaid handles account sync and the official E*TRADE API can add read-only open orders; neither is required.
+ChipDue is a privacy-first financial workspace for tracking bank and brokerage accounts, signup bonuses, investment performance, credit-card payments, and the deadlines that connect them. Optional financial-data connections can automatically sync eligible accounts, while manual entry remains available for every institution and bonus detail. Plaid handles account sync and the official E*TRADE API can add read-only open orders and inputs for estimated history; neither is required.
 
 Choose one of two deployment modes:
 
@@ -16,7 +16,7 @@ Choose one of two deployment modes:
 - Automatically refresh eligible bank and brokerage balances through an installed financial-data provider.
 - See each brokerage account's value over time and separate net contributions from investment return, with every saved balance or successful sync extending its private history.
 - See each connected brokerage position, share count, current institution price, value, and holding cost basis while keeping simple account-level performance.
-- Load current E*TRADE open orders through E*TRADE's official read-only API without enabling trade placement, changes, or cancellation.
+- Load current E*TRADE open orders and build clearly labeled estimated daily portfolio history from positions, activity, and public market closes without enabling trade placement, changes, or cancellation.
 - Track statement balance, minimum due, current balance, due date, statement date, and autopay status.
 - Automatically identify supported linked cards from provider metadata, populate their reward type, base earning rate, and bonus categories, and show estimated points, miles, or cash back beside eligible transactions. Manual overrides remain available for unmatched cards.
 - Create isolated cloud accounts with Google sign-in without storing an email, profile, Google token, or refresh token.
@@ -38,7 +38,8 @@ Private cloud mode
 Browser memory -> authenticated Vercel Function -> encrypted Neon Postgres rows
                                       |
                                       +-> Plaid, only when configured and used
-                                      +-> E*TRADE, only when configured and orders are viewed
+                                      +-> E*TRADE, only when configured and its data is requested
+                                      +-> Yahoo Finance, only when estimated history is built
                                       +-> Google, only during optional sign-in
 
 Git repository -> source code and synthetic tests only
@@ -55,10 +56,10 @@ Cards, accounts, bonuses, and transactions
                     |
          +--------------+----------------+
          |                               |
-   Plaid sync adapter        E*TRADE order adapter
+   Plaid sync adapter        E*TRADE read-only adapter
 ```
 
-Cards and accounts record whether they are `manual` or `connected` and, for connected records, which provider supplied them. User-facing sync APIs live under `/api/connections`; the older `/api/plaid` endpoints remain as compatibility aliases. The separate E*TRADE adapter supplements a Plaid-synced E*TRADE brokerage account with live open orders by matching the account's last four characters. It does not duplicate balances or holdings.
+Cards and accounts record whether they are `manual` or `connected` and, for connected records, which provider supplied them. User-facing sync APIs live under `/api/connections`; the older `/api/plaid` endpoints remain as compatibility aliases. The separate E*TRADE adapter supplements a Plaid-synced E*TRADE brokerage account with live open orders and reconstruction inputs by matching the account's last four characters. Plaid remains the source of current displayed balances and holdings.
 
 The deployed database retains its older Plaid-named columns for compatibility with encrypted records and cryptographic identifiers. Those names are isolated in the storage bridge until a coordinated database migration can safely rename them. Plaid and E*TRADE remain optional: an installation without provider credentials continues to work in manual mode at no provider cost.
 
@@ -70,7 +71,7 @@ Cloud encryption protects against a database-only disclosure. It is not zero-kno
 - npm
 - Git
 - Optional account sync: a Plaid account
-- Optional open orders: an E*TRADE developer account with a live individual key
+- Optional open orders and estimated history: an E*TRADE developer account with a live individual key
 - Optional cloud hosting: personal Vercel and Neon accounts
 - Optional Google sign-in: a Google Cloud project and Web OAuth client
 
@@ -161,22 +162,24 @@ Official references:
 - [Plaid Transactions](https://plaid.com/docs/transactions/)
 - [Plaid Link security flow](https://plaid.com/docs/link/)
 
-## Optional E*TRADE open orders
+## Optional E*TRADE orders and estimated history
 
 E*TRADE is a narrow, read-only supplement to an E*TRADE brokerage account already synced through Plaid. It does not replace Plaid balances, holdings, or transactions.
 
 1. Obtain a live individual consumer key and secret from the E*TRADE Developer Platform.
-2. In ChipDue, open **E\*TRADE orders**, save the key and secret, and choose **Start authorization**.
+2. In ChipDue, open **E\*TRADE data**, save the key and secret, and choose **Start authorization**.
 3. Approve access on E*TRADE's own site and paste the displayed verifier into ChipDue within five minutes.
 4. Reconnect after the access token expires at midnight Eastern. E*TRADE can also require renewal after two hours without an API request.
 
-ChipDue encrypts the key, secret, request-token secret, and access-token secret per account. It fetches only the E*TRADE account list and open orders, maps an account by its last four characters, returns allowlisted display fields, and keeps order results only in browser memory. The integration contains no endpoint or code path for placing, changing, previewing, or cancelling a trade.
+ChipDue encrypts the key, secret, request-token secret, and access-token secret per account. It maps an account by its last four characters. Open-order results stay only in browser memory. When estimated history is built, E*TRADE portfolio and up-to-two-year transaction responses are reduced to the fields needed for reconstruction and discarded; only estimated daily values and their provenance are retained inside the account's encrypted payload. Historical closes are requested from Yahoo Finance using only a ticker and date range—never an account identifier, balance, or quantity. Estimates are not E*TRADE-reported performance and can be incomplete for unsupported or unpriced securities. The integration contains no endpoint or code path for placing, changing, previewing, or cancelling a trade.
 
 Official references:
 
 - [E*TRADE Developer Platform: getting started](https://developer.etrade.com/getting-started)
 - [E*TRADE authorization API](https://apisb.etrade.com/docs/api/authorization/request_token.html)
 - [E*TRADE order API](https://apisb.etrade.com/docs/api/order/api-order-v1.html)
+- [E*TRADE portfolio API](https://apisb.etrade.com/docs/api/account/api-portfolio-v1.html)
+- [E*TRADE transaction API](https://apisb.etrade.com/docs/api/account/api-transaction-v1.html)
 
 ## Where private data lives
 

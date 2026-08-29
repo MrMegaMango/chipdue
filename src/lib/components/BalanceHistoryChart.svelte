@@ -56,6 +56,10 @@
 			.sort((left, right) => left.recordedAt.localeCompare(right.recordedAt))
 	);
 	const visiblePoints = $derived(pointsForRange(sortedPoints, selectedRange));
+	const estimatedPointCount = $derived(
+		sortedPoints.filter((point) => point.source === 'estimated').length
+	);
+	const observedPointCount = $derived(sortedPoints.length - estimatedPointCount);
 	const chart = $derived(chartFor(visiblePoints));
 	const latestPoint = $derived(visiblePoints.at(-1));
 	const latestContributionsCents = $derived(
@@ -304,6 +308,9 @@
 			<p>Portfolio history</p>
 			<h4 id={`history-title-${accountId}`}>Growth breakdown</h4>
 		</div>
+		{#if estimatedPointCount > 0}
+			<span class="estimate-badge">Estimated history</span>
+		{/if}
 	</div>
 
 	{#if sortedPoints.length === 0}
@@ -447,6 +454,9 @@
 					class="chart-tooltip"
 					style={`left: ${(hoveredPoint.x / WIDTH) * 100}%; top: ${(hoveredPoint.y / HEIGHT) * 100}%`}
 				>
+					<span class="tooltip-source"
+						>{hoveredPoint.source === 'estimated' ? 'Estimated close' : 'Observed snapshot'}</span
+					>
 					<strong>Portfolio {formatMoney(hoveredPoint.balanceCents)}</strong>
 					{#if hoveredPoint.netContributionsCents !== null}
 						<span>Contributions {formatMoney(hoveredPoint.netContributionsCents)}</span>
@@ -462,8 +472,11 @@
 		</div>
 
 		<p class="history-footnote">
-			{#if latestContributionsCents === null}
-				Add net contributions in account details to separate deposits from investment return.
+			{#if estimatedPointCount > 0}
+				{estimatedPointCount} estimated daily closes · {observedPointCount} observed {observedPointCount ===
+				1
+					? 'snapshot'
+					: 'snapshots'}
 			{:else if sortedPoints.length === 1}
 				History starts here. Each saved balance or successful sync adds a new point.
 			{:else}
@@ -478,16 +491,24 @@
 				Investment return is value minus net contributions. It includes market movement, dividends,
 				interest, and fees.
 			</p>
+		{:else}
+			<p class="return-explainer">
+				Add net contributions in account details to separate deposits from investment return.
+			</p>
 		{/if}
 
 		<table class="visually-hidden">
 			<caption>{accountName} portfolio history</caption>
-			<thead><tr><th>Date</th><th>Portfolio value</th><th>Net contributions</th></tr></thead>
+			<thead
+				><tr><th>Date</th><th>Source</th><th>Portfolio value</th><th>Net contributions</th></tr
+				></thead
+			>
 			<tbody>
 				{#each visiblePoints as point (point.recordedAt)}
 					<tr
-						><td>{formatDate(point.recordedAt, true)}</td><td>{formatMoney(point.balanceCents)}</td
-						><td
+						><td>{formatDate(point.recordedAt, true)}</td><td
+							>{point.source === 'estimated' ? 'Estimated close' : 'Observed snapshot'}</td
+						><td>{formatMoney(point.balanceCents)}</td><td
 							>{point.netContributionsCents === null
 								? 'Not entered'
 								: formatMoney(point.netContributionsCents)}</td
@@ -527,6 +548,16 @@
 	.history-heading h4 {
 		margin: 0;
 		font-size: 0.76rem;
+	}
+
+	.estimate-badge {
+		padding: 0.28rem 0.46rem;
+		border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--line));
+		border-radius: 999px;
+		color: var(--accent-dark);
+		font-size: 0.5rem;
+		font-weight: 760;
+		background: color-mix(in srgb, var(--accent) 8%, white);
 	}
 
 	.history-metrics {
@@ -752,6 +783,14 @@
 
 	.chart-tooltip span {
 		opacity: 0.76;
+	}
+
+	.chart-tooltip .tooltip-source {
+		font-size: 0.48rem;
+		font-weight: 760;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		opacity: 0.64;
 	}
 
 	.history-footnote {

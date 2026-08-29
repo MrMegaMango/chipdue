@@ -1,5 +1,10 @@
 import { createHmac, randomBytes } from 'node:crypto';
-import type { BrokerageOrder, BrokerageOrdersResponse, FinancialAccount } from '$lib/types';
+import type {
+	BrokerageHistoryEstimateResponse,
+	BrokerageOrder,
+	BrokerageOrdersResponse,
+	FinancialAccount
+} from '$lib/types';
 import { privateUuid } from './crypto';
 import {
 	getEtradeAuthorization,
@@ -11,7 +16,9 @@ import {
 	type EtradeConfiguration
 } from './etrade-store';
 import { AppError } from './errors';
-import { getFinancialAccount } from './financial-records';
+import { reconstructBrokerageHistory } from './brokerage-history';
+import { getFinancialAccount, replaceEstimatedFinancialAccountHistory } from './financial-records';
+import { historicalCloseSeries } from './market-history';
 
 const ETRADE_API_ORIGIN = 'https://api.etrade.com';
 const ETRADE_AUTHORIZE_URL = 'https://us.etrade.com/e/t/etws/authorize';
@@ -43,6 +50,28 @@ interface EtradeAccount {
 	accountName: string;
 	accountStatus: string;
 	institutionType: string;
+}
+
+export interface EtradePosition {
+	symbol: string;
+	securityType: string;
+	quantity: number;
+	marketValue: number;
+}
+
+export interface EtradeTransaction {
+	date: string;
+	amount: number;
+	transactionType: string;
+	symbol: string | null;
+	securityType: string;
+	quantity: number;
+}
+
+interface EtradePortfolio {
+	positions: EtradePosition[];
+	cashBalance: number;
+	totalPages: number;
 }
 
 interface OAuthHeaderOptions {
@@ -249,6 +278,17 @@ function epochTimestamp(value: unknown): string | null {
 	return Number.isFinite(date.getTime()) ? date.toISOString() : null;
 }
 
+function transactionDate(value: unknown): string | null {
+	if (typeof value === 'string') {
+		const trimmed = value.trim();
+		if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+		const american = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(trimmed);
+		if (american) return `${american[3]}-${american[1]}-${american[2]}`;
+	}
+	const timestamp = epochTimestamp(value);
+	return timestamp?.slice(0, 10) ?? null;
+}
+
 function parseJson(body: string): JsonRecord {
 	if (!body.trim()) return {};
 	try {
@@ -325,6 +365,85 @@ function parseOrders(body: string, financialAccountId: string): BrokerageOrder[]
 	return parsed.slice(0, 500);
 }
 
+function parsePortfolio(body: string): EtradePortfolio {
+	const root = parseJson(body);
+	const response = asRecord(field(root, 'PortfolioResponse', 'portfolioResponse'));
+	const portfolios = asArray(field(response, 'AccountPortfolio', 'accountPortfolio'));
+	const positions: EtradePosition[] = [];
+	const responseTotals = asRecord(field(response, 'totals', 'Totals'));
+	let cashBalance = safeNumber(field(responseTotals, 'cashBalance', 'CashBalance'));
+	let foundAccountCashBalance = false;
+	for (const rawPortfolio of portfolios) {
+		const portfolio = asRecord(rawPortfolio);
+		const totals = asRecord(field(portfolio, 'totals', 'Totals'));
+		const accountCashBalance = field(totals, 'cashBalance', 'CashBalance');
+		if (accountCashBalance !== undefined) {
+			if (!foundAccountCashBalance) cashBalance = 0;
+			cashBalance += safeNumber(accountCashBalance);
+			foundAccountCashBalance = true;
+		}
+		for (const rawPosition of asArray(field(portfolio, 'Position', 'position'))) {
+			const position = asRecord(rawPosition);
+			const product = asRecord(field(position, 'Product', 'product'));
+			const symbol = safeText(field(product, 'symbol', 'Symbol'), 32);
+			if (!symbol) continue;
+			positions.push({
+				symbol,
+				securityType: safeText(field(product, 'securityType', 'SecurityType'), 32),
+				quantity: safeNumber(field(position, 'quantity', 'Quantity')),
+				marketValue: safeNumber(field(position, 'marketValue', 'MarketValue'))
+			});
+		}
+	}
+	const portfolioPages = portfolios.map((value) =>
+		safeNumber(field(asRecord(value), 'totalPages', 'TotalPages'), 1)
+	);
+	const totalPages = Math.max(
+		1,
+		Math.trunc(safeNumber(field(response, 'totalPages', 'TotalPages'), 1)),
+		...portfolioPages.map((value) => Math.trunc(value))
+	);
+	return { positions: positions.slice(0, 500), cashBalance, totalPages };
+}
+
+function parseTransactions(body: string): {
+	transactions: EtradeTransaction[];
+	marker: string | null;
+} {
+	const root = parseJson(body);
+	const response = asRecord(field(root, 'TransactionListResponse', 'transactionListResponse'));
+	const transactions = asArray(field(response, 'Transaction', 'transaction')).flatMap(
+		(rawTransaction) => {
+			const transaction = asRecord(rawTransaction);
+			const brokerage = asRecord(field(transaction, 'brokerage', 'Brokerage'));
+			const product = asRecord(field(brokerage, 'product', 'Product'));
+			const date = transactionDate(
+				field(transaction, 'transactionDate', 'TransactionDate', 'postDate', 'PostDate')
+			);
+			if (!date) return [];
+			const symbol = safeText(field(product, 'symbol', 'Symbol'), 32) || null;
+			return [
+				{
+					date,
+					amount: safeNumber(field(transaction, 'amount', 'Amount')),
+					transactionType: safeText(
+						field(transaction, 'transactionType', 'TransactionType'),
+						64,
+						'Other'
+					),
+					symbol,
+					securityType: safeText(field(product, 'securityType', 'SecurityType'), 32),
+					quantity: safeNumber(field(brokerage, 'quantity', 'Quantity'))
+				}
+			];
+		}
+	);
+	return {
+		transactions: transactions.slice(0, 2_000),
+		marker: safeText(field(response, 'marker', 'Marker'), 512) || null
+	};
+}
+
 async function requestJsonWithAccess(
 	requestUrl: string,
 	configuration: EtradeConfiguration,
@@ -352,11 +471,66 @@ async function requestJsonWithAccess(
 		await saveEtradeAuthorization({ state: 'disconnected' });
 		throw new AppError(
 			'ETRADE_RECONNECT_REQUIRED',
-			'Reconnect E*TRADE to load today’s orders.',
+			'Reconnect E*TRADE to load today’s account data.',
 			409
 		);
 	}
 	throw new EtradeHttpError(result.response.status);
+}
+
+async function loadEtradePortfolio(
+	account: EtradeAccount,
+	configuration: EtradeConfiguration,
+	authorization: Extract<EtradeAuthorization, { state: 'connected' }>
+): Promise<EtradePortfolio> {
+	const loadPage = async (pageNumber: number): Promise<EtradePortfolio> => {
+		const url = new URL(
+			`${ETRADE_API_ORIGIN}/v1/accounts/${encodeURIComponent(account.accountIdKey)}/portfolio.json`
+		);
+		url.searchParams.set('view', 'COMPLETE');
+		url.searchParams.set('totalsRequired', 'true');
+		url.searchParams.set('lotsRequired', 'false');
+		url.searchParams.set('count', '50');
+		url.searchParams.set('pageNumber', String(pageNumber));
+		return parsePortfolio(
+			await requestJsonWithAccess(url.toString(), configuration, authorization)
+		);
+	};
+	const first = await loadPage(1);
+	const positions = [...first.positions];
+	for (let page = 2; page <= Math.min(first.totalPages, 10); page += 1) {
+		positions.push(...(await loadPage(page)).positions);
+	}
+	return { positions: positions.slice(0, 500), cashBalance: first.cashBalance, totalPages: 1 };
+}
+
+async function loadEtradeTransactions(
+	account: EtradeAccount,
+	configuration: EtradeConfiguration,
+	authorization: Extract<EtradeAuthorization, { state: 'connected' }>,
+	startDate: string,
+	endDate: string
+): Promise<EtradeTransaction[]> {
+	const format = (date: string) => `${date.slice(5, 7)}${date.slice(8, 10)}${date.slice(0, 4)}`;
+	const transactions: EtradeTransaction[] = [];
+	let marker: string | null = null;
+	for (let page = 0; page < 40; page += 1) {
+		const url = new URL(
+			`${ETRADE_API_ORIGIN}/v1/accounts/${encodeURIComponent(account.accountIdKey)}/transactions.json`
+		);
+		url.searchParams.set('startDate', format(startDate));
+		url.searchParams.set('endDate', format(endDate));
+		url.searchParams.set('sortOrder', 'DESC');
+		url.searchParams.set('count', '50');
+		if (marker) url.searchParams.set('marker', marker);
+		const pageResult = parseTransactions(
+			await requestJsonWithAccess(url.toString(), configuration, authorization)
+		);
+		transactions.push(...pageResult.transactions);
+		if (!pageResult.marker || pageResult.marker === marker || transactions.length >= 2_000) break;
+		marker = pageResult.marker;
+	}
+	return transactions.slice(0, 2_000);
 }
 
 async function listEtradeAccounts(
@@ -629,6 +803,98 @@ export async function listEtradeOpenOrders(
 	};
 }
 
+export async function rebuildEtradeBrokerageHistory(
+	financialAccountId: string
+): Promise<BrokerageHistoryEstimateResponse> {
+	const financialAccount = await getFinancialAccount(financialAccountId);
+	const unavailable = (
+		availability: BrokerageHistoryEstimateResponse['availability']
+	): BrokerageHistoryEstimateResponse => ({
+		availability,
+		provider: 'etrade',
+		account: null,
+		estimatedPointCount: 0,
+		startDate: null,
+		endDate: null,
+		unpricedSymbols: [],
+		refreshedAt: null
+	});
+	if (financialAccount.accountType !== 'brokerage' || !isEtradeAccount(financialAccount)) {
+		return unavailable('account_not_found');
+	}
+	const configuration = await getEtradeConfiguration();
+	if (!configuration) return unavailable('not_configured');
+	const authorization = await getEtradeAuthorization();
+	if (authorization.state !== 'connected' || !connectedAuthorizationIsCurrent(authorization)) {
+		return unavailable('authorization_required');
+	}
+	const account = selectEtradeAccount(
+		financialAccount,
+		await listEtradeAccounts(configuration, authorization)
+	);
+	if (!account) return unavailable('account_not_found');
+
+	const end = new Date();
+	end.setUTCHours(0, 0, 0, 0);
+	end.setUTCDate(end.getUTCDate() - 1);
+	const start = new Date(end);
+	start.setUTCFullYear(start.getUTCFullYear() - 2);
+	const startDate = start.toISOString().slice(0, 10);
+	const endDate = end.toISOString().slice(0, 10);
+	let portfolio: EtradePortfolio;
+	let transactions: EtradeTransaction[];
+	try {
+		[portfolio, transactions] = await Promise.all([
+			loadEtradePortfolio(account, configuration, authorization),
+			loadEtradeTransactions(account, configuration, authorization, startDate, endDate)
+		]);
+	} catch (error) {
+		if (error instanceof AppError) throw error;
+		throw new AppError(
+			'ETRADE_UNAVAILABLE',
+			'E*TRADE could not load the portfolio history inputs.',
+			502
+		);
+	}
+	const symbols = [
+		...portfolio.positions.map((position) => position.symbol),
+		...transactions.flatMap((transaction) => (transaction.symbol ? [transaction.symbol] : []))
+	];
+	const prices = await historicalCloseSeries(symbols, startDate, endDate);
+	const estimate = reconstructBrokerageHistory(
+		financialAccount,
+		portfolio.positions,
+		portfolio.cashBalance,
+		transactions,
+		prices,
+		startDate,
+		endDate
+	);
+	if (estimate.points.length === 0) {
+		throw new AppError(
+			'MARKET_HISTORY_UNAVAILABLE',
+			'Historical closing prices are temporarily unavailable for this portfolio.',
+			502
+		);
+	}
+	const updatedAccount = await replaceEstimatedFinancialAccountHistory(
+		financialAccount.id,
+		estimate.points
+	);
+	return {
+		availability: 'available',
+		provider: 'etrade',
+		account: updatedAccount,
+		estimatedPointCount: updatedAccount.balanceHistory.filter(
+			(point) => point.source === 'estimated'
+		).length,
+		startDate,
+		endDate,
+		unpricedSymbols: estimate.unpricedSymbols,
+		refreshedAt: new Date().toISOString()
+	};
+}
+
 export function setEtradeFetchForTests(value?: EtradeFetch): void {
 	etradeFetch = value ?? fetch;
 }
@@ -637,5 +903,7 @@ export const etradeTestHelpers = {
 	easternDay,
 	parseAccounts,
 	parseOrders,
+	parsePortfolio,
+	parseTransactions,
 	selectEtradeAccount
 };

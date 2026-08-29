@@ -23,7 +23,8 @@ The operating-system account and browser are trusted. The service has no applica
 Browser memory -> Vercel edge and authenticated Function -> ciphertext in Neon
                                       |
                                       +-> Plaid when configured and invoked
-                                      +-> E*TRADE when configured and orders are viewed
+                                      +-> E*TRADE when configured and its data is requested
+                                      +-> Yahoo Finance when estimated history is built
                                       +-> Google during optional authentication
 
 Offline recovery material -> AES key and runtime DB password
@@ -39,7 +40,7 @@ The hosted model has one production hostname, one Vercel project, and one Neon p
 
 - Account and card nicknames, optional institution/issuer names and suffixes, current and historical brokerage balances, net contributions, brokerage cost basis, dates, autopay settings, and enabled transaction history
 - Plaid access tokens, Item IDs, transaction cursors, institution names, and derived account references
-- E*TRADE consumer credentials, request and access tokens, and open orders held in browser memory
+- E*TRADE consumer credentials, request and access tokens, open orders held in browser memory, and encrypted reconstructed history
 - The cloud AES key, mode-specific password hash or temporary bootstrap token/verifier, session and OAuth transaction cookies, and recovery bundles
 - Neon runtime and migration database credentials
 - Optional Google OAuth client secret and linked-identity fingerprint
@@ -51,7 +52,7 @@ The hosted model has one production hostname, one Vercel project, and one Neon p
 
 - Accidental commits of credentials, databases, exports, logs, screenshots, and personal metadata
 - Client-side exposure of server credentials or provider tokens
-- Excessive collection or retention from Plaid or E*TRADE responses
+- Excessive collection or retention from Plaid or E*TRADE responses, or unintended disclosure to the historical-price service
 - Public-internet password guessing where enabled, bootstrap-token theft/racing, session theft, host-header abuse, and cross-origin requests
 - Cross-tenant reads, writes, deletes, provider requests, or use of another tenant's provider credentials
 - Google account substitution, authorization-response mix-up, callback CSRF, code interception, and replay
@@ -72,7 +73,7 @@ The hosted model has one production hostname, one Vercel project, and one Neon p
 - Cloud mode is used only on the exact configured HTTPS hostname.
 - Infrastructure operators secure GitHub, Vercel, Neon, Google OAuth configuration, and recovery storage; each user secures their own Google, Plaid, and E*TRADE accounts with unique credentials and MFA.
 - Vercel is trusted to execute the application and protect Production environment variables. Neon is trusted for database availability and platform controls but is not entrusted with plaintext application fields.
-- npm, Vercel, Neon, and optional Google, Plaid, and E*TRADE integrations are trusted dependencies or processors within their documented roles.
+- npm, Vercel, Neon, and optional Google, Plaid, E*TRADE, and Yahoo Finance integrations are trusted dependencies or processors within their documented roles.
 - Production secrets are never assigned to Preview or Development, and untrusted changes are never deployed with them.
 - The dedicated Neon runtime role was created directly with SQL, not through Neon Console, CLI, or API role creation that grants `neon_superuser` membership. Provisioning verifies that it has no memberships, administrative attributes, effective DDL, or access outside ChipDue's compatibility-stable `carddue_*` tables.
 - The user verifies payment details with the card issuer.
@@ -100,7 +101,8 @@ The hosted model has one production hostname, one Vercel project, and one Neon p
 | Transport downgrade                      | Cloud requests require HTTPS as reported by the Vercel proxy; Vercel terminates public TLS; Neon URLs must require TLS                                                                                                                                                                                      |
 | Cross-site mutation                      | Exact Origin validation, Fetch Metadata rejection, same-origin requests, JSON-only bounded bodies, and no CORS                                                                                                                                                                                              |
 | Browser or CDN retains data              | Global `no-store` responses; no localStorage, sessionStorage, IndexedDB, service worker, or user-data prerendering                                                                                                                                                                                          |
-| Raw provider data expands exposure       | Google uses `openid` only and tokens are discarded; Plaid fields are allowlisted and encrypted; E*TRADE orders are allowlisted, held only in browser memory, and neither provider's raw responses are logged                                                                                                |
+| Raw provider data expands exposure       | Google uses `openid` only and tokens are discarded; Plaid fields are allowlisted and encrypted; E*TRADE responses are allowlisted and discarded after use; orders remain only in browser memory; reconstructed points are encrypted; raw responses are not logged                                           |
+| Price lookup leaks financial context     | Yahoo Finance receives only one allowlisted ticker and date range per request, without account identifiers, quantities, balances, or transaction details                                                                                                                                                    |
 | Logs reveal secrets or records           | Sanitized error envelopes; no intentional request bodies, cookies, query parameters, SQL values, decrypted fields, or raw provider errors in logs                                                                                                                                                           |
 | CI or releases publish private artifacts | Synthetic fixtures, no production secrets, no private artifact upload, privacy scan, clean build, full-history scan, and mandatory verified Vercel build wrapper                                                                                                                                            |
 | Calendar action expands disclosure       | Google drafts require an explicit per-event click and omit balances, amounts, and card numbers; authenticated `.ics` files omit amounts and are documented as private                                                                                                                                       |
@@ -113,7 +115,7 @@ The hosted model has one production hostname, one Vercel project, and one Neon p
 - A compromised browser extension
 - A compromised Vercel owner account, Function runtime, build supplied with Production secrets, or recovery bundle; each can access the cloud AES key
 - Simultaneous compromise of Neon ciphertext and the Vercel or recovery copy of the AES key
-- Compromise, malicious behavior, outage, suspension, or retention failures by Vercel, Neon, Google, Plaid, E*TRADE, or a connected institution
+- Compromise, malicious behavior, outage, suspension, or retention failures by Vercel, Neon, Google, Plaid, E*TRADE, Yahoo Finance, or a connected institution
 - A compromised Google account authenticating to its bound ChipDue tenant; the original password tenant may retain an independent recovery password, while Google-only users do not
 - An unlocked browser with an active Google session can reuse ambient Google SSO after ChipDue logout; shared-device containment also requires signing out of Google and locking the browser or operating-system profile
 - No in-application whole-account deletion, Google unlink, or rebind flow; these require a reviewed database operation and explicit session invalidation
