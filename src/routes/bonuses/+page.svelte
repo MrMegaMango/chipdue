@@ -2,6 +2,7 @@
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import {
+		automaticEarnedValueCents,
 		buildBonusOfferDraft,
 		buildBonusTracker,
 		getBonusOfferTemplate,
@@ -81,9 +82,8 @@
 	const pendingValueCents = $derived(
 		activeBonuses.reduce((total, bonus) => total + (bonus.rewardCents ?? 0), 0)
 	);
-	const paidBonuses = $derived(bonuses.filter((bonus) => bonus.status === 'paid'));
 	const earnedValueCents = $derived(
-		paidBonuses.reduce((total, bonus) => total + (bonus.rewardCents ?? 0), 0)
+		bonuses.reduce((total, bonus) => total + automaticEarnedValueCents(bonus, trackerFor(bonus)), 0)
 	);
 	const upcomingBonuses = $derived(
 		activeBonuses
@@ -615,7 +615,7 @@
 			</article>
 			<article>
 				<span>Earned value</span>
-				<strong>{loading ? '—' : formatMoney(paidBonuses.length ? earnedValueCents : null)}</strong>
+				<strong>{loading ? '—' : formatMoney(earnedValueCents)}</strong>
 			</article>
 			<article>
 				<span>Next requirement</span>

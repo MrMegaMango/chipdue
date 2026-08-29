@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AccountBonus, FinancialAccount, FinancialAccountTransaction } from '$lib/types';
 import {
+	automaticEarnedValueCents,
 	buildBonusOfferDraft,
 	buildBonusTracker,
 	getBonusOfferTemplate,
@@ -178,6 +179,45 @@ describe('versioned business bonus offer catalog', () => {
 				expect.stringContaining('Jan 27, 2027')
 			]
 		});
+	});
+
+	it('calculates earned value automatically from lifecycle and verified tracker evidence', () => {
+		const capitalOneAccount = {
+			...account,
+			institution: 'Capital One',
+			currentBalanceCents: 501_075
+		};
+		const capitalOneBonus: AccountBonus = {
+			...bonus,
+			offerTemplateId: 'capital-one-business-checking-sboffer500-2026',
+			institution: 'Capital One',
+			rewardCents: 50_000,
+			openedDate: '2026-06-01',
+			requirementDeadline: '2026-08-29'
+		};
+		const transactions = Array.from({ length: 10 }, (_, index) =>
+			transaction({
+				id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+				name: 'External ACH credit',
+				merchantName: null,
+				date: '2026-08-01'
+			})
+		);
+		const tracker = buildBonusTracker(capitalOneBonus, capitalOneAccount, transactions);
+
+		expect(automaticEarnedValueCents(capitalOneBonus, tracker, new Date(2026, 7, 28))).toBe(0);
+		expect(automaticEarnedValueCents(capitalOneBonus, tracker, new Date(2026, 7, 29))).toBe(50_000);
+		expect(automaticEarnedValueCents({ ...capitalOneBonus, status: 'qualified' }, null)).toBe(
+			50_000
+		);
+		expect(automaticEarnedValueCents({ ...capitalOneBonus, status: 'active' }, null)).toBe(0);
+		expect(
+			automaticEarnedValueCents(
+				{ ...capitalOneBonus, status: 'abandoned' },
+				tracker,
+				new Date(2026, 7, 29)
+			)
+		).toBe(0);
 	});
 });
 

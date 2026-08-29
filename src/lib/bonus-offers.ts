@@ -59,6 +59,33 @@ export interface BonusTracker {
 	likelyQualifyingTransactions: FinancialAccountTransaction[];
 }
 
+const EARNED_BONUS_STATUSES = new Set<AccountBonus['status']>(['qualified', 'pending', 'paid']);
+
+export function automaticEarnedValueCents(
+	bonus: AccountBonus,
+	tracker: BonusTracker | null,
+	today = new Date()
+): number {
+	if (bonus.paidDate || EARNED_BONUS_STATUSES.has(bonus.status)) {
+		return bonus.rewardCents ?? 0;
+	}
+	if (
+		bonus.status !== 'active' ||
+		!tracker ||
+		tracker.account.source !== 'connected' ||
+		!tracker.currentTier ||
+		!tracker.qualificationDeadline ||
+		tracker.likelyQualifyingTransactions.length < tracker.offer.transactionTarget
+	) {
+		return 0;
+	}
+	const todayKey = [today.getFullYear(), today.getMonth() + 1, today.getDate()]
+		.map((part, index) => (index === 0 ? String(part) : String(part).padStart(2, '0')))
+		.join('-');
+	if (todayKey < tracker.qualificationDeadline) return 0;
+	return Math.min(tracker.currentTier.rewardCents, bonus.rewardCents ?? tracker.offer.rewardCents);
+}
+
 const WELLS_FARGO_SOURCE = 'https://accountoffers.wellsfargo.com/business-checking-bonus/';
 const US_BANK_SOURCE =
 	'https://www.usbank.com/business-banking/banking-products/business-bank-accounts/business-checking-account.html';

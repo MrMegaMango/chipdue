@@ -344,6 +344,14 @@ describe('financial workspace navigation', () => {
 		}
 	});
 
+	it('calculates earned bonus value instead of asking for manual entry', () => {
+		expect(bonusesSource).toContain('automaticEarnedValueCents');
+		expect(bonusesSource).toContain('formatMoney(earnedValueCents)');
+		expect(bonusesSource).not.toContain(
+			'formatMoney(paidBonuses.length ? earnedValueCents : null)'
+		);
+	});
+
 	it('shows generic live trackers backed by verified offer templates', () => {
 		for (const marker of [
 			'Verified offer',
