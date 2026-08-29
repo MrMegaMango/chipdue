@@ -610,6 +610,11 @@
 
 	function selectableRewardProfiles(card: CardView): AutomaticCardRewardProfile[] {
 		const identity = `${card.issuer ?? ''} ${card.nickname}`;
+		if (/\b(american\s+express|amex|blue\s+cash)\b/i.test(identity)) {
+			return AUTOMATIC_CARD_REWARD_PROFILES.filter(
+				(profile) => profile.issuer === 'American Express'
+			);
+		}
 		if (/\b(chase|jpmorgan)\b/i.test(identity)) {
 			return AUTOMATIC_CARD_REWARD_PROFILES.filter((profile) => profile.issuer === 'Chase');
 		}
@@ -617,6 +622,10 @@
 			return AUTOMATIC_CARD_REWARD_PROFILES.filter((profile) => profile.issuer === 'Venmo');
 		}
 		return AUTOMATIC_CARD_REWARD_PROFILES;
+	}
+
+	function isGenericPlaidCardName(name: string): boolean {
+		return /^\s*(?:credit\s+card|visa|mastercard|american\s+express|card)\s*$/i.test(name);
 	}
 
 	async function requestJson<T>(
@@ -3539,7 +3548,9 @@
 								? 'Identified automatically from the linked card. No setup is needed.'
 								: rewardsCard.rewardType
 									? 'Review the earning rules used for activity estimates.'
-									: 'Plaid sent a generic card name. Choose the card once and ChipDue fills every rule.'}
+									: isGenericPlaidCardName(rewardsCard.nickname)
+										? 'Plaid sent a generic card name. Choose the card once and ChipDue fills every rule.'
+										: 'ChipDue has the card name, but does not have a verified reward profile for it yet.'}
 						</p>
 					</div>
 					<button
@@ -3618,7 +3629,11 @@
 							{/if}
 						{:else}
 							<div class="reward-profile-missing">
-								<strong>Plaid only returned “{rewardsCard.nickname}”</strong>
+								<strong>
+									{isGenericPlaidCardName(rewardsCard.nickname)
+										? `Plaid only returned “${rewardsCard.nickname}”`
+										: `No verified profile for “${rewardsCard.nickname}” yet`}
+								</strong>
 								<p>
 									Select the card once. Its program, multipliers, and categories fill automatically.
 								</p>

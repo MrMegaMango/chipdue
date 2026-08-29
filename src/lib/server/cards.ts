@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
 	automaticCardRewardProfileById,
+	matchAutomaticCardRewardProfile,
 	type AutomaticCardRewardProfile,
 	type CardRewardCalculation
 } from '$lib/card-reward-profiles';
@@ -397,7 +398,7 @@ function decodePayload(row: CardRow): CardPayload | null {
 function rowToCard(row: CardRow): Card | null {
 	const payload = decodePayload(row);
 	if (!payload) return null;
-	const rewards = normalizeStoredRewards(payload.rewards);
+	const rewards = effectiveRewardsForPayload(payload);
 	return {
 		id: row.id,
 		source: publicSourceForStoredSource(row.source),
@@ -539,6 +540,17 @@ function automaticStoredRewards(profile: AutomaticCardRewardProfile): StoredCard
 			...category
 		}))
 	};
+}
+
+function effectiveRewardsForPayload(payload: CardPayload): NormalizedCardRewards {
+	const stored = normalizeStoredRewards(payload.rewards);
+	if (stored.source) return stored;
+	const inferredProfile = matchAutomaticCardRewardProfile({
+		institutionName: payload.issuer,
+		accountName: payload.nickname,
+		officialName: null
+	});
+	return inferredProfile ? normalizeStoredRewards(automaticStoredRewards(inferredProfile)) : stored;
 }
 
 function rewardsForSnapshot(
@@ -1235,7 +1247,7 @@ export async function listCardTransactions(
 			409
 		);
 	}
-	const rewards = normalizeStoredRewards(payload?.rewards);
+	const rewards = effectiveRewardsForPayload(payload);
 	const rankedRates =
 		rewards.calculation === 'venmo_spend_ranked'
 			? venmoRankedRewardRates(history.transactions, payload.statementDate)

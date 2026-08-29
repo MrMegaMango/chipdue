@@ -601,6 +601,82 @@ describe.sequential('Plaid transaction history', () => {
 		);
 	});
 
+	it('classifies Blue Cash Preferred purchases without asking for a card selection', async () => {
+		const itemId = await savePlaidItem(
+			'provider-item-amex-rewards',
+			'test-access-value',
+			'American Express'
+		);
+		plaidMocks.accountsGet.mockResolvedValue({
+			data: {
+				accounts: [
+					{
+						...liabilityResponse().data.accounts[0],
+						name: 'Blue Cash Preferred®',
+						official_name: null
+					}
+				]
+			}
+		});
+		plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
+		plaidMocks.transactionsSync.mockResolvedValueOnce({
+			data: {
+				added: [
+					{
+						...transaction('amex-grocery', 100, 'Synthetic grocery', '2026-08-20'),
+						personal_finance_category: {
+							primary: 'FOOD_AND_DRINK',
+							detailed: 'FOOD_AND_DRINK_GROCERIES'
+						}
+					},
+					{
+						...transaction('amex-streaming', 20, 'Synthetic streaming', '2026-08-19'),
+						personal_finance_category: {
+							primary: 'ENTERTAINMENT',
+							detailed: 'ENTERTAINMENT_TV_AND_MOVIES'
+						}
+					},
+					{
+						...transaction('amex-gas', 50, 'Synthetic gas', '2026-08-18'),
+						personal_finance_category: {
+							primary: 'TRANSPORTATION',
+							detailed: 'TRANSPORTATION_GAS'
+						}
+					},
+					{
+						...transaction('amex-transit', 30, 'Synthetic transit', '2026-08-17'),
+						personal_finance_category: {
+							primary: 'TRANSPORTATION',
+							detailed: 'TRANSPORTATION_PUBLIC_TRANSIT'
+						}
+					}
+				],
+				modified: [],
+				removed: [],
+				next_cursor: 'cursor-amex-rewards',
+				has_more: false,
+				transactions_update_status: 'HISTORICAL_UPDATE_COMPLETE'
+			}
+		});
+
+		await syncPlaidItem(itemId, { enableTransactions: true });
+		const [card] = await listCards();
+		const history = await listCardTransactions(card.id);
+		expect(card).toMatchObject({
+			nickname: 'Blue Cash Preferred®',
+			rewardProgramName: 'Amex Reward Dollars',
+			rewardType: 'cash_back',
+			rewardSource: 'automatic',
+			rewardProfileName: 'Blue Cash Preferred'
+		});
+		expect(history.transactions.map((entry) => entry.rewardEstimate)).toEqual([
+			expect.objectContaining({ rate: 6, amount: 600 }),
+			expect.objectContaining({ rate: 6, amount: 120 }),
+			expect.objectContaining({ rate: 3, amount: 150 }),
+			expect.objectContaining({ rate: 3, amount: 90 })
+		]);
+	});
+
 	it('keeps a selected product profile when Plaid continues returning a generic card name', async () => {
 		const itemId = await savePlaidItem(
 			'provider-item-selected-rewards',

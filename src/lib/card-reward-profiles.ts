@@ -4,7 +4,7 @@ export type CardRewardCalculation = 'static' | 'venmo_spend_ranked';
 
 export interface AutomaticCardRewardProfile {
 	id: string;
-	issuer: 'Chase' | 'Venmo';
+	issuer: 'American Express' | 'Chase' | 'Venmo';
 	cardName: string;
 	programName: string;
 	rewardType: CardRewardType;
@@ -139,6 +139,57 @@ const PROFILE_MATCHERS: ProfileMatcher[] = [
 				{ name: 'Dining', multiplier: 2, matchCategory: 'dining' },
 				{ name: 'Gas', multiplier: 2, matchCategory: 'gas' },
 				{ name: 'Transit', multiplier: 2, matchCategory: 'transit' }
+			]
+		}
+	},
+	{
+		product: /\bblue\s+cash\s+preferred\b/i,
+		profile: {
+			id: 'amex-blue-cash-preferred',
+			issuer: 'American Express',
+			cardName: 'Blue Cash Preferred',
+			programName: 'Amex Reward Dollars',
+			rewardType: 'cash_back',
+			baseRate: 1,
+			calculation: 'static',
+			categories: [
+				{
+					name: 'U.S. supermarkets (up to $6,000/year)',
+					multiplier: 6,
+					matchCategory: 'groceries'
+				},
+				{ name: 'Select U.S. streaming', multiplier: 6, matchCategory: 'streaming' },
+				{ name: 'U.S. gas stations', multiplier: 3, matchCategory: 'gas' },
+				{ name: 'Transit', multiplier: 3, matchCategory: 'transit' }
+			]
+		}
+	},
+	{
+		product: /\bblue\s+cash\s+everyday\b/i,
+		profile: {
+			id: 'amex-blue-cash-everyday',
+			issuer: 'American Express',
+			cardName: 'Blue Cash Everyday',
+			programName: 'Amex Reward Dollars',
+			rewardType: 'cash_back',
+			baseRate: 1,
+			calculation: 'static',
+			categories: [
+				{
+					name: 'U.S. supermarkets (up to $6,000/year)',
+					multiplier: 3,
+					matchCategory: 'groceries'
+				},
+				{
+					name: 'U.S. gas stations (up to $6,000/year)',
+					multiplier: 3,
+					matchCategory: 'gas'
+				},
+				{
+					name: 'U.S. online retail (up to $6,000/year)',
+					multiplier: 3,
+					matchCategory: 'online_shopping'
+				}
 			]
 		}
 	},

@@ -33,6 +33,43 @@ describe('automatic card reward profiles', () => {
 		).toBeNull();
 	});
 
+	it('recognizes Blue Cash Preferred directly from the Plaid account name', () => {
+		expect(
+			matchAutomaticCardRewardProfile({
+				institutionName: 'American Express',
+				accountName: 'Blue Cash Preferred®',
+				officialName: null
+			})
+		).toMatchObject({
+			issuer: 'American Express',
+			cardName: 'Blue Cash Preferred',
+			programName: 'Amex Reward Dollars',
+			rewardType: 'cash_back',
+			baseRate: 1,
+			categories: expect.arrayContaining([
+				expect.objectContaining({ multiplier: 6, matchCategory: 'groceries' }),
+				expect.objectContaining({ multiplier: 6, matchCategory: 'streaming' }),
+				expect.objectContaining({ multiplier: 3, matchCategory: 'gas' }),
+				expect.objectContaining({ multiplier: 3, matchCategory: 'transit' })
+			])
+		});
+	});
+
+	it('distinguishes Blue Cash Everyday from Blue Cash Preferred', () => {
+		expect(
+			matchAutomaticCardRewardProfile({
+				institutionName: 'American Express',
+				accountName: 'Blue Cash Everyday®',
+				officialName: null
+			})
+		).toMatchObject({
+			cardName: 'Blue Cash Everyday',
+			categories: expect.arrayContaining([
+				expect.objectContaining({ multiplier: 3, matchCategory: 'online_shopping' })
+			])
+		});
+	});
+
 	it('looks up a complete profile from a one-time product selection', () => {
 		expect(automaticCardRewardProfileById('chase-freedom-unlimited')).toMatchObject({
 			issuer: 'Chase',

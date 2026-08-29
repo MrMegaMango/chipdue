@@ -223,6 +223,35 @@ describe.sequential('cards API contract', () => {
 		expect(invalidResponse.status).toBe(400);
 	});
 
+	it('automatically infers a recognizable card without requiring another sync', async () => {
+		const response = await createCard(
+			new Request('http://localhost/api/cards', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json', origin: 'http://localhost' },
+				body: JSON.stringify({
+					nickname: 'Blue Cash Preferred®',
+					issuer: 'American Express'
+				})
+			})
+		);
+
+		expect(response.status).toBe(201);
+		const payload = await response.json();
+		expect(payload.card).toMatchObject({
+			rewardProgramName: 'Amex Reward Dollars',
+			rewardType: 'cash_back',
+			rewardBaseRate: 1,
+			rewardSource: 'automatic',
+			rewardProfileName: 'Blue Cash Preferred'
+		});
+		expect(payload.card.rewardCategories).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ multiplier: 6, matchCategory: 'groceries' }),
+				expect.objectContaining({ multiplier: 3, matchCategory: 'transit' })
+			])
+		);
+	});
+
 	it('rejects non-JSON and cross-origin mutations without reflecting input', async () => {
 		const nonJsonResponse = await createCard(
 			new Request('http://localhost/api/cards', {
