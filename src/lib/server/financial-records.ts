@@ -100,7 +100,14 @@ const investmentHoldingSchema = z.object({
 });
 const balanceHistoryPointSchema = z.object({
 	recordedAt: z.string().refine((value) => Number.isFinite(new Date(value).getTime())),
-	balanceCents: z.number().int().min(-100_000_000_000).max(100_000_000_000)
+	balanceCents: z.number().int().min(-100_000_000_000).max(100_000_000_000),
+	netContributionsCents: z
+		.number()
+		.int()
+		.min(-100_000_000_000)
+		.max(100_000_000_000)
+		.nullable()
+		.optional()
 });
 const transactionHistoryStatusSchema = z
 	.enum([
@@ -170,6 +177,7 @@ const accountPayloadSchema = z.object({
 	currency: z.string(),
 	currentBalanceCents: nullableCentsSchema,
 	costBasisCents: nullableCentsSchema,
+	netContributionsCents: nullableCentsSchema.optional(),
 	balanceHistory: z
 		.array(balanceHistoryPointSchema)
 		.max(MAX_BALANCE_HISTORY_POINTS)
@@ -213,12 +221,13 @@ function appendBalanceHistoryPoint(
 	history: AccountBalanceHistoryPoint[],
 	accountType: AccountPayload['accountType'],
 	balanceCents: number | null,
+	netContributionsCents: number | null,
 	recordedAt: string
 ): AccountBalanceHistoryPoint[] {
 	if (accountType !== 'brokerage') return [];
 	if (balanceCents === null || !Number.isFinite(new Date(recordedAt).getTime())) return history;
 
-	const next = [...history, { recordedAt, balanceCents }]
+	const next = [...history, { recordedAt, balanceCents, netContributionsCents }]
 		.sort((left, right) => left.recordedAt.localeCompare(right.recordedAt))
 		.filter(
 			(point, index, points) =>
@@ -232,15 +241,31 @@ function accountBalanceHistory(
 	row: Pick<PrivateRecordRow, 'last_synced_at' | 'updated_at' | 'created_at'>
 ): AccountBalanceHistoryPoint[] {
 	if (payload.accountType !== 'brokerage') return [];
-	if (payload.balanceHistory.length > 0 || payload.currentBalanceCents === null) {
-		return payload.balanceHistory;
+	const netContributionsCents = accountNetContributions(payload);
+	if (payload.balanceHistory.length > 0) {
+		return payload.balanceHistory.map((point, index) => ({
+			...point,
+			netContributionsCents:
+				point.netContributionsCents === undefined
+					? index === payload.balanceHistory.length - 1
+						? netContributionsCents
+						: null
+					: point.netContributionsCents
+		}));
 	}
+	if (payload.currentBalanceCents === null) return [];
 	return [
 		{
 			recordedAt: row.last_synced_at ?? row.updated_at ?? row.created_at,
-			balanceCents: payload.currentBalanceCents
+			balanceCents: payload.currentBalanceCents,
+			netContributionsCents
 		}
 	];
+}
+
+function accountNetContributions(payload: AccountPayload): number | null {
+	if (payload.accountType !== 'brokerage') return null;
+	return payload.netContributionsCents ?? null;
 }
 
 function decodeRecord(row: PrivateRecordRow): PrivateRecordPayload | null {
@@ -278,6 +303,7 @@ function rowToAccount(row: PrivateRecordRow, payload: AccountPayload): Financial
 		currency: payload.currency,
 		currentBalanceCents: payload.currentBalanceCents,
 		costBasisCents: payload.costBasisCents,
+		netContributionsCents: accountNetContributions(payload),
 		balanceHistory: accountBalanceHistory(payload, row),
 		holdings: payload.holdings,
 		transactionHistoryEnabled: payload.transactionHistory?.enabled === true,
@@ -443,6 +469,7 @@ export async function createFinancialAccount(
 				[],
 				input.accountType,
 				input.currentBalanceCents,
+				input.netContributionsCents,
 				now
 			),
 			holdings: []
@@ -482,12 +509,18 @@ export async function updateFinancialAccount(
 		changes.currentBalanceCents === undefined
 			? existing.currentBalanceCents
 			: changes.currentBalanceCents;
+	const netContributionsCents =
+		changes.netContributionsCents === undefined
+			? existing.netContributionsCents
+			: changes.netContributionsCents;
 	const shouldRecordBalance =
 		accountType === 'brokerage' &&
 		currentBalanceCents !== null &&
 		(existing.accountType !== 'brokerage' ||
 			(changes.currentBalanceCents !== undefined &&
-				changes.currentBalanceCents !== existing.currentBalanceCents));
+				changes.currentBalanceCents !== existing.currentBalanceCents) ||
+			(changes.netContributionsCents !== undefined &&
+				changes.netContributionsCents !== existing.netContributionsCents));
 	const now = new Date().toISOString();
 	const payload: AccountPayload = {
 		recordType: 'account',
@@ -503,11 +536,13 @@ export async function updateFinancialAccount(
 		currentBalanceCents,
 		costBasisCents:
 			changes.costBasisCents === undefined ? existing.costBasisCents : changes.costBasisCents,
+		netContributionsCents: accountType === 'brokerage' ? netContributionsCents : null,
 		balanceHistory: shouldRecordBalance
 			? appendBalanceHistoryPoint(
 					accountBalanceHistory(existingPayload, row),
 					accountType,
 					currentBalanceCents,
+					netContributionsCents,
 					now
 				)
 			: accountType === 'brokerage'
@@ -537,17 +572,11 @@ export async function deleteFinancialAccount(id: string): Promise<void> {
 function connectedAccountPayload(
 	snapshot: ConnectedFinancialAccountSnapshot,
 	syncedAt: string,
-	existing?: { payload: AccountPayload; recordedAt: string }
+	existing?: { payload: AccountPayload; row: PrivateRecordRow }
 ): AccountPayload {
 	const existingPayload = existing?.payload;
-	const history = existingPayload
-		? appendBalanceHistoryPoint(
-				existingPayload.balanceHistory,
-				existingPayload.accountType,
-				existingPayload.currentBalanceCents,
-				existing.recordedAt
-			)
-		: [];
+	const history = existingPayload ? accountBalanceHistory(existingPayload, existing.row) : [];
+	const netContributionsCents = existingPayload?.netContributionsCents ?? null;
 	return {
 		...tenantPayloadFields(),
 		recordType: 'account',
@@ -563,10 +592,12 @@ function connectedAccountPayload(
 		currency: snapshot.currency,
 		currentBalanceCents: snapshot.currentBalanceCents,
 		costBasisCents: snapshot.costBasisCents ?? existingPayload?.costBasisCents ?? null,
+		netContributionsCents,
 		balanceHistory: appendBalanceHistoryPoint(
 			history,
 			snapshot.accountType,
 			snapshot.currentBalanceCents,
+			netContributionsCents,
 			syncedAt
 		),
 		holdings: snapshot.holdings ?? existingPayload?.holdings ?? [],
@@ -625,8 +656,7 @@ async function replaceCloudConnectedAccounts(
 				current
 					? {
 							payload: current.payload,
-							recordedAt:
-								current.row.last_synced_at ?? current.row.updated_at ?? current.row.created_at
+							row: current.row
 						}
 					: undefined
 			),
@@ -693,8 +723,7 @@ function replaceLocalConnectedAccounts(
 					current
 						? {
 								payload: current.payload,
-								recordedAt:
-									current.row.last_synced_at ?? current.row.updated_at ?? current.row.created_at
+								row: current.row
 							}
 						: undefined
 				),

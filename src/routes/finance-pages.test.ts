@@ -17,12 +17,13 @@ describe('financial workspace navigation', () => {
 	it('supports personal, business, and brokerage account tracking', () => {
 		expect(accountsSource).toContain('<option value="business">Business</option>');
 		expect(accountsSource).toContain('<option value="brokerage">Brokerage</option>');
-		expect(accountsSource).toContain('Cost basis / contributions');
-		expect(accountsSource).toContain('Brokerage performance');
+		expect(accountsSource).toContain('Net contributions');
+		expect(accountsSource).toContain('Investment return');
 		expect(accountsSource).toContain('Current price');
 		expect(accountsSource).toContain('account.holdings');
 		expect(accountsSource).toContain('BalanceHistoryChart');
 		expect(accountsSource).toContain('points={account.balanceHistory}');
+		expect(accountsSource).toContain('netContributionsCents={account.netContributionsCents}');
 	});
 
 	it('shows institution branding on account cards', () => {

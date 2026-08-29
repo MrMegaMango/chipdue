@@ -140,6 +140,7 @@ export interface InvestmentHolding {
 export interface AccountBalanceHistoryPoint {
 	recordedAt: string;
 	balanceCents: number;
+	netContributionsCents: number | null;
 }
 
 export interface BrokerageOrder {
@@ -183,6 +184,7 @@ export interface FinancialAccount {
 	currency: string;
 	currentBalanceCents: number | null;
 	costBasisCents: number | null;
+	netContributionsCents: number | null;
 	balanceHistory: AccountBalanceHistoryPoint[];
 	holdings: InvestmentHolding[];
 	transactionHistoryEnabled: boolean;

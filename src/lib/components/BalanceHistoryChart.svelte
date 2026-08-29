@@ -2,17 +2,23 @@
 	import type { AccountBalanceHistoryPoint } from '$lib/types';
 
 	type HistoryRange = '1M' | '3M' | '1Y' | 'ALL';
-	type ChartPoint = AccountBalanceHistoryPoint & { x: number; y: number };
+	type ChartPoint = AccountBalanceHistoryPoint & {
+		x: number;
+		y: number;
+		contributionsY: number | null;
+	};
 
 	let {
 		accountId,
 		accountName,
 		currency,
+		netContributionsCents,
 		points
 	}: {
 		accountId: string;
 		accountName: string;
 		currency: string;
+		netContributionsCents: number | null;
 		points: AccountBalanceHistoryPoint[];
 	} = $props();
 
@@ -50,16 +56,18 @@
 	);
 	const visiblePoints = $derived(pointsForRange(sortedPoints, selectedRange));
 	const chart = $derived(chartFor(visiblePoints));
-	const firstPoint = $derived(visiblePoints[0]);
 	const latestPoint = $derived(visiblePoints.at(-1));
-	const changeCents = $derived(
-		firstPoint && latestPoint && visiblePoints.length > 1
-			? latestPoint.balanceCents - firstPoint.balanceCents
+	const latestContributionsCents = $derived(
+		latestPoint?.netContributionsCents ?? netContributionsCents
+	);
+	const investmentReturnCents = $derived(
+		latestPoint && latestContributionsCents !== null
+			? latestPoint.balanceCents - latestContributionsCents
 			: null
 	);
-	const changePercent = $derived(
-		changeCents !== null && firstPoint?.balanceCents
-			? (changeCents / Math.abs(firstPoint.balanceCents)) * 100
+	const investmentReturnPercent = $derived(
+		investmentReturnCents !== null && latestContributionsCents
+			? (investmentReturnCents / Math.abs(latestContributionsCents)) * 100
 			: null
 	);
 	const hoveredPoint = $derived(
@@ -82,11 +90,17 @@
 	function chartFor(history: AccountBalanceHistoryPoint[]): {
 		points: ChartPoint[];
 		linePath: string;
+		contributionsPath: string;
 		areaPath: string;
 		ticks: Array<{ value: number; y: number }>;
 	} {
-		if (history.length === 0) return { points: [], linePath: '', areaPath: '', ticks: [] };
-		const values = history.map((point) => point.balanceCents);
+		if (history.length === 0) {
+			return { points: [], linePath: '', contributionsPath: '', areaPath: '', ticks: [] };
+		}
+		const values = history.flatMap((point) => [
+			point.balanceCents,
+			...(point.netContributionsCents === null ? [] : [point.netContributionsCents])
+		]);
 		const rawMin = Math.min(...values);
 		const rawMax = Math.max(...values);
 		const valueRange = rawMax - rawMin;
@@ -106,11 +120,25 @@
 					history.length === 1 || timeRange === 0
 						? PLOT_LEFT + plotWidth / 2
 						: PLOT_LEFT + ((time - firstTime) / timeRange) * plotWidth,
-				y: PLOT_TOP + ((max - point.balanceCents) / (max - min)) * plotHeight
+				y: PLOT_TOP + ((max - point.balanceCents) / (max - min)) * plotHeight,
+				contributionsY:
+					point.netContributionsCents === null
+						? null
+						: PLOT_TOP + ((max - point.netContributionsCents) / (max - min)) * plotHeight
 			};
 		});
 		const linePath = scaled
 			.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`)
+			.join(' ');
+		const contributionPoints = scaled.filter(
+			(point): point is ChartPoint & { contributionsY: number } => point.contributionsY !== null
+		);
+		const contributionsPath = contributionPoints
+			.map((point, index) =>
+				index === 0
+					? `M ${point.x} ${point.contributionsY}`
+					: `H ${point.x} V ${point.contributionsY}`
+			)
 			.join(' ');
 		const floor = HEIGHT - PLOT_BOTTOM;
 		const areaPath =
@@ -121,7 +149,7 @@
 			value,
 			y: PLOT_TOP + ((max - value) / (max - min)) * plotHeight
 		}));
-		return { points: scaled, linePath, areaPath, ticks };
+		return { points: scaled, linePath, contributionsPath, areaPath, ticks };
 	}
 
 	function formatMoney(balanceCents: number): string {
@@ -162,24 +190,9 @@
 <section class="balance-history" aria-labelledby={`history-title-${accountId}`}>
 	<div class="history-heading">
 		<div>
-			<p>Portfolio value</p>
-			<h4 id={`history-title-${accountId}`}>Balance history</h4>
+			<p>Portfolio history</p>
+			<h4 id={`history-title-${accountId}`}>Growth breakdown</h4>
 		</div>
-		{#if latestPoint}
-			<div class="history-change" class:negative={changeCents !== null && changeCents < 0}>
-				<strong>{formatMoney(latestPoint.balanceCents)}</strong>
-				<span>
-					{#if changeCents === null}
-						Starting value
-					{:else}
-						{changeCents >= 0 ? '+' : ''}{formatMoney(changeCents)}
-						{#if changePercent !== null}
-							· {changePercent >= 0 ? '+' : ''}{changePercent.toFixed(1)}%
-						{/if}
-					{/if}
-				</span>
-			</div>
-		{/if}
 	</div>
 
 	{#if sortedPoints.length === 0}
@@ -194,19 +207,55 @@
 			</div>
 		</div>
 	{:else}
-		<div class="range-controls" aria-label="Balance history range">
-			{#each ranges as range (range.id)}
-				<button
-					type="button"
-					aria-pressed={selectedRange === range.id}
-					onclick={() => {
-						selectedRange = range.id;
-						hoveredIndex = null;
-					}}
-				>
-					{range.label}
-				</button>
-			{/each}
+		{#if latestPoint}
+			<div class="history-metrics">
+				<div>
+					<span>Portfolio value</span>
+					<strong>{formatMoney(latestPoint.balanceCents)}</strong>
+				</div>
+				<div class="contributions">
+					<span>Net contributions</span>
+					<strong>
+						{latestContributionsCents === null
+							? 'Not entered'
+							: formatMoney(latestContributionsCents)}
+					</strong>
+				</div>
+				<div class:negative={investmentReturnCents !== null && investmentReturnCents < 0}>
+					<span>Investment return</span>
+					<strong>
+						{investmentReturnCents === null
+							? '—'
+							: `${investmentReturnCents >= 0 ? '+' : ''}${formatMoney(investmentReturnCents)}`}
+					</strong>
+					{#if investmentReturnPercent !== null}
+						<small>
+							{investmentReturnPercent >= 0 ? '+' : ''}{investmentReturnPercent.toFixed(1)}%
+						</small>
+					{/if}
+				</div>
+			</div>
+		{/if}
+
+		<div class="chart-toolbar">
+			<div class="chart-legend" aria-label="Chart legend">
+				<span><i class="portfolio"></i>Portfolio value</span>
+				<span><i class="contributions"></i>Net contributions</span>
+			</div>
+			<div class="range-controls" aria-label="Balance history range">
+				{#each ranges as range (range.id)}
+					<button
+						type="button"
+						aria-pressed={selectedRange === range.id}
+						onclick={() => {
+							selectedRange = range.id;
+							hoveredIndex = null;
+						}}
+					>
+						{range.label}
+					</button>
+				{/each}
+			</div>
 		</div>
 
 		<div class="chart-wrap">
@@ -244,6 +293,9 @@
 				{:else}
 					<path d={chart.linePath} class="value-line" />
 				{/if}
+				{#if chart.contributionsPath}
+					<path d={chart.contributionsPath} class="contributions-line" />
+				{/if}
 				{#each chart.points as point, index (point.recordedAt)}
 					{#if index === chart.points.length - 1 || index === hoveredIndex}
 						<circle
@@ -251,6 +303,14 @@
 							cy={point.y}
 							r={index === hoveredIndex ? 6 : 4.5}
 							class="value-dot"
+						/>
+					{/if}
+					{#if point.contributionsY !== null && (index === chart.points.length - 1 || index === hoveredIndex)}
+						<circle
+							cx={point.x}
+							cy={point.contributionsY}
+							r={index === hoveredIndex ? 5.5 : 4}
+							class="contributions-dot"
 						/>
 					{/if}
 				{/each}
@@ -265,14 +325,24 @@
 					class="chart-tooltip"
 					style={`left: ${(hoveredPoint.x / WIDTH) * 100}%; top: ${(hoveredPoint.y / HEIGHT) * 100}%`}
 				>
-					<strong>{formatMoney(hoveredPoint.balanceCents)}</strong>
+					<strong>Portfolio {formatMoney(hoveredPoint.balanceCents)}</strong>
+					{#if hoveredPoint.netContributionsCents !== null}
+						<span>Contributions {formatMoney(hoveredPoint.netContributionsCents)}</span>
+						<span>
+							Return {hoveredPoint.balanceCents - hoveredPoint.netContributionsCents >= 0
+								? '+'
+								: ''}{formatMoney(hoveredPoint.balanceCents - hoveredPoint.netContributionsCents)}
+						</span>
+					{/if}
 					<span>{formatDate(hoveredPoint.recordedAt, true)}</span>
 				</div>
 			{/if}
 		</div>
 
 		<p class="history-footnote">
-			{#if sortedPoints.length === 1}
+			{#if latestContributionsCents === null}
+				Add net contributions in account details to separate deposits from investment return.
+			{:else if sortedPoints.length === 1}
 				History starts here. Each saved balance or successful sync adds a new point.
 			{:else}
 				{visiblePoints.length} snapshots · {formatDate(
@@ -281,14 +351,24 @@
 				)}–{formatDate(visiblePoints.at(-1)!.recordedAt, true)}
 			{/if}
 		</p>
+		{#if latestContributionsCents !== null}
+			<p class="return-explainer">
+				Investment return is value minus net contributions. It includes market movement, dividends,
+				interest, and fees.
+			</p>
+		{/if}
 
 		<table class="visually-hidden">
-			<caption>{accountName} balance history</caption>
-			<thead><tr><th>Date</th><th>Balance</th></tr></thead>
+			<caption>{accountName} portfolio history</caption>
+			<thead><tr><th>Date</th><th>Portfolio value</th><th>Net contributions</th></tr></thead>
 			<tbody>
 				{#each visiblePoints as point (point.recordedAt)}
 					<tr
 						><td>{formatDate(point.recordedAt, true)}</td><td>{formatMoney(point.balanceCents)}</td
+						><td
+							>{point.netContributionsCents === null
+								? 'Not entered'
+								: formatMoney(point.netContributionsCents)}</td
 						></tr
 					>
 				{/each}
@@ -327,31 +407,96 @@
 		font-size: 0.76rem;
 	}
 
-	.history-change {
+	.history-metrics {
 		display: grid;
-		gap: 0.12rem;
-		text-align: right;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 1px;
+		margin-top: 0.75rem;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		background: var(--line);
+		overflow: hidden;
 	}
 
-	.history-change strong {
-		font-size: 0.85rem;
+	.history-metrics > div {
+		display: grid;
+		min-width: 0;
+		padding: 0.58rem 0.65rem;
+		background: rgba(255, 253, 249, 0.92);
 	}
 
-	.history-change span {
+	.history-metrics span {
+		margin-bottom: 0.16rem;
+		color: var(--faint);
+		font-size: 0.52rem;
+		font-weight: 720;
+		letter-spacing: 0.035em;
+		text-transform: uppercase;
+	}
+
+	.history-metrics strong {
+		overflow: hidden;
+		font-size: 0.78rem;
+		letter-spacing: -0.018em;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.history-metrics > div:last-child strong,
+	.history-metrics > div:last-child small {
 		color: var(--positive);
+	}
+
+	.history-metrics > div.negative strong,
+	.history-metrics > div.negative small {
+		color: var(--red);
+	}
+
+	.history-metrics small {
 		font-size: 0.58rem;
 		font-weight: 720;
 	}
 
-	.history-change.negative span {
-		color: var(--red);
+	.chart-toolbar {
+		display: flex;
+		gap: 0.7rem;
+		align-items: center;
+		justify-content: space-between;
+		margin: 0.58rem 0 0.22rem;
+	}
+
+	.chart-legend {
+		display: flex;
+		gap: 0.72rem;
+		align-items: center;
+		color: var(--faint);
+		font-size: 0.54rem;
+		font-weight: 660;
+	}
+
+	.chart-legend span {
+		display: inline-flex;
+		gap: 0.3rem;
+		align-items: center;
+	}
+
+	.chart-legend i {
+		display: inline-block;
+		width: 15px;
+		height: 0;
+		border-top: 2px solid var(--accent);
+	}
+
+	.chart-legend i.contributions {
+		border-color: var(--amber);
+		border-top-style: dashed;
 	}
 
 	.range-controls {
 		display: flex;
 		gap: 0.22rem;
 		justify-content: flex-end;
-		margin: 0.6rem 0 0.25rem;
+		margin: 0;
 	}
 
 	.range-controls button {
@@ -421,6 +566,23 @@
 		vector-effect: non-scaling-stroke;
 	}
 
+	.contributions-line {
+		fill: none;
+		stroke: var(--amber);
+		stroke-width: 2.5;
+		stroke-dasharray: 6 4;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+		vector-effect: non-scaling-stroke;
+	}
+
+	.contributions-dot {
+		fill: white;
+		stroke: var(--amber);
+		stroke-width: 2.5;
+		vector-effect: non-scaling-stroke;
+	}
+
 	.chart-tooltip {
 		position: absolute;
 		display: grid;
@@ -446,6 +608,13 @@
 		margin: 0.15rem 0 0;
 		color: var(--faint);
 		font-size: 0.56rem;
+		line-height: 1.45;
+	}
+
+	.return-explainer {
+		margin: 0.3rem 0 0;
+		color: var(--faint);
+		font-size: 0.54rem;
 		line-height: 1.45;
 	}
 
@@ -501,8 +670,21 @@
 			min-height: 145px;
 		}
 
-		.history-change strong {
-			font-size: 0.76rem;
+		.history-metrics {
+			grid-template-columns: 1fr 1fr;
+		}
+
+		.history-metrics > div:first-child {
+			grid-column: 1 / -1;
+		}
+
+		.chart-toolbar {
+			align-items: flex-start;
+			flex-direction: column;
+		}
+
+		.range-controls {
+			align-self: flex-end;
 		}
 	}
 </style>

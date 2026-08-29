@@ -31,7 +31,7 @@ ChipDue stores only the fields required for the private financial workspace:
 - Optional rewards program name, reward type, base earning rate, cash-equivalent reward value, bonus category names, rates, Plaid category mappings, and whether the profile was automatically matched or manually overridden
 - Reward estimates calculated by ChipDue from encrypted transaction amounts and either an automatically matched card profile or a manual override; these are not issuer-reported rewards
 - Opaque identifiers needed to update or delete records
-- For Plaid connections, encrypted access tokens, Item IDs, selected account details, current and historical brokerage balances, and optional investment holding cost basis
+- For Plaid connections, encrypted access tokens, Item IDs, selected account details, current and historical brokerage balances, user-entered net contributions, and optional investment holding cost basis
 - For a user-configured Plaid integration, the encrypted client ID and Production secret for that user's Plaid team
 - For a user-configured E*TRADE integration, the encrypted consumer key and secret plus short-lived encrypted request and access tokens
 - When transaction access is enabled, up to 24 months of encrypted card transactions, their pending/category fields, and the encrypted incremental-sync cursor

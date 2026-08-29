@@ -40,6 +40,7 @@
 		last4: string;
 		currentBalance: number | undefined;
 		costBasis: number | undefined;
+		netContributions: number | undefined;
 		openedDate: string;
 		notes: string;
 	};
@@ -132,17 +133,17 @@
 	const trackedBalanceCents = $derived(
 		knownBalances.reduce((total, account) => total + (account.currentBalanceCents ?? 0), 0)
 	);
-	const brokerageGainCents = $derived(
+	const brokerageReturnCents = $derived(
 		activeAccounts
 			.filter(
 				(account) =>
 					account.accountType === 'brokerage' &&
 					account.currentBalanceCents !== null &&
-					account.costBasisCents !== null
+					account.netContributionsCents !== null
 			)
 			.reduce(
 				(total, account) =>
-					total + (account.currentBalanceCents ?? 0) - (account.costBasisCents ?? 0),
+					total + (account.currentBalanceCents ?? 0) - (account.netContributionsCents ?? 0),
 				0
 			)
 	);
@@ -151,7 +152,7 @@
 			(account) =>
 				account.accountType === 'brokerage' &&
 				account.currentBalanceCents !== null &&
-				account.costBasisCents !== null
+				account.netContributionsCents !== null
 		).length
 	);
 
@@ -169,6 +170,7 @@
 			last4: '',
 			currentBalance: undefined,
 			costBasis: undefined,
+			netContributions: undefined,
 			openedDate: '',
 			notes: ''
 		};
@@ -428,23 +430,27 @@
 		}[type];
 	}
 
-	function performance(account: FinancialAccount): number | null {
+	function investmentReturn(account: FinancialAccount): number | null {
 		if (
 			account.accountType !== 'brokerage' ||
 			account.currentBalanceCents === null ||
-			account.costBasisCents === null
+			account.netContributionsCents === null
 		) {
 			return null;
 		}
-		return account.currentBalanceCents - account.costBasisCents;
+		return account.currentBalanceCents - account.netContributionsCents;
 	}
 
-	function performanceLabel(account: FinancialAccount): string {
-		const gain = performance(account);
-		if (gain === null || account.costBasisCents === null || account.costBasisCents === 0) {
-			return 'Add cost basis to track performance';
+	function investmentReturnLabel(account: FinancialAccount): string {
+		const gain = investmentReturn(account);
+		if (
+			gain === null ||
+			account.netContributionsCents === null ||
+			account.netContributionsCents === 0
+		) {
+			return 'Add net contributions to separate deposits from returns';
 		}
-		const percent = (gain / account.costBasisCents) * 100;
+		const percent = (gain / Math.abs(account.netContributionsCents)) * 100;
 		return `${gain >= 0 ? '+' : ''}${money.format(gain / 100)} · ${percent >= 0 ? '+' : ''}${percent.toFixed(1)}%`;
 	}
 
@@ -476,6 +482,8 @@
 			currentBalance:
 				account.currentBalanceCents === null ? undefined : account.currentBalanceCents / 100,
 			costBasis: account.costBasisCents === null ? undefined : account.costBasisCents / 100,
+			netContributions:
+				account.netContributionsCents === null ? undefined : account.netContributionsCents / 100,
 			openedDate: account.openedDate ?? '',
 			notes: account.notes ?? ''
 		};
@@ -503,6 +511,7 @@
 			nickname: form.nickname.trim(),
 			ownerType: form.ownerType,
 			costBasisCents: form.accountType === 'brokerage' ? cents(form.costBasis) : null,
+			netContributionsCents: form.accountType === 'brokerage' ? cents(form.netContributions) : null,
 			openedDate: form.openedDate || null,
 			notes: form.notes.trim() || null
 		};
@@ -792,11 +801,11 @@
 				<strong>{loading ? '—' : syncedAccountCount}</strong>
 			</article>
 			<article>
-				<span>Brokerage performance</span>
+				<span>Investment return</span>
 				<strong
 					>{loading
 						? '—'
-						: formatMoney(brokeragePerformanceCount ? brokerageGainCents : null)}</strong
+						: formatMoney(brokeragePerformanceCount ? brokerageReturnCents : null)}</strong
 				>
 			</article>
 		</section>
@@ -945,12 +954,12 @@
 												</div>
 												{#if account.accountType === 'brokerage'}
 													<div>
-														<dt>Performance</dt>
+														<dt>Investment return</dt>
 														<dd
-															class:gain={performance(account) !== null &&
-																(performance(account) ?? 0) >= 0}
+															class:gain={investmentReturn(account) !== null &&
+																(investmentReturn(account) ?? 0) >= 0}
 														>
-															{performanceLabel(account)}
+															{investmentReturnLabel(account)}
 														</dd>
 													</div>
 												{/if}
@@ -961,6 +970,7 @@
 													accountName={account.nickname}
 													currency={account.currency}
 													points={account.balanceHistory}
+													netContributionsCents={account.netContributionsCents}
 												/>
 											{/if}
 											{#if bonusOffers.length > 0}
@@ -1324,10 +1334,19 @@
 					</div>
 					{#if form.accountType === 'brokerage'}
 						<div class="finance-field">
+							<label for="account-contributions">Net contributions</label>
+							<input
+								id="account-contributions"
+								type="number"
+								step="0.01"
+								bind:value={form.netContributions}
+								placeholder="0.00"
+							/>
+							<small>Money deposited minus money withdrawn. This is your invested principal.</small>
+						</div>
+						<div class="finance-field">
 							<label for="account-cost-basis">
-								{dialogAccount?.source === 'connected'
-									? 'Cost basis fallback'
-									: 'Cost basis / contributions'}
+								{dialogAccount?.source === 'connected' ? 'Cost basis fallback' : 'Cost basis'}
 							</label>
 							<input
 								id="account-cost-basis"
@@ -1337,6 +1356,7 @@
 								bind:value={form.costBasis}
 								placeholder="0.00"
 							/>
+							<small>What you paid for the investments you currently hold.</small>
 						</div>
 					{/if}
 					<div class="finance-field">

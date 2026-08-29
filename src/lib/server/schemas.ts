@@ -154,6 +154,7 @@ export const createFinancialAccountSchema = z
 		currency: currencySchema.optional().default('USD'),
 		currentBalanceCents: centsSchema.optional().default(null),
 		costBasisCents: nonnegativeCentsSchema.optional().default(null),
+		netContributionsCents: centsSchema.optional().default(null),
 		openedDate: isoDateSchema.nullable().optional().default(null),
 		notes: notesSchema.optional().default(null)
 	})
@@ -171,6 +172,7 @@ export const updateFinancialAccountSchema = z
 		currency: currencySchema.optional(),
 		currentBalanceCents: centsSchema.optional(),
 		costBasisCents: nonnegativeCentsSchema.optional(),
+		netContributionsCents: centsSchema.optional(),
 		openedDate: isoDateSchema.nullable().optional(),
 		notes: notesSchema.optional()
 	})

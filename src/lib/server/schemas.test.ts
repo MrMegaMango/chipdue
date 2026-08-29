@@ -80,6 +80,7 @@ describe('financial workspace validation', () => {
 			createFinancialAccountSchema.safeParse({
 				nickname: 'Brokerage',
 				accountType: 'brokerage',
+				netContributionsCents: 250_000,
 				last4: '12345678'
 			}).success
 		).toBe(false);
@@ -99,6 +100,9 @@ describe('financial workspace validation', () => {
 		).toBe(true);
 		expect(createBonusSchema.safeParse({ name: 'Bonus', rewardCents: -1 }).success).toBe(false);
 		expect(updateFinancialAccountSchema.safeParse({ hidden: true }).success).toBe(true);
+		expect(updateFinancialAccountSchema.safeParse({ netContributionsCents: -50_000 }).success).toBe(
+			true
+		);
 		expect(updateFinancialAccountSchema.safeParse({ hidden: 'yes' }).success).toBe(false);
 		expect(updateFinancialAccountSchema.safeParse({}).success).toBe(false);
 		expect(updateBonusSchema.safeParse({}).success).toBe(false);

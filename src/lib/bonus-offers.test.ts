@@ -23,6 +23,7 @@ const account: FinancialAccount = {
 	currency: 'USD',
 	currentBalanceCents: 1_250_000,
 	costBasisCents: null,
+	netContributionsCents: null,
 	balanceHistory: [],
 	holdings: [],
 	transactionHistoryEnabled: true,

@@ -116,21 +116,40 @@ describe.sequential('encrypted financial records', () => {
 			createFinancialAccountSchema.parse({
 				nickname: 'Manual brokerage',
 				accountType: 'brokerage',
-				currentBalanceCents: 100_000
+				currentBalanceCents: 100_000,
+				netContributionsCents: 80_000
 			})
 		);
 
 		vi.setSystemTime(new Date('2026-08-05T12:00:00.000Z'));
 		await updateFinancialAccount(account.id, { currentBalanceCents: 112_500 });
+		vi.setSystemTime(new Date('2026-08-06T12:00:00.000Z'));
+		await updateFinancialAccount(account.id, { netContributionsCents: 90_000 });
 		const [updated] = await listFinancialAccounts();
 
+		expect(updated.netContributionsCents).toBe(90_000);
 		expect(updated.balanceHistory).toEqual([
-			{ recordedAt: '2026-08-01T12:00:00.000Z', balanceCents: 100_000 },
-			{ recordedAt: '2026-08-05T12:00:00.000Z', balanceCents: 112_500 }
+			{
+				recordedAt: '2026-08-01T12:00:00.000Z',
+				balanceCents: 100_000,
+				netContributionsCents: 80_000
+			},
+			{
+				recordedAt: '2026-08-05T12:00:00.000Z',
+				balanceCents: 112_500,
+				netContributionsCents: 80_000
+			},
+			{
+				recordedAt: '2026-08-06T12:00:00.000Z',
+				balanceCents: 112_500,
+				netContributionsCents: 90_000
+			}
 		]);
 	});
 
 	it('extends connected brokerage history on every successful balance sync', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-08-01T09:00:00.000Z'));
 		const connectionId = await savePlaidItem(
 			'provider-history-item',
 			'provider-history-token',
@@ -161,10 +180,42 @@ describe.sequential('encrypted financial records', () => {
 			'2026-08-02T12:00:00.000Z'
 		);
 
-		const [account] = await listFinancialAccounts();
+		let [account] = await listFinancialAccounts();
+		expect(account.netContributionsCents).toBeNull();
 		expect(account.balanceHistory).toEqual([
-			{ recordedAt: '2026-08-01T12:00:00.000Z', balanceCents: 250_000 },
-			{ recordedAt: '2026-08-02T12:00:00.000Z', balanceCents: 275_000 }
+			{
+				recordedAt: '2026-08-01T12:00:00.000Z',
+				balanceCents: 250_000,
+				netContributionsCents: null
+			},
+			{
+				recordedAt: '2026-08-02T12:00:00.000Z',
+				balanceCents: 275_000,
+				netContributionsCents: null
+			}
+		]);
+
+		vi.setSystemTime(new Date('2026-08-03T12:00:00.000Z'));
+		await updateFinancialAccount(account.id, { netContributionsCents: 200_000 });
+		await replaceConnectedFinancialAccounts(
+			'plaid',
+			connectionId,
+			[{ ...snapshot, currentBalanceCents: 280_000 }],
+			'2026-08-04T12:00:00.000Z'
+		);
+		[account] = await listFinancialAccounts();
+		expect(account.netContributionsCents).toBe(200_000);
+		expect(account.balanceHistory.slice(-2)).toEqual([
+			{
+				recordedAt: '2026-08-03T12:00:00.000Z',
+				balanceCents: 275_000,
+				netContributionsCents: 200_000
+			},
+			{
+				recordedAt: '2026-08-04T12:00:00.000Z',
+				balanceCents: 280_000,
+				netContributionsCents: 200_000
+			}
 		]);
 	});
 });
