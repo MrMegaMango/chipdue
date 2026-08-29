@@ -2,6 +2,7 @@
 	import { asset, resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import { getCompatibleBonusOffers } from '$lib/bonus-offers';
+	import BalanceHistoryChart from '$lib/components/BalanceHistoryChart.svelte';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
 	import { financialProviderName } from '$lib/financial-data';
 	import { cashSweepAction, isCashSweepSecurity } from '$lib/investment-display';
@@ -865,8 +866,7 @@
 										{@const bonusOffers = availableBonusOffers(account)}
 										{@const logoUrl = institutionLogoUrl(account)}
 										<article
-											class:brokerage-detail={account.accountType === 'brokerage' &&
-												account.source === 'connected'}
+											class:brokerage-detail={account.accountType === 'brokerage'}
 											class:hidden-account={account.hidden}
 											class="finance-card"
 										>
@@ -955,6 +955,14 @@
 													</div>
 												{/if}
 											</dl>
+											{#if account.accountType === 'brokerage'}
+												<BalanceHistoryChart
+													accountId={account.id}
+													accountName={account.nickname}
+													currency={account.currency}
+													points={account.balanceHistory}
+												/>
+											{/if}
 											{#if bonusOffers.length > 0}
 												<section class="bonus-offer-callout" aria-label="Verified bonus offers">
 													<div>

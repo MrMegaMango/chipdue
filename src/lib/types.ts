@@ -137,6 +137,11 @@ export interface InvestmentHolding {
 	priceAsOf: string | null;
 }
 
+export interface AccountBalanceHistoryPoint {
+	recordedAt: string;
+	balanceCents: number;
+}
+
 export interface BrokerageOrder {
 	id: string;
 	provider: 'etrade';
@@ -178,6 +183,7 @@ export interface FinancialAccount {
 	currency: string;
 	currentBalanceCents: number | null;
 	costBasisCents: number | null;
+	balanceHistory: AccountBalanceHistoryPoint[];
 	holdings: InvestmentHolding[];
 	transactionHistoryEnabled: boolean;
 	transactionHistoryStatus: TransactionHistoryStatus | null;

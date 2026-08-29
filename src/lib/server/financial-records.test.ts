@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { listCards } from './cards';
 import { closeDatabaseForTests, getDatabase } from './database';
 import {
@@ -10,10 +10,12 @@ import {
 	deleteBonus,
 	listBonuses,
 	listFinancialAccounts,
+	replaceConnectedFinancialAccounts,
 	updateBonus,
 	updateFinancialAccount
 } from './financial-records';
 import { resetCryptoStateForTests } from './crypto';
+import { savePlaidItem } from './plaid-store';
 import { createBonusSchema, createFinancialAccountSchema } from './schemas';
 
 describe.sequential('encrypted financial records', () => {
@@ -29,6 +31,7 @@ describe.sequential('encrypted financial records', () => {
 	});
 
 	afterEach(() => {
+		vi.useRealTimers();
 		closeDatabaseForTests();
 		resetCryptoStateForTests();
 		if (previousDataDirectory === undefined) delete process.env.CARDDUE_DATA_DIR;
@@ -104,5 +107,64 @@ describe.sequential('encrypted financial records', () => {
 		await deleteBonus(bonus.id);
 		expect(await listBonuses()).toEqual([]);
 		expect(await listFinancialAccounts()).toHaveLength(1);
+	});
+
+	it('records brokerage values when a manual balance changes', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-08-01T12:00:00.000Z'));
+		const account = await createFinancialAccount(
+			createFinancialAccountSchema.parse({
+				nickname: 'Manual brokerage',
+				accountType: 'brokerage',
+				currentBalanceCents: 100_000
+			})
+		);
+
+		vi.setSystemTime(new Date('2026-08-05T12:00:00.000Z'));
+		await updateFinancialAccount(account.id, { currentBalanceCents: 112_500 });
+		const [updated] = await listFinancialAccounts();
+
+		expect(updated.balanceHistory).toEqual([
+			{ recordedAt: '2026-08-01T12:00:00.000Z', balanceCents: 100_000 },
+			{ recordedAt: '2026-08-05T12:00:00.000Z', balanceCents: 112_500 }
+		]);
+	});
+
+	it('extends connected brokerage history on every successful balance sync', async () => {
+		const connectionId = await savePlaidItem(
+			'provider-history-item',
+			'provider-history-token',
+			'Synthetic Brokerage'
+		);
+		const snapshot = {
+			accountId: 'provider-history-account',
+			nickname: 'Synced brokerage',
+			institution: 'Synthetic Brokerage',
+			institutionLogoBase64: null,
+			accountType: 'brokerage' as const,
+			last4: '1234',
+			currency: 'USD',
+			currentBalanceCents: 250_000,
+			costBasisCents: 200_000,
+			holdings: []
+		};
+		await replaceConnectedFinancialAccounts(
+			'plaid',
+			connectionId,
+			[snapshot],
+			'2026-08-01T12:00:00.000Z'
+		);
+		await replaceConnectedFinancialAccounts(
+			'plaid',
+			connectionId,
+			[{ ...snapshot, currentBalanceCents: 275_000 }],
+			'2026-08-02T12:00:00.000Z'
+		);
+
+		const [account] = await listFinancialAccounts();
+		expect(account.balanceHistory).toEqual([
+			{ recordedAt: '2026-08-01T12:00:00.000Z', balanceCents: 250_000 },
+			{ recordedAt: '2026-08-02T12:00:00.000Z', balanceCents: 275_000 }
+		]);
 	});
 });

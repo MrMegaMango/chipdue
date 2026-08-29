@@ -14,6 +14,7 @@ Choose one of two deployment modes:
 - Keep a private inventory of personal and business checking, savings, cash-management, and brokerage accounts.
 - Track signup bonuses from opening through requirements, qualification, payout, and safe-to-close dates.
 - Automatically refresh eligible bank and brokerage balances through an installed financial-data provider.
+- See each brokerage account's value over time, with every saved balance or successful sync extending its private history.
 - See each connected brokerage position, share count, current institution price, value, and holding cost basis while keeping simple account-level performance.
 - Load current E*TRADE open orders through E*TRADE's official read-only API without enabling trade placement, changes, or cancellation.
 - Track statement balance, minimum due, current balance, due date, statement date, and autopay status.

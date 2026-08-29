@@ -21,6 +21,8 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain('Brokerage performance');
 		expect(accountsSource).toContain('Current price');
 		expect(accountsSource).toContain('account.holdings');
+		expect(accountsSource).toContain('BalanceHistoryChart');
+		expect(accountsSource).toContain('points={account.balanceHistory}');
 	});
 
 	it('shows institution branding on account cards', () => {

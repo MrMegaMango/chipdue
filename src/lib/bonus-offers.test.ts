@@ -23,6 +23,7 @@ const account: FinancialAccount = {
 	currency: 'USD',
 	currentBalanceCents: 1_250_000,
 	costBasisCents: null,
+	balanceHistory: [],
 	holdings: [],
 	transactionHistoryEnabled: true,
 	transactionHistoryStatus: 'historical_complete',

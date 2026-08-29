@@ -31,7 +31,7 @@ ChipDue stores only the fields required for the private financial workspace:
 - Optional rewards program name, reward type, base earning rate, cash-equivalent reward value, bonus category names, rates, Plaid category mappings, and whether the profile was automatically matched or manually overridden
 - Reward estimates calculated by ChipDue from encrypted transaction amounts and either an automatically matched card profile or a manual override; these are not issuer-reported rewards
 - Opaque identifiers needed to update or delete records
-- For Plaid connections, encrypted access tokens, Item IDs, selected account details and balances, and optional investment holding cost basis
+- For Plaid connections, encrypted access tokens, Item IDs, selected account details, current and historical brokerage balances, and optional investment holding cost basis
 - For a user-configured Plaid integration, the encrypted client ID and Production secret for that user's Plaid team
 - For a user-configured E*TRADE integration, the encrypted consumer key and secret plus short-lived encrypted request and access tokens
 - When transaction access is enabled, up to 24 months of encrypted card transactions, their pending/category fields, and the encrypted incremental-sync cursor
@@ -53,7 +53,7 @@ Plaid is optional in both modes. When you explicitly start Plaid Link:
 - Plaid and the selected financial institution handle authentication.
 - A short-lived public token returns to the ChipDue server.
 - The server exchanges it and requests Accounts, Investments, Liabilities, and up to 24 months of Transactions data from Plaid. Existing connections may require one **Manage accounts** pass to authorize accounts that were not selected originally.
-- ChipDue maps selected checking, savings, cash-management, and brokerage accounts to encrypted account records. Balances refresh during scheduled and on-demand syncs; brokerage cost basis is included only when Plaid Investments returns complete holding data.
+- ChipDue maps selected checking, savings, cash-management, and brokerage accounts to encrypted account records. Balances refresh during scheduled and on-demand syncs; each successful brokerage sync adds a timestamped balance to that account's encrypted history. Brokerage cost basis is included only when Plaid Investments returns complete holding data.
 - ChipDue keeps only transaction date, display name, optional merchant, amount, currency, pending state, and category; it maps those fields into the encrypted card payload and discards the raw response.
 
 In cloud mode, users may enter their own Plaid client ID and Production secret. ChipDue validates those credentials directly with Plaid, encrypts them on the server, and never returns them to the browser. Each ChipDue account uses only its own Plaid team, Items, and plan allowance. The deployment operator and running Vercel Function can decrypt these values; this is not a zero-knowledge secret vault. Each user is independently responsible for their Plaid account, plan, redirect settings, and terms.

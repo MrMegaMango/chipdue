@@ -6,6 +6,7 @@ import {
 } from '$lib/financial-data';
 import type {
 	AccountBonus,
+	AccountBalanceHistoryPoint,
 	BonusRequirement,
 	FinancialDataProvider,
 	FinancialAccount,
@@ -77,6 +78,7 @@ const dateSchema = z
 	.nullable();
 const nullableTextSchema = z.string().nullable();
 const nullableCentsSchema = z.number().int().nullable();
+const MAX_BALANCE_HISTORY_POINTS = 5_000;
 const institutionLogoSchema = z
 	.string()
 	.min(1)
@@ -95,6 +97,10 @@ const investmentHoldingSchema = z.object({
 	costBasisCents: nullableCentsSchema,
 	currency: z.string(),
 	priceAsOf: dateSchema
+});
+const balanceHistoryPointSchema = z.object({
+	recordedAt: z.string().refine((value) => Number.isFinite(new Date(value).getTime())),
+	balanceCents: z.number().int().min(-100_000_000_000).max(100_000_000_000)
 });
 const transactionHistoryStatusSchema = z
 	.enum([
@@ -164,6 +170,11 @@ const accountPayloadSchema = z.object({
 	currency: z.string(),
 	currentBalanceCents: nullableCentsSchema,
 	costBasisCents: nullableCentsSchema,
+	balanceHistory: z
+		.array(balanceHistoryPointSchema)
+		.max(MAX_BALANCE_HISTORY_POINTS)
+		.optional()
+		.default([]),
 	holdings: z.array(investmentHoldingSchema).default([]),
 	transactionHistory: storedTransactionHistorySchema.optional(),
 	openedDate: dateSchema,
@@ -197,6 +208,40 @@ const bonusPayloadSchema = z.object({
 type AccountPayload = z.infer<typeof accountPayloadSchema>;
 type BonusPayload = z.infer<typeof bonusPayloadSchema>;
 type PrivateRecordPayload = AccountPayload | BonusPayload;
+
+function appendBalanceHistoryPoint(
+	history: AccountBalanceHistoryPoint[],
+	accountType: AccountPayload['accountType'],
+	balanceCents: number | null,
+	recordedAt: string
+): AccountBalanceHistoryPoint[] {
+	if (accountType !== 'brokerage') return [];
+	if (balanceCents === null || !Number.isFinite(new Date(recordedAt).getTime())) return history;
+
+	const next = [...history, { recordedAt, balanceCents }]
+		.sort((left, right) => left.recordedAt.localeCompare(right.recordedAt))
+		.filter(
+			(point, index, points) =>
+				index === points.length - 1 || point.recordedAt !== points[index + 1].recordedAt
+		);
+	return next.slice(-MAX_BALANCE_HISTORY_POINTS);
+}
+
+function accountBalanceHistory(
+	payload: AccountPayload,
+	row: Pick<PrivateRecordRow, 'last_synced_at' | 'updated_at' | 'created_at'>
+): AccountBalanceHistoryPoint[] {
+	if (payload.accountType !== 'brokerage') return [];
+	if (payload.balanceHistory.length > 0 || payload.currentBalanceCents === null) {
+		return payload.balanceHistory;
+	}
+	return [
+		{
+			recordedAt: row.last_synced_at ?? row.updated_at ?? row.created_at,
+			balanceCents: payload.currentBalanceCents
+		}
+	];
+}
 
 function decodeRecord(row: PrivateRecordRow): PrivateRecordPayload | null {
 	// The legacy encryption context remains stable so existing cloud storage needs no migration.
@@ -233,6 +278,7 @@ function rowToAccount(row: PrivateRecordRow, payload: AccountPayload): Financial
 		currency: payload.currency,
 		currentBalanceCents: payload.currentBalanceCents,
 		costBasisCents: payload.costBasisCents,
+		balanceHistory: accountBalanceHistory(payload, row),
 		holdings: payload.holdings,
 		transactionHistoryEnabled: payload.transactionHistory?.enabled === true,
 		transactionHistoryStatus: payload.transactionHistory?.status ?? null,
@@ -393,6 +439,12 @@ export async function createFinancialAccount(
 			...input,
 			institutionLogoBase64: null,
 			hidden: false,
+			balanceHistory: appendBalanceHistoryPoint(
+				[],
+				input.accountType,
+				input.currentBalanceCents,
+				now
+			),
 			holdings: []
 		},
 		now
@@ -425,29 +477,48 @@ export async function updateFinancialAccount(
 			409
 		);
 	}
+	const accountType = changes.accountType ?? existing.accountType;
+	const currentBalanceCents =
+		changes.currentBalanceCents === undefined
+			? existing.currentBalanceCents
+			: changes.currentBalanceCents;
+	const shouldRecordBalance =
+		accountType === 'brokerage' &&
+		currentBalanceCents !== null &&
+		(existing.accountType !== 'brokerage' ||
+			(changes.currentBalanceCents !== undefined &&
+				changes.currentBalanceCents !== existing.currentBalanceCents));
+	const now = new Date().toISOString();
 	const payload: AccountPayload = {
 		recordType: 'account',
 		nickname: changes.nickname ?? existing.nickname,
 		institution: changes.institution === undefined ? existing.institution : changes.institution,
 		institutionLogoBase64: existingPayload.institutionLogoBase64,
-		accountType: changes.accountType ?? existing.accountType,
+		accountType,
 		ownerType: changes.ownerType ?? existing.ownerType,
 		status: changes.status ?? existing.status,
 		hidden: changes.hidden ?? existing.hidden,
 		last4: changes.last4 === undefined ? existing.last4 : changes.last4,
 		currency: changes.currency ?? existing.currency,
-		currentBalanceCents:
-			changes.currentBalanceCents === undefined
-				? existing.currentBalanceCents
-				: changes.currentBalanceCents,
+		currentBalanceCents,
 		costBasisCents:
 			changes.costBasisCents === undefined ? existing.costBasisCents : changes.costBasisCents,
+		balanceHistory: shouldRecordBalance
+			? appendBalanceHistoryPoint(
+					accountBalanceHistory(existingPayload, row),
+					accountType,
+					currentBalanceCents,
+					now
+				)
+			: accountType === 'brokerage'
+				? accountBalanceHistory(existingPayload, row)
+				: [],
 		holdings: existing.holdings,
 		transactionHistory: existingPayload.transactionHistory,
 		openedDate: changes.openedDate === undefined ? existing.openedDate : changes.openedDate,
 		notes: changes.notes === undefined ? existing.notes : changes.notes
 	};
-	await updateRecord(id, payload, new Date().toISOString());
+	await updateRecord(id, payload, now);
 	return getFinancialAccount(id);
 }
 
@@ -465,27 +536,43 @@ export async function deleteFinancialAccount(id: string): Promise<void> {
 
 function connectedAccountPayload(
 	snapshot: ConnectedFinancialAccountSnapshot,
-	existing?: AccountPayload
+	syncedAt: string,
+	existing?: { payload: AccountPayload; recordedAt: string }
 ): AccountPayload {
+	const existingPayload = existing?.payload;
+	const history = existingPayload
+		? appendBalanceHistoryPoint(
+				existingPayload.balanceHistory,
+				existingPayload.accountType,
+				existingPayload.currentBalanceCents,
+				existing.recordedAt
+			)
+		: [];
 	return {
 		...tenantPayloadFields(),
 		recordType: 'account',
-		nickname: existing?.nickname ?? snapshot.nickname,
+		nickname: existingPayload?.nickname ?? snapshot.nickname,
 		institution: snapshot.institution,
 		institutionLogoBase64:
-			snapshot.institutionLogoBase64 ?? existing?.institutionLogoBase64 ?? null,
+			snapshot.institutionLogoBase64 ?? existingPayload?.institutionLogoBase64 ?? null,
 		accountType: snapshot.accountType,
-		ownerType: existing?.ownerType ?? 'personal',
-		status: existing?.status ?? 'active',
-		hidden: existing?.hidden ?? false,
+		ownerType: existingPayload?.ownerType ?? 'personal',
+		status: existingPayload?.status ?? 'active',
+		hidden: existingPayload?.hidden ?? false,
 		last4: snapshot.last4,
 		currency: snapshot.currency,
 		currentBalanceCents: snapshot.currentBalanceCents,
-		costBasisCents: snapshot.costBasisCents ?? existing?.costBasisCents ?? null,
-		holdings: snapshot.holdings ?? existing?.holdings ?? [],
-		transactionHistory: snapshot.transactionHistory ?? existing?.transactionHistory,
-		openedDate: existing?.openedDate ?? null,
-		notes: existing?.notes ?? null
+		costBasisCents: snapshot.costBasisCents ?? existingPayload?.costBasisCents ?? null,
+		balanceHistory: appendBalanceHistoryPoint(
+			history,
+			snapshot.accountType,
+			snapshot.currentBalanceCents,
+			syncedAt
+		),
+		holdings: snapshot.holdings ?? existingPayload?.holdings ?? [],
+		transactionHistory: snapshot.transactionHistory ?? existingPayload?.transactionHistory,
+		openedDate: existingPayload?.openedDate ?? null,
+		notes: existingPayload?.notes ?? null
 	};
 }
 
@@ -532,7 +619,17 @@ async function replaceCloudConnectedAccounts(
 			current?.row.id ?? providerRecordId(provider, snapshot.accountId, connectionId, 'account');
 		seenIds.add(id);
 		const encrypted = encryptJson(
-			connectedAccountPayload(snapshot, current?.payload),
+			connectedAccountPayload(
+				snapshot,
+				syncedAt,
+				current
+					? {
+							payload: current.payload,
+							recordedAt:
+								current.row.last_synced_at ?? current.row.updated_at ?? current.row.created_at
+						}
+					: undefined
+			),
 			`card:${id}`
 		);
 		statements.push({
@@ -590,7 +687,17 @@ function replaceLocalConnectedAccounts(
 			const id = current?.row.id ?? randomUUID();
 			seenIds.add(id);
 			const encrypted = encryptJson(
-				connectedAccountPayload(snapshot, current?.payload),
+				connectedAccountPayload(
+					snapshot,
+					syncedAt,
+					current
+						? {
+								payload: current.payload,
+								recordedAt:
+									current.row.last_synced_at ?? current.row.updated_at ?? current.row.created_at
+							}
+						: undefined
+				),
 				`card:${id}`
 			);
 			if (current) {
