@@ -7,6 +7,7 @@ export type CardRewardCategoryMatch =
 	| 'groceries'
 	| 'gas'
 	| 'travel'
+	| 'flights_hotels'
 	| 'transit'
 	| 'entertainment'
 	| 'drugstores'
@@ -41,6 +42,9 @@ export interface Card {
 	rewardType: CardRewardType | null;
 	rewardBaseRate: number | null;
 	rewardCategories: CardRewardCategory[];
+	rewardSource: 'automatic' | 'manual' | null;
+	rewardProfileName: string | null;
+	rewardCalculation: 'static' | 'venmo_spend_ranked' | null;
 	transactionHistoryEnabled: boolean;
 	transactionHistoryStatus: TransactionHistoryStatus | null;
 	plaidConnectionId: string | null;

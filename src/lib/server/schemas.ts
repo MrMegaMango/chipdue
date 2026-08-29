@@ -67,6 +67,7 @@ export const cardRewardCategoryMatchSchema = z.enum([
 	'groceries',
 	'gas',
 	'travel',
+	'flights_hotels',
 	'transit',
 	'entertainment',
 	'drugstores',

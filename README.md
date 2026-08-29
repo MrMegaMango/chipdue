@@ -16,7 +16,7 @@ Choose one of two deployment modes:
 - Automatically refresh eligible bank and brokerage balances after a one-time Plaid connection and account-selection flow.
 - See each Plaid-synced brokerage position, share count, current institution price, value, and holding cost basis while keeping simple account-level performance.
 - Track statement balance, minimum due, current balance, due date, statement date, and autopay status.
-- Track each card’s reward type, base earning rate, current cash-equivalent value, and bonus categories, with estimated points, miles, or cash back shown beside eligible Plaid transactions.
+- Automatically identify supported linked cards from Plaid’s official product name, populate their reward type, base earning rate, and bonus categories, and show estimated points, miles, or cash back beside eligible transactions. Manual overrides remain available for unmatched cards.
 - Create isolated cloud accounts with Google sign-in without storing an email, profile, Google token, or refresh token.
 - Let each cloud account encrypt and use its own Plaid Production credentials, so Plaid Items and plan allowances are not shared between users.
 - Connect Plaid only when you explicitly choose to; manual mode never contacts Plaid.

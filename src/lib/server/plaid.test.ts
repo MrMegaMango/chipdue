@@ -555,12 +555,58 @@ describe.sequential('Plaid transaction history', () => {
 		});
 	});
 
-	it('keeps user-entered rewards when a Plaid card refreshes', async () => {
+	it('automatically populates rewards from Plaid official card names', async () => {
 		const itemId = await savePlaidItem(
-			'provider-item-rewards',
+			'provider-item-automatic-rewards',
 			'test-access-value',
-			'Synthetic Bank'
+			'Chase'
 		);
+		plaidMocks.accountsGet.mockResolvedValue({
+			data: {
+				accounts: [
+					{
+						...liabilityResponse().data.accounts[0],
+						name: 'CREDIT CARD',
+						official_name: 'CHASE SAPPHIRE PREFERRED®'
+					}
+				]
+			}
+		});
+		plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
+
+		await syncPlaidItem(itemId);
+
+		const [card] = await listCards();
+		expect(card).toMatchObject({
+			nickname: 'CREDIT CARD',
+			rewardProgramName: 'Chase Ultimate Rewards',
+			rewardType: 'points',
+			rewardBaseRate: 1,
+			rewardSource: 'automatic',
+			rewardProfileName: 'Chase Sapphire Preferred',
+			rewardCalculation: 'static'
+		});
+		expect(card.rewardCategories).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ name: 'Chase Travel', multiplier: 5, matchCategory: null }),
+				expect.objectContaining({ name: 'Dining', multiplier: 3, matchCategory: 'dining' }),
+				expect.objectContaining({ name: 'Other travel', multiplier: 2, matchCategory: 'travel' })
+			])
+		);
+	});
+
+	it('keeps user-entered rewards when a Plaid card refreshes', async () => {
+		const itemId = await savePlaidItem('provider-item-rewards', 'test-access-value', 'Chase');
+		plaidMocks.accountsGet.mockResolvedValue({
+			data: {
+				accounts: [
+					{
+						...liabilityResponse().data.accounts[0],
+						official_name: 'Chase Freedom Unlimited'
+					}
+				]
+			}
+		});
 		plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
 		await syncPlaidItem(itemId);
 
@@ -584,11 +630,75 @@ describe.sequential('Plaid transaction history', () => {
 		expect(refreshedCard).toMatchObject({
 			id: card.id,
 			rewardProgramName: 'Synthetic points',
-			rewardValueCents: 9_876
+			rewardValueCents: 9_876,
+			rewardSource: 'manual'
 		});
 		expect(refreshedCard.rewardCategories).toMatchObject([
 			{ name: 'Dining', multiplier: 3, matchCategory: 'dining' },
 			{ name: 'Groceries', multiplier: 5, matchCategory: 'groceries' }
+		]);
+	});
+
+	it('ranks Venmo reward categories automatically from statement-period activity', async () => {
+		const itemId = await savePlaidItem(
+			'provider-item-venmo-rewards',
+			'test-access-value',
+			'Synchrony Bank'
+		);
+		plaidMocks.accountsGet.mockResolvedValue({
+			data: {
+				accounts: [
+					{
+						...liabilityResponse().data.accounts[0],
+						name: 'Venmo Credit Card'
+					}
+				]
+			}
+		});
+		plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
+		plaidMocks.transactionsSync.mockResolvedValueOnce({
+			data: {
+				added: [
+					transaction('venmo-dining', 80, 'Synthetic restaurant', '2026-08-20'),
+					{
+						...transaction('venmo-grocery', 40, 'Synthetic grocery', '2026-08-19'),
+						personal_finance_category: {
+							primary: 'FOOD_AND_DRINK',
+							detailed: 'FOOD_AND_DRINK_GROCERIES'
+						}
+					},
+					{
+						...transaction('venmo-gas', 20, 'Synthetic gas', '2026-08-18'),
+						personal_finance_category: {
+							primary: 'TRANSPORTATION',
+							detailed: 'TRANSPORTATION_GAS'
+						}
+					}
+				],
+				modified: [],
+				removed: [],
+				next_cursor: 'cursor-venmo-rewards',
+				has_more: false,
+				transactions_update_status: 'HISTORICAL_UPDATE_COMPLETE'
+			}
+		});
+
+		await syncPlaidItem(itemId, { enableTransactions: true });
+		const [card] = await listCards();
+		const history = await listCardTransactions(card.id);
+		expect(card).toMatchObject({
+			rewardSource: 'automatic',
+			rewardProfileName: 'Venmo Credit Card',
+			rewardCalculation: 'venmo_spend_ranked'
+		});
+		expect(history.transactions.map((entry) => entry.rewardEstimate)).toEqual([
+			expect.objectContaining({
+				rate: 3,
+				amount: 240,
+				categoryName: 'Dining & nightlife · top category'
+			}),
+			expect.objectContaining({ rate: 2, amount: 80, categoryName: 'Groceries · second category' }),
+			expect.objectContaining({ rate: 1, amount: 20, categoryName: 'Gas · other category' })
 		]);
 	});
 

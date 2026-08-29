@@ -10,6 +10,7 @@ import {
 	type TransactionsUpdateStatus
 } from 'plaid';
 import { Buffer } from 'node:buffer';
+import { matchAutomaticCardRewardProfile } from '$lib/card-reward-profiles';
 import type { PlaidConnection } from '$lib/types';
 import type { TransactionHistoryStatus } from '$lib/types';
 import type { InvestmentHolding } from '$lib/types';
@@ -598,6 +599,7 @@ export async function syncPlaidItem(
 					}
 				: undefined;
 			if (account.type === AccountType.Credit) {
+				const officialName = safeText(account.official_name, 160);
 				snapshots.push({
 					accountId: account.account_id,
 					nickname: account.name.trim().slice(0, 80) || 'Credit card',
@@ -614,6 +616,11 @@ export async function syncPlaidItem(
 					statementDate: safeDate(liability?.last_statement_issue_date ?? null),
 					isOverdue: liability?.is_overdue ?? null,
 					autopayEnabled: false,
+					automaticRewardProfile: matchAutomaticCardRewardProfile({
+						institutionName: brand.name,
+						accountName: account.name,
+						officialName
+					}),
 					...(transactionHistory ? { transactionHistory } : {})
 				});
 				continue;

@@ -106,6 +106,7 @@
 		| 'groceries'
 		| 'gas'
 		| 'travel'
+		| 'flights_hotels'
 		| 'transit'
 		| 'entertainment'
 		| 'drugstores'
@@ -198,6 +199,9 @@
 		rewardType: CardRewardType | null;
 		rewardBaseRate: number | null;
 		rewardCategories: CardRewardCategory[];
+		rewardSource: 'automatic' | 'manual' | null;
+		rewardProfileName: string | null;
+		rewardCalculation: 'static' | 'venmo_spend_ranked' | null;
 		transactionHistoryEnabled: boolean;
 		transactionHistoryStatus:
 			| 'TRANSACTIONS_UPDATE_STATUS_UNKNOWN'
@@ -344,6 +348,7 @@
 		{ value: 'groceries', label: 'Groceries' },
 		{ value: 'gas', label: 'Gas stations' },
 		{ value: 'travel', label: 'Travel' },
+		{ value: 'flights_hotels', label: 'Flights & hotels' },
 		{ value: 'transit', label: 'Transit & rideshare' },
 		{ value: 'entertainment', label: 'Entertainment' },
 		{ value: 'drugstores', label: 'Drugstores' },
@@ -417,6 +422,7 @@
 	let rewardsCard = $state<CardView | null>(null);
 	let rewardsForm = $state<RewardsForm>(blankRewardsForm());
 	let rewardsError = $state('');
+	let rewardsEditing = $state(false);
 	let rewardsFirstField = $state<HTMLInputElement>();
 	let rewardsCloseButton = $state<HTMLButtonElement>();
 	let recentActivityByCard = $state<Record<string, CardTransaction[]>>({});
@@ -923,6 +929,7 @@
 		rewardsCard = null;
 		rewardsForm = blankRewardsForm();
 		rewardsError = '';
+		rewardsEditing = false;
 		rewardsFirstField = undefined;
 		rewardsCloseButton = undefined;
 		recentActivityByCard = {};
@@ -1263,6 +1270,13 @@
 			}))
 		};
 		rewardsError = '';
+		rewardsEditing = false;
+		await tick();
+		rewardsCloseButton?.focus();
+	}
+
+	async function editRewardsManually(): Promise<void> {
+		rewardsEditing = true;
 		await tick();
 		rewardsFirstField?.focus();
 	}
@@ -1310,6 +1324,7 @@
 		rewardsCard = null;
 		rewardsForm = blankRewardsForm();
 		rewardsError = '';
+		rewardsEditing = false;
 		document.body.style.overflow = previousBodyOverflow;
 		previouslyFocused = undefined;
 		void tick().then(() => focusTarget?.focus());
@@ -1356,6 +1371,7 @@
 			const focusTarget = previouslyFocused;
 			rewardsCard = null;
 			rewardsForm = blankRewardsForm();
+			rewardsEditing = false;
 			document.body.style.overflow = previousBodyOverflow;
 			previouslyFocused = undefined;
 			const refreshed = await refreshCards(true, epoch);
@@ -2611,7 +2627,11 @@
 									<section class="card-rewards" aria-label={`Rewards for ${card.nickname}`}>
 										<header>
 											<div>
-												<span>Rewards</span>
+												<span
+													>Rewards{card.rewardSource === 'automatic'
+														? ' · Auto-detected'
+														: ''}</span
+												>
 												<strong>{card.rewardProgramName ?? 'Card rewards'}</strong>
 											</div>
 											{#if card.rewardValueCents !== null}
@@ -2733,7 +2753,7 @@
 											class="rewards-button"
 											type="button"
 											onclick={() => openRewardsDialog(card)}
-											disabled={busyAction !== null}>Rewards</button
+											disabled={busyAction !== null}>Reward details</button
 										>
 										{#if card.source === 'manual'}
 											<button
@@ -3312,7 +3332,11 @@
 						<p class="section-kicker">Card rewards</p>
 						<h2 id="rewards-dialog-title">{rewardsCard.nickname}</h2>
 						<p id="rewards-dialog-description">
-							Set how this card earns rewards. Activity estimates update from these rules.
+							{rewardsCard.rewardSource === 'automatic'
+								? 'Identified automatically from the linked card. No setup is needed.'
+								: rewardsCard.rewardType
+									? 'Review the earning rules used for activity estimates.'
+									: 'ChipDue will identify the reward program from the linked account when possible.'}
 						</p>
 					</div>
 					<button
@@ -3327,152 +3351,224 @@
 					</button>
 				</header>
 
-				<form class="card-form rewards-form" onsubmit={saveCardRewards} autocomplete="off">
-					<div class="form-grid">
-						<label class="field">
-							<span>Rewards program <small>Optional</small></span>
-							<input
-								bind:this={rewardsFirstField}
-								bind:value={rewardsForm.programName}
-								name="rewardProgramName"
-								maxlength="80"
-								placeholder="Ultimate Rewards"
-							/>
-						</label>
-
-						<label class="field">
-							<span>Reward type</span>
-							<select bind:value={rewardsForm.rewardType} name="rewardType">
-								<option value="points">Points</option>
-								<option value="miles">Miles</option>
-								<option value="cash_back">Cash back</option>
-							</select>
-						</label>
-
-						<label class="field">
-							<span>
-								{rewardsForm.rewardType === 'cash_back' ? 'Base earning rate' : 'Base multiplier'}
-								<small>{rewardsForm.rewardType === 'cash_back' ? 'Percent' : 'Points per $1'}</small
-								>
-							</span>
-							<div class="rate-input">
-								<input
-									bind:value={rewardsForm.baseRate}
-									name="rewardBaseRate"
-									type="number"
-									min="0.01"
-									max="100"
-									step="0.01"
-									inputmode="decimal"
-									placeholder="1"
-								/>
-								<span>{rewardsForm.rewardType === 'cash_back' ? '%' : 'x'}</span>
-							</div>
-						</label>
-
-						<label class="field">
-							<span>Current reward value <small>Cash equivalent</small></span>
-							<div class="money-input">
-								<span>$</span><input
-									bind:value={rewardsForm.rewardValue}
-									name="rewardValue"
-									type="number"
-									min="0"
-									step="0.01"
-									inputmode="decimal"
-									placeholder="0.00"
-								/>
-							</div>
-						</label>
-					</div>
-
-					<section class="reward-category-editor" aria-labelledby="reward-categories-title">
-						<header>
-							<div>
-								<h3 id="reward-categories-title">Bonus categories</h3>
-								<p>Map bonuses to Plaid categories to estimate each transaction’s rewards.</p>
-							</div>
-							<button
-								type="button"
-								onclick={addRewardCategory}
-								disabled={rewardsForm.categories.length >= 12 || busyAction === 'save-rewards'}
-							>
-								+ Add category
-							</button>
-						</header>
-
-						{#if rewardsForm.categories.length > 0}
-							<div class="reward-category-rows">
-								{#each rewardsForm.categories as category, index (category)}
-									<div class="reward-category-row">
-										<label>
-											<span>Category</span>
-											<input bind:value={category.name} maxlength="60" placeholder="Dining" />
-										</label>
-										<label>
-											<span>Match activity</span>
-											<select bind:value={category.matchCategory}>
-												<option value="">Display only</option>
-												{#each REWARD_CATEGORY_MATCH_OPTIONS as option (option.value)}
-													<option value={option.value}>{option.label}</option>
-												{/each}
-											</select>
-										</label>
-										<label class="reward-rate-field">
-											<span>{rewardsForm.rewardType === 'cash_back' ? 'Rate' : 'Multiplier'}</span>
-											<div class="rate-input">
-												<input
-													bind:value={category.multiplier}
-													type="number"
-													min="0.01"
-													max="100"
-													step="0.01"
-													inputmode="decimal"
-													placeholder="3"
-												/>
-												<span>{rewardsForm.rewardType === 'cash_back' ? '%' : 'x'}</span>
-											</div>
-										</label>
-										<button
-											class="remove-reward-category"
-											type="button"
-											onclick={() => removeRewardCategory(index)}
-											disabled={busyAction === 'save-rewards'}
-											aria-label={`Remove ${category.name || `category ${index + 1}`}`}
-										>
-											<svg aria-hidden="true" viewBox="0 0 20 20"
-												><path d="M5 5l10 10M15 5 5 15"></path></svg
-											>
-										</button>
+				{#if !rewardsEditing}
+					<div class="reward-details-body">
+						{#if rewardsCard.rewardType && rewardsCard.rewardBaseRate !== null}
+							{#if rewardsCard.rewardSource === 'automatic'}
+								<div class="reward-detected-note">
+									<svg aria-hidden="true" viewBox="0 0 20 20"><path d="m5 10 3 3 7-7"></path></svg>
+									<div>
+										<strong>Automatically matched</strong>
+										<span>{rewardsCard.rewardProfileName ?? rewardsCard.nickname}</span>
 									</div>
-								{/each}
-							</div>
+								</div>
+							{/if}
+
+							<section class="reward-profile-summary" aria-label="Detected reward profile">
+								<div class="reward-profile-program">
+									<span>Rewards program</span>
+									<strong>{rewardsCard.rewardProgramName ?? 'Card rewards'}</strong>
+								</div>
+								<div>
+									<span>Reward type</span>
+									<strong>{rewardTypeLabel(rewardsCard.rewardType)}</strong>
+								</div>
+								<div>
+									<span
+										>{rewardsCard.rewardType === 'cash_back'
+											? 'Base rate'
+											: 'Base multiplier'}</span
+									>
+									<strong
+										>{formatRewardRate(rewardsCard.rewardBaseRate, rewardsCard.rewardType)}</strong
+									>
+								</div>
+							</section>
+
+							{#if rewardsCard.rewardCategories.length > 0}
+								<section
+									class="reward-profile-categories"
+									aria-labelledby="detected-categories-title"
+								>
+									<h3 id="detected-categories-title">
+										{rewardsCard.rewardCalculation === 'venmo_spend_ranked'
+											? 'Automatic spend ranking'
+											: 'Bonus categories'}
+									</h3>
+									<ul>
+										{#each rewardsCard.rewardCategories as category (category.id)}
+											<li>
+												<span>{category.name}</span>
+												<strong
+													>{formatRewardRate(category.multiplier, rewardsCard.rewardType)}</strong
+												>
+											</li>
+										{/each}
+									</ul>
+									{#if rewardsCard.rewardCalculation === 'venmo_spend_ranked'}
+										<p>
+											ChipDue ranks eligible categories from each statement period and updates every
+											transaction estimate automatically.
+										</p>
+									{/if}
+								</section>
+							{/if}
 						{:else}
-							<p class="reward-categories-empty">No bonus categories added yet.</p>
+							<div class="reward-profile-missing">
+								<strong>Reward profile not identified yet</strong>
+								<p>Sync the linked account so ChipDue can use the card’s official product name.</p>
+							</div>
 						{/if}
-					</section>
 
-					{#if rewardsError}
-						<p class="form-error" role="alert">{rewardsError}</p>
-					{/if}
+						<footer class="dialog-actions reward-detail-actions">
+							<button class="button button-quiet" type="button" onclick={closeRewardsDialog}
+								>Close</button
+							>
+							<button class="button button-secondary" type="button" onclick={editRewardsManually}
+								>Edit manually</button
+							>
+						</footer>
+					</div>
+				{:else}
+					<form class="card-form rewards-form" onsubmit={saveCardRewards} autocomplete="off">
+						{#if rewardsCard.rewardSource === 'automatic'}
+							<p class="manual-reward-warning">
+								Saving here replaces the automatically detected profile for this card.
+							</p>
+						{/if}
+						<div class="form-grid">
+							<label class="field">
+								<span>Rewards program <small>Optional</small></span>
+								<input
+									bind:this={rewardsFirstField}
+									bind:value={rewardsForm.programName}
+									name="rewardProgramName"
+									maxlength="80"
+									placeholder="Ultimate Rewards"
+								/>
+							</label>
 
-					<footer class="dialog-actions">
-						<button
-							class="button button-quiet"
-							type="button"
-							onclick={closeRewardsDialog}
-							disabled={busyAction === 'save-rewards'}>Cancel</button
-						>
-						<button
-							class="button button-primary"
-							type="submit"
-							disabled={busyAction === 'save-rewards'}
-							aria-busy={busyAction === 'save-rewards'}
-						>
-							{busyAction === 'save-rewards' ? 'Saving…' : 'Save rewards'}
-						</button>
-					</footer>
-				</form>
+							<label class="field">
+								<span>Reward type</span>
+								<select bind:value={rewardsForm.rewardType} name="rewardType">
+									<option value="points">Points</option>
+									<option value="miles">Miles</option>
+									<option value="cash_back">Cash back</option>
+								</select>
+							</label>
+
+							<label class="field">
+								<span>
+									{rewardsForm.rewardType === 'cash_back' ? 'Base earning rate' : 'Base multiplier'}
+									<small
+										>{rewardsForm.rewardType === 'cash_back' ? 'Percent' : 'Points per $1'}</small
+									>
+								</span>
+								<div class="rate-input">
+									<input
+										bind:value={rewardsForm.baseRate}
+										name="rewardBaseRate"
+										type="number"
+										min="0.01"
+										max="100"
+										step="0.01"
+										inputmode="decimal"
+										placeholder="1"
+									/>
+									<span>{rewardsForm.rewardType === 'cash_back' ? '%' : 'x'}</span>
+								</div>
+							</label>
+						</div>
+
+						<section class="reward-category-editor" aria-labelledby="reward-categories-title">
+							<header>
+								<div>
+									<h3 id="reward-categories-title">Bonus categories</h3>
+									<p>Map bonuses to Plaid categories to estimate each transaction’s rewards.</p>
+								</div>
+								<button
+									type="button"
+									onclick={addRewardCategory}
+									disabled={rewardsForm.categories.length >= 12 || busyAction === 'save-rewards'}
+								>
+									+ Add category
+								</button>
+							</header>
+
+							{#if rewardsForm.categories.length > 0}
+								<div class="reward-category-rows">
+									{#each rewardsForm.categories as category, index (category)}
+										<div class="reward-category-row">
+											<label>
+												<span>Category</span>
+												<input bind:value={category.name} maxlength="60" placeholder="Dining" />
+											</label>
+											<label>
+												<span>Match activity</span>
+												<select bind:value={category.matchCategory}>
+													<option value="">Display only</option>
+													{#each REWARD_CATEGORY_MATCH_OPTIONS as option (option.value)}
+														<option value={option.value}>{option.label}</option>
+													{/each}
+												</select>
+											</label>
+											<label class="reward-rate-field">
+												<span>{rewardsForm.rewardType === 'cash_back' ? 'Rate' : 'Multiplier'}</span
+												>
+												<div class="rate-input">
+													<input
+														bind:value={category.multiplier}
+														type="number"
+														min="0.01"
+														max="100"
+														step="0.01"
+														inputmode="decimal"
+														placeholder="3"
+													/>
+													<span>{rewardsForm.rewardType === 'cash_back' ? '%' : 'x'}</span>
+												</div>
+											</label>
+											<button
+												class="remove-reward-category"
+												type="button"
+												onclick={() => removeRewardCategory(index)}
+												disabled={busyAction === 'save-rewards'}
+												aria-label={`Remove ${category.name || `category ${index + 1}`}`}
+											>
+												<svg aria-hidden="true" viewBox="0 0 20 20"
+													><path d="M5 5l10 10M15 5 5 15"></path></svg
+												>
+											</button>
+										</div>
+									{/each}
+								</div>
+							{:else}
+								<p class="reward-categories-empty">No bonus categories added yet.</p>
+							{/if}
+						</section>
+
+						{#if rewardsError}
+							<p class="form-error" role="alert">{rewardsError}</p>
+						{/if}
+
+						<footer class="dialog-actions">
+							<button
+								class="button button-quiet"
+								type="button"
+								onclick={closeRewardsDialog}
+								disabled={busyAction === 'save-rewards'}>Cancel</button
+							>
+							<button
+								class="button button-primary"
+								type="submit"
+								disabled={busyAction === 'save-rewards'}
+								aria-busy={busyAction === 'save-rewards'}
+							>
+								{busyAction === 'save-rewards' ? 'Saving…' : 'Save rewards'}
+							</button>
+						</footer>
+					</form>
+				{/if}
 			</div>
 		</div>
 	{/if}
@@ -5817,6 +5913,157 @@
 		width: min(100%, 760px);
 	}
 
+	.reward-details-body {
+		padding: 1.4rem 1.5rem 1.5rem;
+	}
+
+	.reward-detected-note {
+		display: flex;
+		gap: 0.7rem;
+		align-items: center;
+		padding: 0.8rem 0.9rem;
+		border: 1px solid #bddccf;
+		border-radius: 10px;
+		color: #245c48;
+		background: #eef8f3;
+	}
+
+	.reward-detected-note svg {
+		width: 20px;
+		height: 20px;
+		padding: 3px;
+		border-radius: 50%;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 2;
+		background: #d8eee4;
+	}
+
+	.reward-detected-note div {
+		display: grid;
+		gap: 0.12rem;
+	}
+
+	.reward-detected-note strong {
+		font-size: 0.72rem;
+	}
+
+	.reward-detected-note span {
+		font-size: 0.63rem;
+	}
+
+	.reward-profile-summary {
+		display: grid;
+		grid-template-columns: minmax(0, 1.7fr) 1fr 1fr;
+		margin-top: 1rem;
+		border: 1px solid var(--line);
+		border-radius: 10px;
+		overflow: hidden;
+	}
+
+	.reward-profile-summary > div {
+		display: grid;
+		gap: 0.3rem;
+		padding: 0.85rem 0.9rem;
+		background: white;
+	}
+
+	.reward-profile-summary > div + div {
+		border-left: 1px solid var(--line);
+	}
+
+	.reward-profile-summary span,
+	.reward-profile-categories h3 {
+		color: var(--faint);
+		font-size: 0.6rem;
+		font-weight: 650;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+
+	.reward-profile-summary strong {
+		font-size: 0.76rem;
+	}
+
+	.reward-profile-categories {
+		margin-top: 1rem;
+		padding: 0.95rem;
+		border: 1px solid var(--line);
+		border-radius: 10px;
+		background: var(--paper-soft);
+	}
+
+	.reward-profile-categories h3,
+	.reward-profile-categories p,
+	.reward-profile-categories ul {
+		margin: 0;
+	}
+
+	.reward-profile-categories ul {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.5rem;
+		margin-top: 0.7rem;
+		padding: 0;
+		list-style: none;
+	}
+
+	.reward-profile-categories li {
+		display: flex;
+		gap: 0.8rem;
+		align-items: center;
+		justify-content: space-between;
+		padding: 0.65rem 0.7rem;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		font-size: 0.68rem;
+		background: white;
+	}
+
+	.reward-profile-categories li strong {
+		color: #2d47bd;
+		font-size: 0.7rem;
+	}
+
+	.reward-profile-categories p {
+		margin-top: 0.7rem;
+		color: var(--muted);
+		font-size: 0.63rem;
+		line-height: 1.5;
+	}
+
+	.reward-profile-missing {
+		padding: 1.3rem;
+		border: 1px dashed var(--line-strong);
+		border-radius: 10px;
+		text-align: center;
+		background: var(--paper-soft);
+	}
+
+	.reward-profile-missing strong {
+		font-size: 0.78rem;
+	}
+
+	.reward-profile-missing p {
+		margin: 0.35rem 0 0;
+		color: var(--muted);
+		font-size: 0.67rem;
+	}
+
+	.reward-detail-actions {
+		margin-top: 1.1rem;
+	}
+
+	.manual-reward-warning {
+		margin: 0 0 1rem;
+		padding: 0.7rem 0.8rem;
+		border: 1px solid #ead9ad;
+		border-radius: 8px;
+		color: #76591f;
+		font-size: 0.64rem;
+		background: #fff9e9;
+	}
+
 	.history-body {
 		padding: 0 1.5rem 1.5rem;
 	}
@@ -6450,9 +6697,27 @@
 
 		.dialog-header,
 		.card-form,
-		.history-body {
+		.history-body,
+		.reward-details-body {
 			padding-right: 1.15rem;
 			padding-left: 1.15rem;
+		}
+
+		.reward-profile-summary {
+			grid-template-columns: 1fr 1fr;
+		}
+
+		.reward-profile-summary .reward-profile-program {
+			grid-column: 1 / -1;
+			border-bottom: 1px solid var(--line);
+		}
+
+		.reward-profile-summary > div:nth-child(2) {
+			border-left: 0;
+		}
+
+		.reward-profile-categories ul {
+			grid-template-columns: 1fr;
 		}
 
 		.transaction-list li {

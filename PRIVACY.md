@@ -28,8 +28,8 @@ ChipDue stores only the fields required for the private financial workspace:
 - Statement balance, minimum payment, and current balance
 - Statement date and next payment due date
 - Autopay preference, source, and last-update time
-- Optional rewards program name, reward type, base earning rate, cash-equivalent reward value, and user-entered bonus category names, rates, and Plaid category mappings
-- Reward estimates calculated by ChipDue from encrypted transaction amounts and the earning rules you enter; these are not issuer-reported rewards
+- Optional rewards program name, reward type, base earning rate, cash-equivalent reward value, bonus category names, rates, Plaid category mappings, and whether the profile was automatically matched or manually overridden
+- Reward estimates calculated by ChipDue from encrypted transaction amounts and either an automatically matched card profile or a manual override; these are not issuer-reported rewards
 - Opaque identifiers needed to update or delete records
 - For Plaid connections, encrypted access tokens, Item IDs, selected account details and balances, and optional investment holding cost basis
 - For a user-configured Plaid integration, the encrypted client ID and Production secret for that user's Plaid team

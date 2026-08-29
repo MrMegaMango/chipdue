@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { AutomaticCardRewardProfile, CardRewardCalculation } from '$lib/card-reward-profiles';
 import type {
 	Card,
 	CardRewardCategory,
@@ -30,6 +31,9 @@ interface StoredCardRewards {
 	cashValueCents: number | null;
 	rewardType?: CardRewardType | null;
 	baseRate?: number | null;
+	source?: 'automatic' | 'manual';
+	profileName?: string | null;
+	calculation?: CardRewardCalculation;
 	categories: StoredCardRewardCategory[];
 }
 
@@ -38,6 +42,9 @@ interface NormalizedCardRewards {
 	cashValueCents: number | null;
 	rewardType: CardRewardType | null;
 	baseRate: number | null;
+	source: 'automatic' | 'manual' | null;
+	profileName: string | null;
+	calculation: CardRewardCalculation | null;
 	categories: CardRewardCategory[];
 }
 
@@ -97,6 +104,7 @@ interface PlaidCardRow extends CardRow {
 
 export interface PlaidCardSnapshot extends CardPayload {
 	accountId: string;
+	automaticRewardProfile?: AutomaticCardRewardProfile | null;
 }
 
 export interface PlaidTransactionState {
@@ -118,6 +126,7 @@ const CARD_REWARD_CATEGORY_MATCHES = new Set<CardRewardCategoryMatch>([
 	'groceries',
 	'gas',
 	'travel',
+	'flights_hotels',
 	'transit',
 	'entertainment',
 	'drugstores',
@@ -234,6 +243,15 @@ function isStoredCardRewards(value: unknown): value is StoredCardRewards | undef
 		(rewards.baseRate === undefined ||
 			rewards.baseRate === null ||
 			isRewardRate(rewards.baseRate)) &&
+		(rewards.source === undefined ||
+			rewards.source === 'automatic' ||
+			rewards.source === 'manual') &&
+		(rewards.profileName === undefined ||
+			rewards.profileName === null ||
+			(typeof rewards.profileName === 'string' && rewards.profileName.length <= 80)) &&
+		(rewards.calculation === undefined ||
+			rewards.calculation === 'static' ||
+			rewards.calculation === 'venmo_spend_ranked') &&
 		Array.isArray(rewards.categories) &&
 		rewards.categories.length <= 12 &&
 		rewards.categories.every(
@@ -291,16 +309,25 @@ function inferredRewardMatch(name: string): CardRewardCategoryMatch | null {
 }
 
 function normalizeStoredRewards(rewards: StoredCardRewards | undefined): NormalizedCardRewards {
+	const hasConfiguredRewards = Boolean(
+		rewards?.programName || rewards?.rewardType || rewards?.baseRate || rewards?.categories.length
+	);
 	return {
 		programName: rewards?.programName ?? null,
 		cashValueCents: rewards?.cashValueCents ?? null,
 		rewardType: rewards?.rewardType ?? null,
 		baseRate: rewards?.baseRate ?? null,
+		source: rewards?.source ?? (hasConfiguredRewards ? 'manual' : null),
+		profileName: rewards?.profileName ?? null,
+		calculation: rewards?.calculation ?? (hasConfiguredRewards ? 'static' : null),
 		categories: (rewards?.categories ?? []).map((category) => ({
 			id: category.id,
 			name: category.name,
 			multiplier: category.multiplier ?? parseLegacyRewardRate(category.rate),
-			matchCategory: category.matchCategory ?? inferredRewardMatch(category.name)
+			matchCategory:
+				category.matchCategory === undefined
+					? inferredRewardMatch(category.name)
+					: category.matchCategory
 		}))
 	};
 }
@@ -361,6 +388,9 @@ function rowToCard(row: CardRow): Card | null {
 		rewardType: rewards.rewardType,
 		rewardBaseRate: rewards.baseRate,
 		rewardCategories: rewards.categories,
+		rewardSource: rewards.source,
+		rewardProfileName: rewards.profileName,
+		rewardCalculation: rewards.calculation,
 		transactionHistoryEnabled: payload.transactionHistory?.enabled === true,
 		transactionHistoryStatus: payload.transactionHistory?.status ?? null,
 		plaidConnectionId: row.source === 'plaid' ? row.plaid_item_id : null,
@@ -459,7 +489,37 @@ function uniqueCards(rows: CardRow[]): Card[] {
 	return [...cards, ...unmatchedPlaidCards];
 }
 
+function automaticStoredRewards(profile: AutomaticCardRewardProfile): StoredCardRewards {
+	return {
+		programName: profile.programName,
+		cashValueCents: null,
+		rewardType: profile.rewardType,
+		baseRate: profile.baseRate,
+		source: 'automatic',
+		profileName: profile.cardName,
+		calculation: profile.calculation,
+		categories: profile.categories.map((category) => ({
+			id: privateUuid(
+				`${profile.id}:${category.name}:${category.matchCategory ?? 'ranked'}`,
+				'automatic-card-reward-category'
+			),
+			...category
+		}))
+	};
+}
+
+function rewardsForSnapshot(
+	profile: AutomaticCardRewardProfile | null | undefined,
+	existing: StoredCardRewards | undefined
+): StoredCardRewards | undefined {
+	const normalized = normalizeStoredRewards(existing);
+	if (normalized.source === 'manual') return existing;
+	if (profile) return automaticStoredRewards(profile);
+	return existing;
+}
+
 function snapshotPayload(snapshot: PlaidCardSnapshot, rewards?: StoredCardRewards): CardPayload {
+	const resolvedRewards = rewardsForSnapshot(snapshot.automaticRewardProfile, rewards);
 	return {
 		...tenantPayloadFields(),
 		nickname: snapshot.nickname,
@@ -474,7 +534,7 @@ function snapshotPayload(snapshot: PlaidCardSnapshot, rewards?: StoredCardReward
 		statementDate: snapshot.statementDate,
 		isOverdue: snapshot.isOverdue,
 		autopayEnabled: snapshot.autopayEnabled,
-		...(rewards ? { rewards } : {}),
+		...(resolvedRewards ? { rewards: resolvedRewards } : {}),
 		...(snapshot.transactionHistory ? { transactionHistory: snapshot.transactionHistory } : {})
 	};
 }
@@ -590,6 +650,9 @@ export async function updateManualCard(id: string, changes: UpdateManualCardData
 			cashValueCents: existing.rewardValueCents,
 			rewardType: existing.rewardType,
 			baseRate: existing.rewardBaseRate,
+			source: existing.rewardSource ?? 'manual',
+			profileName: existing.rewardProfileName,
+			calculation: existing.rewardCalculation ?? 'static',
 			categories: existing.rewardCategories.map((category) => ({
 				id: category.id,
 				name: category.name,
@@ -636,6 +699,9 @@ export async function updateCardRewards(id: string, changes: UpdateCardRewardsDa
 			changes.rewardValueCents === undefined ? existing.cashValueCents : changes.rewardValueCents,
 		rewardType: changes.rewardType === undefined ? existing.rewardType : changes.rewardType,
 		baseRate: changes.rewardBaseRate === undefined ? existing.baseRate : changes.rewardBaseRate,
+		source: 'manual',
+		profileName: null,
+		calculation: 'static',
 		categories:
 			changes.rewardCategories === undefined
 				? existing.categories
@@ -882,6 +948,8 @@ function transactionMatchesRewardCategory(
 			return /(GAS|FUEL)/.test(detailed);
 		case 'travel':
 			return primary === 'TRAVEL';
+		case 'flights_hotels':
+			return primary === 'TRAVEL' && /(FLIGHT|AIRLINE|LODGING|HOTEL|MOTEL|RESORT)/.test(detailed);
 		case 'transit':
 			return (
 				primary === 'TRANSPORTATION' &&
@@ -906,9 +974,107 @@ function transactionMatchesRewardCategory(
 	}
 }
 
+interface RankedRewardRate {
+	rate: number;
+	categoryName: string;
+}
+
+function venmoEligibleCategory(
+	transaction: StoredPlaidTransaction
+): { key: string; label: string } | null {
+	if (transactionMatchesRewardCategory(transaction, 'transit')) {
+		return { key: 'transportation', label: 'Transportation' };
+	}
+	if (transactionMatchesRewardCategory(transaction, 'travel')) {
+		return { key: 'travel', label: 'Travel' };
+	}
+	if (transactionMatchesRewardCategory(transaction, 'groceries')) {
+		return { key: 'groceries', label: 'Groceries' };
+	}
+	if (transactionMatchesRewardCategory(transaction, 'entertainment')) {
+		return { key: 'entertainment', label: 'Entertainment' };
+	}
+	if (transactionMatchesRewardCategory(transaction, 'dining')) {
+		return { key: 'dining', label: 'Dining & nightlife' };
+	}
+	if (transactionMatchesRewardCategory(transaction, 'utilities')) {
+		return { key: 'utilities', label: 'Bills & utilities' };
+	}
+	if (
+		transactionMatchesRewardCategory(transaction, 'drugstores') ||
+		transaction.categoryPrimary?.toUpperCase() === 'PERSONAL_CARE'
+	) {
+		return { key: 'health_beauty', label: 'Health & beauty' };
+	}
+	if (transactionMatchesRewardCategory(transaction, 'gas')) {
+		return { key: 'gas', label: 'Gas' };
+	}
+	return null;
+}
+
+function rewardPeriodKey(transactionDate: string, statementDate: string | null): string {
+	if (!statementDate) return transactionDate.slice(0, 7);
+	const [year, month, day] = transactionDate.split('-').map(Number);
+	const statementDay = Number(statementDate.slice(8, 10));
+	const periodEnd = new Date(Date.UTC(year, month - 1 + (day > statementDay ? 1 : 0), 1));
+	return `${periodEnd.getUTCFullYear()}-${String(periodEnd.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function venmoRankedRewardRates(
+	transactions: StoredPlaidTransaction[],
+	statementDate: string | null
+): Map<string, RankedRewardRate> {
+	const totalsByMonth = new Map<string, Map<string, { amountCents: number; label: string }>>();
+	for (const transaction of transactions) {
+		if (transaction.amountCents <= 0) continue;
+		const category = venmoEligibleCategory(transaction);
+		if (!category) continue;
+		const month = rewardPeriodKey(transaction.date, statementDate);
+		const totals = totalsByMonth.get(month) ?? new Map();
+		const current = totals.get(category.key) ?? { amountCents: 0, label: category.label };
+		current.amountCents += transaction.amountCents;
+		totals.set(category.key, current);
+		totalsByMonth.set(month, totals);
+	}
+
+	const rankingByMonth = new Map<string, Map<string, number>>();
+	for (const [month, totals] of totalsByMonth) {
+		const ranking = new Map<string, number>();
+		[...totals.entries()]
+			.sort(
+				([leftKey, left], [rightKey, right]) =>
+					right.amountCents - left.amountCents || leftKey.localeCompare(rightKey)
+			)
+			.forEach(([key], index) => ranking.set(key, index === 0 ? 3 : index === 1 ? 2 : 1));
+		rankingByMonth.set(month, ranking);
+	}
+
+	return new Map(
+		transactions.flatMap((transaction) => {
+			const category = venmoEligibleCategory(transaction);
+			if (!category) return [];
+			const rate = rankingByMonth
+				.get(rewardPeriodKey(transaction.date, statementDate))
+				?.get(category.key);
+			return rate
+				? [
+						[
+							transaction.transactionId,
+							{
+								rate,
+								categoryName: `${category.label} · ${rate === 3 ? 'top' : rate === 2 ? 'second' : 'other'} category`
+							}
+						] as const
+					]
+				: [];
+		})
+	);
+}
+
 function transactionRewardEstimate(
 	transaction: StoredPlaidTransaction,
-	rewards: NormalizedCardRewards
+	rewards: NormalizedCardRewards,
+	rankedRate?: RankedRewardRate
 ): CardTransactionRewardEstimate | null {
 	if (
 		!rewards.rewardType ||
@@ -919,8 +1085,8 @@ function transactionRewardEstimate(
 		return null;
 	}
 
-	let rate = rewards.baseRate;
-	let categoryName: string | null = null;
+	let rate = rankedRate?.rate ?? rewards.baseRate;
+	let categoryName: string | null = rankedRate?.categoryName ?? null;
 	for (const category of rewards.categories) {
 		if (
 			category.multiplier !== null &&
@@ -990,6 +1156,10 @@ export async function listCardTransactions(
 		);
 	}
 	const rewards = normalizeStoredRewards(payload?.rewards);
+	const rankedRates =
+		rewards.calculation === 'venmo_spend_ranked'
+			? venmoRankedRewardRates(history.transactions, payload.statementDate)
+			: new Map<string, RankedRewardRate>();
 	const transactions = history.transactions
 		.map<CardTransaction>((transaction) => ({
 			id: privateUuid(transaction.transactionId, `plaid-transaction:${cardId}`),
@@ -1002,7 +1172,11 @@ export async function listCardTransactions(
 			pending: transaction.pending,
 			categoryPrimary: transaction.categoryPrimary,
 			categoryDetailed: transaction.categoryDetailed,
-			rewardEstimate: transactionRewardEstimate(transaction, rewards)
+			rewardEstimate: transactionRewardEstimate(
+				transaction,
+				rewards,
+				rankedRates.get(transaction.transactionId)
+			)
 		}))
 		.sort(
 			(left, right) => right.date.localeCompare(left.date) || left.name.localeCompare(right.name)
