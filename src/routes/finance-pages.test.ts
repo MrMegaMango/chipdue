@@ -202,6 +202,31 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain("syncing ? 'Syncing…' : 'Sync connections'");
 	});
 
+	it('reuses private responses and avoids work that the active tab does not display', () => {
+		for (const source of [dashboardSource, accountsSource, bonusesSource]) {
+			expect(source).toContain('reusePrivateApiGet');
+			expect(source).toContain('clearPrivateApiCache');
+		}
+		expect(dashboardSource).toContain("if (currentSection === 'settings')");
+		expect(dashboardSource).toContain("if (currentSection === 'cards')");
+		expect(dashboardSource).toContain(
+			"if (currentSection === 'cards') void refreshRecentActivity(cards, expectedEpoch);"
+		);
+		expect(bonusesSource).toContain(
+			'void loadLinkedAccountActivity(bonusResponse.bonuses, accountResponse.accounts);'
+		);
+		expect(bonusesSource).toContain('Loading posted activity…');
+	});
+
+	it('checks E*TRADE open orders only when requested', () => {
+		expect(accountsSource).toContain('ordersRequestedByAccount');
+		expect(accountsSource).toContain('Live E*TRADE orders are checked only when you ask.');
+		expect(accountsSource).toContain('>Check open orders</button');
+		expect(accountsSource).toContain('onclick={() => loadBrokerageOrders(account)}');
+		expect(accountsSource).not.toContain('loadBrokerageOrders(loadedAccounts');
+		expect(accountsSource).toContain('loadEtradeEstimatedHistories(loadedAccounts)');
+	});
+
 	it('matches the cards toolbar scale and button geometry', () => {
 		for (const marker of [
 			'font-size: clamp(1.7rem, 3vw, 2.2rem)',

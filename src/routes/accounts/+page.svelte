@@ -6,6 +6,7 @@
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
 	import { financialProviderName } from '$lib/financial-data';
 	import { cashSweepAction, isCashSweepSecurity } from '$lib/investment-display';
+	import { clearPrivateApiCache, reusePrivateApiGet } from '$lib/private-api-cache';
 	import type {
 		BrokerageOrder,
 		BrokerageHistoryEstimateResponse,
@@ -107,6 +108,7 @@
 	let activityErrorByAccount = $state<Record<string, boolean>>({});
 	let expandedActivityAccountIds = $state<string[]>([]);
 	let ordersByAccount = $state<Record<string, BrokerageOrdersResponse>>({});
+	let ordersRequestedByAccount = $state<Record<string, boolean>>({});
 	let ordersLoadingByAccount = $state<Record<string, boolean>>({});
 	let ordersErrorByAccount = $state<Record<string, boolean>>({});
 	let historyEstimateLoadingByAccount = $state<Record<string, boolean>>({});
@@ -279,8 +281,8 @@
 				.map((bonus) => bonus.accountId)
 				.filter((accountId): accountId is string => Boolean(accountId));
 			loading = false;
-			// Activity, open orders, and estimated history can involve provider calls. Render the
-			// account inventory first, then let those details fill in without blocking the page.
+			// Activity and estimated history can involve provider calls. Render the account inventory
+			// first, then let those details fill in without blocking the page.
 			void loadSupplementalAccountData(
 				accountResponse.accounts.filter((account) => !account.hidden)
 			);
@@ -292,21 +294,30 @@
 	}
 
 	async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
-		const response = await fetch(url, {
-			...init,
-			headers: init?.body ? { 'content-type': 'application/json', ...init.headers } : init?.headers
-		});
-		if (response.status === 401) {
-			window.location.assign(resolve('/'));
-			throw new Error('Your private session has ended.');
-		}
-		if (!response.ok) {
-			const payload = (await response.json().catch(() => null)) as {
-				error?: { message?: string };
-			} | null;
-			throw new Error(payload?.error?.message || 'The request could not be completed.');
-		}
-		return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
+		const method = (init?.method ?? 'GET').toUpperCase();
+		const load = async (): Promise<T> => {
+			const response = await fetch(url, {
+				...init,
+				headers: init?.body
+					? { 'content-type': 'application/json', ...init.headers }
+					: init?.headers
+			});
+			if (response.status === 401) {
+				clearPrivateApiCache();
+				window.location.assign(resolve('/'));
+				throw new Error('Your private session has ended.');
+			}
+			if (!response.ok) {
+				const payload = (await response.json().catch(() => null)) as {
+					error?: { message?: string };
+				} | null;
+				throw new Error(payload?.error?.message || 'The request could not be completed.');
+			}
+			return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
+		};
+		const payload = method === 'GET' ? await reusePrivateApiGet(url, load) : await load();
+		if (method !== 'GET') clearPrivateApiCache();
+		return payload;
 	}
 
 	function readableError(error: unknown, fallback: string): string {
@@ -738,42 +749,39 @@
 		);
 	}
 
-	async function loadBrokerageOrders(
-		loadedAccounts: FinancialAccount[],
-		preserveExisting = false
-	): Promise<void> {
-		const eligibleAccounts = loadedAccounts.filter(
-			(account) => account.source === 'connected' && isEtradeBrokerage(account)
-		);
-		const eligibleAccountIds = new Set(eligibleAccounts.map((account) => account.id));
-		ordersByAccount = preserveExisting ? ordersByAccount : {};
-		ordersErrorByAccount = preserveExisting
-			? Object.fromEntries(
-					Object.entries(ordersErrorByAccount).filter(
-						([accountId]) => !eligibleAccountIds.has(accountId)
-					)
-				)
-			: {};
-		ordersLoadingByAccount = {
-			...(preserveExisting ? ordersLoadingByAccount : {}),
-			...Object.fromEntries(eligibleAccounts.map((account) => [account.id, true]))
-		};
+	async function loadBrokerageOrders(account: FinancialAccount): Promise<void> {
+		if (
+			account.source !== 'connected' ||
+			!isEtradeBrokerage(account) ||
+			ordersLoadingByAccount[account.id]
+		) {
+			return;
+		}
+		ordersRequestedByAccount = { ...ordersRequestedByAccount, [account.id]: true };
+		ordersErrorByAccount = { ...ordersErrorByAccount, [account.id]: false };
+		ordersLoadingByAccount = { ...ordersLoadingByAccount, [account.id]: true };
+		try {
+			const response = await requestJson<BrokerageOrdersResponse>(
+				resolve('/api/accounts/[id]/orders', { id: account.id })
+			);
+			ordersByAccount = { ...ordersByAccount, [account.id]: response };
+		} catch {
+			ordersErrorByAccount = { ...ordersErrorByAccount, [account.id]: true };
+		} finally {
+			ordersLoadingByAccount = { ...ordersLoadingByAccount, [account.id]: false };
+		}
+	}
+
+	async function loadEtradeEstimatedHistories(loadedAccounts: FinancialAccount[]): Promise<void> {
 		await Promise.all(
-			eligibleAccounts.map(async (account) => {
-				try {
-					const response = await requestJson<BrokerageOrdersResponse>(
-						resolve('/api/accounts/[id]/orders', { id: account.id })
-					);
-					ordersByAccount = { ...ordersByAccount, [account.id]: response };
-					if (response.availability === 'available' && needsEstimatedContributionHistory(account)) {
-						await buildEstimatedHistory(account, true);
-					}
-				} catch {
-					ordersErrorByAccount = { ...ordersErrorByAccount, [account.id]: true };
-				} finally {
-					ordersLoadingByAccount = { ...ordersLoadingByAccount, [account.id]: false };
-				}
-			})
+			loadedAccounts
+				.filter(
+					(account) =>
+						account.source === 'connected' &&
+						isEtradeBrokerage(account) &&
+						needsEstimatedContributionHistory(account)
+				)
+				.map((account) => buildEstimatedHistory(account, true))
 		);
 	}
 
@@ -850,7 +858,7 @@
 			: requestedAccountIds;
 		await Promise.all([
 			loadAccountActivities(loadedAccounts, preserveExisting),
-			loadBrokerageOrders(loadedAccounts, preserveExisting),
+			loadEtradeEstimatedHistories(loadedAccounts),
 			loadPlaidEstimatedHistories(loadedAccounts, refreshPlaidEstimates)
 		]);
 	}
@@ -869,6 +877,10 @@
 	async function reloadAccounts(refreshPlaidEstimates = false): Promise<void> {
 		const response = await requestJson<{ accounts: FinancialAccount[] }>(resolve('/api/accounts'));
 		accounts = response.accounts;
+		ordersByAccount = {};
+		ordersRequestedByAccount = {};
+		ordersLoadingByAccount = {};
+		ordersErrorByAccount = {};
 		await loadSupplementalAccountData(
 			response.accounts.filter((account) => showHidden || !account.hidden),
 			refreshPlaidEstimates
@@ -1634,10 +1646,12 @@
 																			{isEtradeBrokerage(account)
 																				? ordersLoadingByAccount[account.id]
 																					? 'Checking E*TRADE…'
-																					: ordersByAccount[account.id]?.availability ===
-																						  'available'
-																						? `${ordersByAccount[account.id].orders.length} open`
-																						: 'E*TRADE setup needed'
+																					: !ordersRequestedByAccount[account.id]
+																						? 'On demand'
+																						: ordersByAccount[account.id]?.availability ===
+																							  'available'
+																							? `${ordersByAccount[account.id].orders.length} open`
+																							: 'E*TRADE setup needed'
 																				: 'Not available'}
 																		</span>
 																	</div>
@@ -1646,12 +1660,28 @@
 																			Plaid does not provide open-order data. Check your brokerage
 																			before placing or changing a trade.
 																		</p>
+																	{:else if !ordersRequestedByAccount[account.id]}
+																		<p>
+																			Live E*TRADE orders are checked only when you ask.
+																			<button
+																				class="open-orders-link"
+																				type="button"
+																				onclick={() => loadBrokerageOrders(account)}
+																				>Check open orders</button
+																			>
+																		</p>
 																	{:else if ordersLoadingByAccount[account.id]}
 																		<p aria-busy="true">Loading open orders from E*TRADE…</p>
 																	{:else if ordersErrorByAccount[account.id]}
 																		<p>
 																			E*TRADE orders are temporarily unavailable. Verify them at the
 																			brokerage before trading.
+																			<button
+																				class="open-orders-link"
+																				type="button"
+																				onclick={() => loadBrokerageOrders(account)}
+																				>Try again</button
+																			>
 																		</p>
 																	{:else if ordersByAccount[account.id]?.availability === 'available'}
 																		{#if ordersByAccount[account.id].orders.length > 0}
@@ -2414,8 +2444,13 @@
 	.open-orders-link {
 		display: inline-block;
 		margin-left: 0.25rem;
+		padding: 0;
+		border: 0;
 		color: var(--accent-dark);
+		font: inherit;
 		font-weight: 750;
+		background: transparent;
+		cursor: pointer;
 	}
 
 	.cash-sweep-explainer {

@@ -11,6 +11,7 @@
 		type BonusTracker
 	} from '$lib/bonus-offers';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
+	import { clearPrivateApiCache, reusePrivateApiGet } from '$lib/private-api-cache';
 	import type {
 		AccountBonus,
 		BonusStatus,
@@ -68,6 +69,7 @@
 	let deletingId = $state<string | null>(null);
 	let requirementBusy = $state<string | null>(null);
 	let activityByAccount = $state<Record<string, AccountActivity>>({});
+	let activityLoadingByAccount = $state<Record<string, boolean>>({});
 	let activityErrors = $state<Record<string, string>>({});
 	let syncingAccountId = $state<string | null>(null);
 	let loggingOut = $state(false);
@@ -148,7 +150,7 @@
 			]);
 			bonuses = bonusResponse.bonuses;
 			accounts = accountResponse.accounts;
-			await loadLinkedAccountActivity(bonusResponse.bonuses, accountResponse.accounts);
+			void loadLinkedAccountActivity(bonusResponse.bonuses, accountResponse.accounts);
 			if (!queryPrefillHandled) {
 				queryPrefillHandled = true;
 				const accountId = new URL(window.location.href).searchParams.get('accountId');
@@ -164,21 +166,30 @@
 	}
 
 	async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
-		const response = await fetch(url, {
-			...init,
-			headers: init?.body ? { 'content-type': 'application/json', ...init.headers } : init?.headers
-		});
-		if (response.status === 401) {
-			window.location.assign(resolve('/'));
-			throw new Error('Your private session has ended.');
-		}
-		if (!response.ok) {
-			const payload = (await response.json().catch(() => null)) as {
-				error?: { message?: string };
-			} | null;
-			throw new Error(payload?.error?.message || 'The request could not be completed.');
-		}
-		return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
+		const method = (init?.method ?? 'GET').toUpperCase();
+		const load = async (): Promise<T> => {
+			const response = await fetch(url, {
+				...init,
+				headers: init?.body
+					? { 'content-type': 'application/json', ...init.headers }
+					: init?.headers
+			});
+			if (response.status === 401) {
+				clearPrivateApiCache();
+				window.location.assign(resolve('/'));
+				throw new Error('Your private session has ended.');
+			}
+			if (!response.ok) {
+				const payload = (await response.json().catch(() => null)) as {
+					error?: { message?: string };
+				} | null;
+				throw new Error(payload?.error?.message || 'The request could not be completed.');
+			}
+			return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
+		};
+		const payload = method === 'GET' ? await reusePrivateApiGet(url, load) : await load();
+		if (method !== 'GET') clearPrivateApiCache();
+		return payload;
 	}
 
 	function readableError(error: unknown, fallback: string): string {
@@ -269,6 +280,7 @@
 
 	async function loadAccountActivity(account: FinancialAccount): Promise<void> {
 		if (account.source !== 'connected' || !account.transactionHistoryEnabled) return;
+		activityLoadingByAccount = { ...activityLoadingByAccount, [account.id]: true };
 		try {
 			const activity = await requestJson<AccountActivity>(
 				resolve('/api/accounts/[id]/transactions', { id: account.id })
@@ -280,6 +292,8 @@
 				...activityErrors,
 				[account.id]: readableError(error, 'Linked account activity could not be loaded.')
 			};
+		} finally {
+			activityLoadingByAccount = { ...activityLoadingByAccount, [account.id]: false };
 		}
 	}
 
@@ -702,11 +716,14 @@
 										<div>
 											<span>Likely qualifying activity</span>
 											<strong
-												>{tracker.likelyQualifyingTransactions.length} / {tracker.offer
-													.transactionTarget}</strong
+												>{activityLoadingByAccount[tracker.account.id]
+													? '—'
+													: `${tracker.likelyQualifyingTransactions.length} / ${tracker.offer.transactionTarget}`}</strong
 											>
 											<small>
-												{#if tracker.account.source !== 'connected'}
+												{#if activityLoadingByAccount[tracker.account.id]}
+													Loading posted activity…
+												{:else if tracker.account.source !== 'connected'}
 													Manual account — verify activity with {tracker.offer.institution}
 												{:else if tracker.account.transactionHistoryStatus === 'preparing'}
 													The provider is still preparing older activity
@@ -772,7 +789,8 @@
 										{#if tracker.account.connectionId}
 											<button
 												type="button"
-												disabled={syncingAccountId !== null}
+												disabled={syncingAccountId !== null ||
+													activityLoadingByAccount[tracker.account.id]}
 												onclick={() => checkLinkedAccount(bonus)}
 											>
 												{syncingAccountId === tracker.account.id

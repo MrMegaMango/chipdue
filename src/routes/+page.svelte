@@ -199,6 +199,7 @@
 	import NetWorthChart from '$lib/components/NetWorthChart.svelte';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
 	import { financialProviderName } from '$lib/financial-data';
+	import { clearPrivateApiCache, reusePrivateApiGet } from '$lib/private-api-cache';
 	import type { FinancialAccount } from '$lib/types';
 
 	type PageSection = 'overview' | 'cards' | 'settings';
@@ -222,7 +223,11 @@
 		authenticated: boolean;
 		google: GoogleAuthStatus;
 	};
-	type RequestOptions = { handleUnauthorized?: boolean; privateEpoch?: number };
+	type RequestOptions = {
+		handleUnauthorized?: boolean;
+		memoryCache?: 'reuse' | 'bypass';
+		privateEpoch?: number;
+	};
 
 	type CardView = {
 		id: string;
@@ -701,38 +706,48 @@
 		options: RequestOptions = {}
 	): Promise<T> {
 		const requestEpoch = options.privateEpoch ?? privateStateEpoch;
-		const headers = new Headers(init.headers);
-		headers.set('Accept', 'application/json');
-		if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+		const method = (init.method ?? 'GET').toUpperCase();
+		const load = async (): Promise<T> => {
+			const headers = new Headers(init.headers);
+			headers.set('Accept', 'application/json');
+			if (init.body && !headers.has('Content-Type'))
+				headers.set('Content-Type', 'application/json');
 
-		const response = await fetch(url, {
-			...init,
-			headers,
-			credentials: 'same-origin',
-			cache: 'no-store'
-		});
+			const response = await fetch(url, {
+				...init,
+				headers,
+				credentials: 'same-origin',
+				cache: 'no-store'
+			});
 
-		const payload = await response.json().catch(() => null);
-		if (
-			response.status === 401 &&
-			options.handleUnauthorized !== false &&
-			isPrivateEpochCurrent(requestEpoch)
-		) {
-			lockCloudSession('Your session expired. Sign in to continue.');
-		}
-		if (!response.ok) {
-			const detail =
-				typeof payload?.error === 'string'
-					? payload.error
-					: typeof payload?.error?.message === 'string'
-						? payload.error.message
-						: typeof payload?.message === 'string'
-							? payload.message
-							: `Request failed (${response.status})`;
-			throw new Error(detail);
-		}
+			const payload = await response.json().catch(() => null);
+			if (
+				response.status === 401 &&
+				options.handleUnauthorized !== false &&
+				isPrivateEpochCurrent(requestEpoch)
+			) {
+				lockCloudSession('Your session expired. Sign in to continue.');
+			}
+			if (!response.ok) {
+				const detail =
+					typeof payload?.error === 'string'
+						? payload.error
+						: typeof payload?.error?.message === 'string'
+							? payload.error.message
+							: typeof payload?.message === 'string'
+								? payload.message
+								: `Request failed (${response.status})`;
+				throw new Error(detail);
+			}
+			return payload as T;
+		};
 
-		return payload as T;
+		const payload =
+			method === 'GET' && options.memoryCache !== 'bypass'
+				? await reusePrivateApiGet(url, load)
+				: await load();
+		if (method !== 'GET') clearPrivateApiCache();
+		return payload;
 	}
 
 	async function initializeAuth(): Promise<void> {
@@ -778,7 +793,7 @@
 			const session = await requestJson<AuthSession>(
 				resolve('/api/auth/session'),
 				{},
-				{ privateEpoch: epoch }
+				{ memoryCache: 'bypass', privateEpoch: epoch }
 			);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			googleConfigured = session.google.configured;
@@ -862,6 +877,15 @@
 		if (!isPrivateEpochCurrent(epoch)) return;
 		loading = true;
 		plaidStatusLoading = true;
+		if (currentSection === 'settings') {
+			loading = false;
+			void refreshPlaidStatus(false, epoch);
+			return;
+		}
+		if (currentSection === 'cards') {
+			void Promise.all([refreshCards(false, epoch), refreshPlaidStatus(false, epoch)]);
+			return;
+		}
 		void Promise.all([
 			refreshCards(false, epoch),
 			refreshPlaidStatus(false, epoch),
@@ -1040,6 +1064,7 @@
 	}
 
 	function clearPrivateUiState(): void {
+		clearPrivateApiCache();
 		cards = [];
 		hasLoadedCards = false;
 		workspaceAccounts = [];
@@ -1142,7 +1167,7 @@
 					lastSyncedAt: payload.connections.lastSyncedAt
 				};
 			}
-			void refreshRecentActivity(cards, expectedEpoch);
+			if (currentSection === 'cards') void refreshRecentActivity(cards, expectedEpoch);
 			hasLoadedCards = true;
 			return true;
 		} catch (error) {
