@@ -49,10 +49,14 @@ const definitions: PublishedApyDefinition[] = [
 	},
 	{
 		id: 'vio-online-savings',
-		url: 'https://www.viobank.com/online-savings-account',
+		url: 'https://www.viobank.com/',
 		matches: (account) =>
 			account.accountType === 'savings' && normalizedAccountText(account).includes('vio bank'),
 		extract: (html) =>
+			extractFirstPercent(
+				html,
+				/Online Savings[\s\S]{0,400}?js-rate-target[^>]*>\s*([0-9]+(?:\.[0-9]+)?)/i
+			) ??
 			extractFirstPercent(
 				html,
 				/Online Savings Account APY:[\s\S]{0,300}?class=["']apy["'][^>]*>\s*([0-9]+(?:\.[0-9]+)?)%/i

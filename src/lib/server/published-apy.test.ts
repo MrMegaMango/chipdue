@@ -56,7 +56,9 @@ describe('published account APYs', () => {
 				return new Response('<h3>High-Yield APY</h3><p class="apy">3.10% <span>APY</span></p>');
 			}
 			if (url.includes('viobank.com')) {
-				return new Response('Online Savings Account APY: <span class="apy">3.99%</span>');
+				return new Response(
+					'<header>Online Savings</header><div class="featured-product-card__rate js-rate-target">3.99</div>'
+				);
 			}
 			return new Response('After that, you will earn the base 3.30% APY.');
 		});
