@@ -7,6 +7,7 @@ import {
 	POST as createCardEndpoint
 } from '../../routes/api/cards/+server';
 import { PATCH as updateCardRewardsEndpoint } from '../../routes/api/cards/[id]/rewards/+server';
+import { GET as healthEndpoint } from '../../routes/api/health/+server';
 import { PUT as applyCardRewardProfileEndpoint } from '../../routes/api/cards/[id]/rewards/profile/+server';
 import { closeDatabaseForTests } from './database';
 import { resetCryptoStateForTests } from './crypto';
@@ -91,6 +92,16 @@ describe.sequential('cards API contract', () => {
 				connected: 0,
 				lastSyncedAt: null
 			}
+		});
+	});
+
+	it('reports provider-neutral financial connection health', async () => {
+		const response = (await healthEndpoint({} as never)) as Response;
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			ok: true,
+			storage: 'local-encrypted',
+			financialConnections: { adapterCount: 1, configuredAdapterCount: 0 }
 		});
 	});
 

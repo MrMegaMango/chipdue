@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
+import { installationFinancialConnectionsStatus } from '$lib/server/financial-connections';
 import { apiError, apiJson } from '$lib/server/http';
-import { isInstallationPlaidConfigured } from '$lib/server/plaid';
 import { getRuntimeMode } from '$lib/server/runtime';
 
 export const GET: RequestHandler = async () => {
@@ -9,7 +9,7 @@ export const GET: RequestHandler = async () => {
 		return apiJson({
 			ok: true,
 			storage: mode === 'cloud' ? 'cloud-encrypted' : 'local-encrypted',
-			plaidConfigured: isInstallationPlaidConfigured()
+			financialConnections: installationFinancialConnectionsStatus()
 		});
 	} catch (error) {
 		return apiError(error);

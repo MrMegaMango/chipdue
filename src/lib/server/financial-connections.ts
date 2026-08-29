@@ -11,6 +11,7 @@ import {
 	syncAllPlaidItems,
 	syncPlaidItem
 } from './plaid';
+import { isInstallationPlaidConfigured } from './plaid-config';
 import { listPlaidConnections } from './plaid-store';
 
 export interface ConnectionSyncResult {
@@ -31,6 +32,7 @@ export interface ConnectionsSyncResult {
 interface FinancialProviderAdapter {
 	provider: FinancialDataProvider;
 	displayName: string;
+	isInstallationConfigured(): boolean;
 	isConfigured(): Promise<boolean>;
 	listConnections(): Promise<FinancialConnection[]>;
 	syncConnection(
@@ -44,6 +46,7 @@ interface FinancialProviderAdapter {
 const plaidAdapter: FinancialProviderAdapter = {
 	provider: 'plaid',
 	displayName: FINANCIAL_PROVIDER_NAMES.plaid,
+	isInstallationConfigured: isInstallationPlaidConfigured,
 	async isConfigured() {
 		return (await plaidConfigurationStatus()).configured;
 	},
@@ -71,6 +74,16 @@ const plaidAdapter: FinancialProviderAdapter = {
 };
 
 const PROVIDERS = Object.freeze([plaidAdapter] satisfies FinancialProviderAdapter[]);
+
+export function installationFinancialConnectionsStatus(): {
+	adapterCount: number;
+	configuredAdapterCount: number;
+} {
+	return {
+		adapterCount: PROVIDERS.length,
+		configuredAdapterCount: PROVIDERS.filter((adapter) => adapter.isInstallationConfigured()).length
+	};
+}
 
 function summarize(results: ConnectionSyncResult[]): ConnectionsSyncResult {
 	return {
