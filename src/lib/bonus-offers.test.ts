@@ -137,6 +137,10 @@ describe('versioned business bonus offer catalog', () => {
 			latestPayoutDate: '2026-11-30',
 			offer: { transactionTarget: 6 }
 		});
+		expect(buildBonusTracker(confirmed, { ...usBankAccount, source: 'manual' }, [])).toMatchObject({
+			account: { source: 'manual' },
+			offer: { id: 'us-bank-business-essentials-q3-2026' }
+		});
 	});
 });
 

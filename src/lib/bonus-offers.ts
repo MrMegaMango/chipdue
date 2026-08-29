@@ -384,7 +384,7 @@ export function buildBonusTracker(
 	account: FinancialAccount | null,
 	transactions: FinancialAccountTransaction[]
 ): BonusTracker | null {
-	if (!account || account.source !== 'plaid' || !bonus.openedDate) return null;
+	if (!account || !bonus.openedDate) return null;
 	const offer = resolveBonusOffer(bonus, account);
 	if (!offer) return null;
 	const draft = buildBonusOfferDraft(offer, bonus.openedDate);

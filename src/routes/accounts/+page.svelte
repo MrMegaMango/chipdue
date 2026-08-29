@@ -275,7 +275,7 @@
 	}
 
 	function availableBonusOffers(account: FinancialAccount) {
-		if (account.source !== 'plaid' || trackedBonusAccountIds.includes(account.id)) return [];
+		if (trackedBonusAccountIds.includes(account.id)) return [];
 		return getCompatibleBonusOffers(account, account.openedDate);
 	}
 
@@ -345,18 +345,34 @@
 						currentBalanceCents: cents(form.currentBalance)
 					};
 		try {
+			let savedAccount: FinancialAccount;
 			if (editingId) {
-				await requestJson(resolve('/api/accounts/[id]', { id: editingId }), {
-					method: 'PATCH',
-					body: JSON.stringify(payload)
-				});
+				const response = await requestJson<{ account: FinancialAccount }>(
+					resolve('/api/accounts/[id]', { id: editingId }),
+					{
+						method: 'PATCH',
+						body: JSON.stringify(payload)
+					}
+				);
+				savedAccount = response.account;
 			} else {
-				await requestJson(resolve('/api/accounts'), {
-					method: 'POST',
-					body: JSON.stringify(payload)
-				});
+				const response = await requestJson<{ account: FinancialAccount }>(
+					resolve('/api/accounts'),
+					{
+						method: 'POST',
+						body: JSON.stringify(payload)
+					}
+				);
+				savedAccount = response.account;
 			}
 			dialogOpen = false;
+			if (
+				!editingId &&
+				getCompatibleBonusOffers(savedAccount, savedAccount.openedDate).length > 0
+			) {
+				window.location.assign(bonusSetupHref(savedAccount));
+				return;
+			}
 			await reloadAccounts();
 			showToast(editingId ? 'Account updated.' : 'Account added.');
 		} catch (error) {

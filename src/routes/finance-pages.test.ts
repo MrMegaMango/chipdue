@@ -52,7 +52,8 @@ describe('financial workspace navigation', () => {
 	it('shows generic live trackers backed by verified offer templates', () => {
 		for (const marker of [
 			'Verified offer',
-			'Verified rules',
+			'Live + verified',
+			'Manual + verified',
 			'Current synced balance',
 			'Likely qualifying activity',
 			'Official terms',
@@ -62,6 +63,9 @@ describe('financial workspace navigation', () => {
 		}
 		expect(accountsSource).toContain('Verified bonus catalog');
 		expect(accountsSource).toContain('Choose your offer');
+		expect(accountsSource).toContain('window.location.assign(bonusSetupHref(savedAccount))');
+		expect(bonusesSource).toContain('Tracker setup needed');
+		expect(bonusesSource).toContain("tracker.account.source === 'plaid'");
 	});
 
 	it('keeps new financial data out of persistent browser storage', () => {

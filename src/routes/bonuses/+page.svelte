@@ -261,6 +261,12 @@
 		);
 	}
 
+	function trackerSetupOffersFor(bonus: AccountBonus) {
+		const account = linkedAccount(bonus);
+		if (!account || resolveBonusOffer(bonus, account)) return [];
+		return getCompatibleBonusOffers(account, bonus.openedDate ?? account.openedDate);
+	}
+
 	async function loadAccountActivity(account: FinancialAccount): Promise<void> {
 		if (account.source !== 'plaid' || !account.transactionHistoryEnabled) return;
 		try {
@@ -633,6 +639,7 @@
 				<div class="finance-grid bonus-grid">
 					{#each bonuses as bonus (bonus.id)}
 						{@const tracker = trackerFor(bonus)}
+						{@const trackerSetupOffers = trackerSetupOffersFor(bonus)}
 						<article class="finance-card bonus-card" class:has-tracker={tracker !== null}>
 							<header>
 								<div>
@@ -660,19 +667,25 @@
 							{#if tracker}
 								<section
 									class="linked-tracker"
-									aria-label={`Linked ${tracker.offer.institution} offer tracker`}
+									aria-label={`${tracker.offer.institution} offer tracker`}
 								>
 									<header class="tracker-heading">
 										<div>
-											<span>Linked {tracker.offer.institution} offer tracker</span>
+											<span>{tracker.offer.institution} offer tracker</span>
 											<strong>{tracker.offer.accountProduct}</strong>
 										</div>
-										<span class="finance-pill good">Verified rules</span>
+										<span class="finance-pill good">
+											{tracker.account.source === 'plaid' ? 'Live + verified' : 'Manual + verified'}
+										</span>
 									</header>
 
 									<div class="tracker-metrics">
 										<div>
-											<span>Current synced balance</span>
+											<span>
+												{tracker.account.source === 'plaid'
+													? 'Current synced balance'
+													: 'Current manual balance'}
+											</span>
 											<strong>{formatMoney(tracker.balanceCents)}</strong>
 											<small>
 												{#if tracker.currentTier}
@@ -691,7 +704,9 @@
 													.transactionTarget}</strong
 											>
 											<small>
-												{#if tracker.account.transactionHistoryStatus === 'NOT_READY'}
+												{#if tracker.account.source !== 'plaid'}
+													Manual account — verify activity with {tracker.offer.institution}
+												{:else if tracker.account.transactionHistoryStatus === 'NOT_READY'}
 													Plaid is still preparing older activity
 												{:else if tracker.account.transactionHistoryEnabled}
 													Posted since {formatDate(bonus.openedDate)}
@@ -752,26 +767,32 @@
 										<p class="tracker-error" role="alert">{activityErrors[tracker.account.id]}</p>
 									{/if}
 									<div class="tracker-actions">
-										<button
-											type="button"
-											disabled={syncingAccountId !== null}
-											onclick={() => checkLinkedAccount(bonus)}
-										>
-											{syncingAccountId === tracker.account.id
-												? `Checking ${tracker.offer.institution}…`
-												: `Check ${tracker.offer.institution} now`}
-										</button>
-										<small>
-											Last checked {formatSyncTime(
-												activityByAccount[tracker.account.id]?.lastSyncedAt ??
-													tracker.account.lastSyncedAt
-											)}
-										</small>
+										{#if tracker.account.plaidConnectionId}
+											<button
+												type="button"
+												disabled={syncingAccountId !== null}
+												onclick={() => checkLinkedAccount(bonus)}
+											>
+												{syncingAccountId === tracker.account.id
+													? `Checking ${tracker.offer.institution}…`
+													: `Check ${tracker.offer.institution} now`}
+											</button>
+											<small>
+												Last checked {formatSyncTime(
+													activityByAccount[tracker.account.id]?.lastSyncedAt ??
+														tracker.account.lastSyncedAt
+												)}
+											</small>
+										{:else}
+											<small>Connect this account with Plaid to estimate posted activity.</small>
+										{/if}
 									</div>
 									<p class="tracker-note">
 										Balances are snapshots and cannot prove new-money sources or uninterrupted
-										minimums. Activity is a conservative estimate from posted Plaid transactions. {tracker
-											.offer.activityNote}
+										minimums. {tracker.account.source === 'plaid'
+											? 'Activity is a conservative estimate from posted Plaid transactions.'
+											: 'Activity remains a manual check until the account is linked through Plaid.'}
+										{tracker.offer.activityNote}
 										<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- Provider terms are an external URL. -->
 										<a href={tracker.offer.sourceUrl} target="_blank" rel="noreferrer"
 											>Official terms</a
@@ -780,6 +801,22 @@
 											tracker.offer.sourceVerifiedAt
 										)}.
 									</p>
+								</section>
+							{:else if trackerSetupOffers.length > 0}
+								<section class="tracker-setup" aria-label="Bonus tracker setup needed">
+									<div>
+										<span>Tracker setup needed</span>
+										<strong>
+											Choose the exact {linkedAccount(bonus)?.institution ?? bonus.institution} offer
+											you enrolled in.
+										</strong>
+										<small>
+											{trackerSetupOffers.length} verified {trackerSetupOffers.length === 1
+												? 'offer matches'
+												: 'offers match'} this account and opening date.
+										</small>
+									</div>
+									<button type="button" onclick={() => openEdit(bonus)}>Choose offer</button>
 								</section>
 							{/if}
 
@@ -1046,6 +1083,52 @@
 		background: linear-gradient(145deg, rgba(61, 90, 254, 0.075), rgba(255, 253, 249, 0.82));
 	}
 
+	.tracker-setup {
+		display: flex;
+		gap: 0.8rem;
+		align-items: center;
+		justify-content: space-between;
+		margin-top: 0.85rem;
+		padding: 0.8rem;
+		border: 1px solid rgba(61, 90, 254, 0.22);
+		border-radius: 10px;
+		background: rgba(61, 90, 254, 0.06);
+	}
+
+	.tracker-setup div {
+		display: grid;
+		gap: 0.18rem;
+	}
+
+	.tracker-setup span {
+		color: var(--accent-dark);
+		font-size: 0.58rem;
+		font-weight: 760;
+		letter-spacing: 0.045em;
+		text-transform: uppercase;
+	}
+
+	.tracker-setup strong {
+		font-size: 0.76rem;
+	}
+
+	.tracker-setup small {
+		color: var(--muted);
+		font-size: 0.59rem;
+	}
+
+	.tracker-setup button {
+		padding: 0.5rem 0.7rem;
+		border: 1px solid var(--accent);
+		border-radius: 7px;
+		color: var(--accent-dark);
+		font-size: 0.62rem;
+		font-weight: 740;
+		white-space: nowrap;
+		background: white;
+		cursor: pointer;
+	}
+
 	.tracker-heading,
 	.tracker-actions,
 	.tracker-activity li {
@@ -1286,7 +1369,8 @@
 			grid-template-columns: 1fr;
 		}
 
-		.tracker-actions {
+		.tracker-actions,
+		.tracker-setup {
 			align-items: flex-start;
 			flex-direction: column;
 		}
