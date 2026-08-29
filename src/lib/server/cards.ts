@@ -833,7 +833,8 @@ function transactionRewardEstimate(
 		type: rewards.rewardType,
 		amount: Math.round((transaction.amountCents * rate) / 100),
 		rate,
-		categoryName
+		categoryName,
+		currency: transaction.currency
 	};
 }
 

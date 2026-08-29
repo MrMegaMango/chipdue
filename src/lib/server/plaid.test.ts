@@ -476,7 +476,8 @@ describe.sequential('Plaid transaction history', () => {
 			type: 'points',
 			amount: 37,
 			rate: 3,
-			categoryName: 'Dining'
+			categoryName: 'Dining',
+			currency: 'USD'
 		});
 		expect(history.transactions[1].rewardEstimate).toBeNull();
 	});

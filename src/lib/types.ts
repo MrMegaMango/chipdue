@@ -61,6 +61,7 @@ export interface CardTransactionRewardEstimate {
 	amount: number;
 	rate: number;
 	categoryName: string | null;
+	currency: string;
 }
 
 export interface CardTransaction {

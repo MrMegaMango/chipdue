@@ -168,10 +168,22 @@ describe('card activity preview', () => {
 		expect(formatRewardRate(3, 'points')).toBe('3x');
 		expect(formatRewardRate(2.5, 'cash_back')).toBe('2.5%');
 		expect(
-			formatRewardEstimate({ type: 'points', amount: 37, rate: 3, categoryName: 'Dining' })
+			formatRewardEstimate({
+				type: 'points',
+				amount: 37,
+				rate: 3,
+				categoryName: 'Dining',
+				currency: 'USD'
+			})
 		).toBe('Est. 37 points');
 		expect(
-			formatRewardEstimate({ type: 'cash_back', amount: 37, rate: 3, categoryName: 'Dining' })
+			formatRewardEstimate({
+				type: 'cash_back',
+				amount: 37,
+				rate: 3,
+				categoryName: 'Dining',
+				currency: 'USD'
+			})
 		).toBe('Est. $0.37 cash back');
 	});
 });

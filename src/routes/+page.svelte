@@ -120,6 +120,7 @@
 		amount: number;
 		rate: number;
 		categoryName: string | null;
+		currency: string;
 	};
 
 	export function inputToRewardRate(value: string | number | undefined): number | null {
@@ -144,7 +145,7 @@
 		if (estimate.type === 'cash_back') {
 			return `Est. ${new Intl.NumberFormat('en-US', {
 				style: 'currency',
-				currency: 'USD',
+				currency: estimate.currency,
 				minimumFractionDigits: 2
 			}).format(estimate.amount / 100)} cash back`;
 		}
