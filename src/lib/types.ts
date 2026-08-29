@@ -124,7 +124,7 @@ export type FinancialAccountType =
 export type FinancialAccountOwner = 'personal' | 'business';
 export type FinancialAccountStatus = 'planned' | 'active' | 'closed';
 export type FinancialAccountSource = FinancialRecordSource;
-export type FinancialAccountApySource = 'provider' | 'manual';
+export type FinancialAccountApySource = 'provider' | 'published' | 'manual';
 
 export interface InvestmentHolding {
 	name: string;

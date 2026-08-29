@@ -157,7 +157,8 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain('formatApy(account.apyBasisPoints)');
 		expect(accountsSource).toContain('Institution rate via');
 		expect(accountsSource).toContain('formatApyFreshness(account)');
-		expect(accountsSource).toContain("disabled={dialogAccount?.apySource === 'provider'}");
+		expect(accountsSource).toContain("dialogAccount?.apySource === 'published'");
+		expect(accountsSource).toContain('Published Wealthfront base rate');
 		expect(accountsSource).toContain(
 			'Updated automatically from the institution during each Plaid sync.'
 		);

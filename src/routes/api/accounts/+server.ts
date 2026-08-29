@@ -1,11 +1,12 @@
 import type { RequestHandler } from './$types';
 import { createFinancialAccount, listFinancialAccounts } from '$lib/server/financial-records';
+import { addPublishedAccountApys } from '$lib/server/published-apy';
 import { apiError, apiJson, assertSameOrigin, readJson } from '$lib/server/http';
 import { createFinancialAccountSchema } from '$lib/server/schemas';
 
 export const GET: RequestHandler = async () => {
 	try {
-		return apiJson({ accounts: await listFinancialAccounts() });
+		return apiJson({ accounts: await addPublishedAccountApys(await listFinancialAccounts()) });
 	} catch (error) {
 		return apiError(error);
 	}

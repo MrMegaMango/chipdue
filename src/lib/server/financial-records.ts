@@ -222,7 +222,7 @@ type AccountPayload = z.infer<typeof accountPayloadSchema>;
 type BonusPayload = z.infer<typeof bonusPayloadSchema>;
 type PrivateRecordPayload = AccountPayload | BonusPayload;
 
-function accountApySource(payload: AccountPayload): FinancialAccount['apySource'] {
+function accountApySource(payload: AccountPayload): AccountPayload['apySource'] {
 	if (payload.apyBasisPoints === null) return null;
 	return payload.apySource ?? 'manual';
 }

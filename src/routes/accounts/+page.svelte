@@ -341,14 +341,21 @@
 	}
 
 	function formatApyFreshness(account: FinancialAccount): string {
+		const normalizedInstitution = (account.institution ?? account.nickname).toLowerCase();
 		const sourceLabel =
 			account.apySource === 'provider'
 				? `Institution rate via ${financialProviderName(account.connectionProvider)}`
-				: 'Manual rate';
+				: account.apySource === 'published'
+					? normalizedInstitution.includes('sofi')
+						? 'Published SoFi high-yield rate · eligibility may vary'
+						: normalizedInstitution.includes('wealthfront')
+							? 'Published Wealthfront base rate · boosts may vary'
+							: `Published ${account.institution ?? 'institution'} rate`
+					: 'Manual rate';
 		if (!account.apyUpdatedAt) return sourceLabel;
 		const parsed = new Date(account.apyUpdatedAt);
 		if (!Number.isFinite(parsed.getTime())) return sourceLabel;
-		return `${sourceLabel} · ${account.apySource === 'provider' ? 'checked' : 'updated'} ${dateTime.format(parsed)}`;
+		return `${sourceLabel} · ${account.apySource === 'manual' ? 'updated' : 'checked'} ${dateTime.format(parsed)}`;
 	}
 
 	function formatHoldingMoney(value: number, currency: string, maximumFractionDigits = 2): string {
@@ -627,6 +634,7 @@
 		const apyAnnotation =
 			!editingAccount ||
 			(editingAccount.apySource !== 'provider' &&
+				editingAccount.apySource !== 'published' &&
 				enteredApyBasisPoints !== editingAccount.apyBasisPoints)
 				? { apyBasisPoints: enteredApyBasisPoints }
 				: {};
@@ -1866,14 +1874,17 @@
 							inputmode="decimal"
 							bind:value={form.apyPercent}
 							placeholder="4.25"
-							disabled={dialogAccount?.apySource === 'provider'}
+							disabled={dialogAccount?.apySource === 'provider' ||
+								dialogAccount?.apySource === 'published'}
 						/>
 						<small>
 							{dialogAccount?.apySource === 'provider'
 								? 'Updated automatically from the institution during each Plaid sync.'
-								: dialogAccount?.source === 'connected'
-									? 'Plaid is not reporting an APY for this account. Enter a manual fallback if needed.'
-									: 'Leave blank if this account does not earn interest.'}
+								: dialogAccount?.apySource === 'published'
+									? 'Checked automatically against the institution’s published rate. Account-specific promotions or eligibility may differ.'
+									: dialogAccount?.source === 'connected'
+										? 'Plaid is not reporting an APY for this account. Enter a manual fallback if needed.'
+										: 'Leave blank if this account does not earn interest.'}
 						</small>
 					</div>
 					{#if form.accountType === 'brokerage'}
