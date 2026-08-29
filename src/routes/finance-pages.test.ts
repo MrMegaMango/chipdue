@@ -112,9 +112,18 @@ describe('financial workspace navigation', () => {
 		);
 		expect(initializeSource).toContain('loading = false;');
 		expect(initializeSource).toContain(
-			'void loadSupplementalAccountData(accountResponse.accounts);'
+			'accountResponse.accounts.filter((account) => !account.hidden)'
 		);
 		expect(initializeSource).not.toContain('await loadSupplementalAccountData');
+	});
+
+	it('loads hidden account details only when hidden accounts are revealed', () => {
+		expect(accountsSource).toContain('function toggleHiddenAccounts(): void');
+		expect(accountsSource).toContain('onclick={toggleHiddenAccounts}');
+		expect(accountsSource).toContain(
+			'void loadSupplementalAccountData(unloadedHiddenAccounts, false, true)'
+		);
+		expect(accountsSource).toContain('supplementalRequestedAccountIds.includes(account.id)');
 	});
 
 	it('adds a read-only official E*TRADE data connection', () => {

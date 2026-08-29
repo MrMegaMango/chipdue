@@ -102,6 +102,7 @@
 	let toast = $state('');
 	let toastError = $state(false);
 	let undoHiddenAccountId = $state<string | null>(null);
+	let supplementalRequestedAccountIds = $state<string[]>([]);
 	let toastTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const visibleAccounts = $derived(accounts.filter((account) => !account.hidden));
@@ -250,7 +251,9 @@
 			loading = false;
 			// Activity, open orders, and estimated history can involve provider calls. Render the
 			// account inventory first, then let those details fill in without blocking the page.
-			void loadSupplementalAccountData(accountResponse.accounts);
+			void loadSupplementalAccountData(
+				accountResponse.accounts.filter((account) => !account.hidden)
+			);
 		} catch (error) {
 			pageError = readableError(error, 'Your accounts could not be loaded.');
 		} finally {
@@ -635,15 +638,26 @@
 		}
 	}
 
-	async function loadAccountActivities(loadedAccounts: FinancialAccount[]): Promise<void> {
+	async function loadAccountActivities(
+		loadedAccounts: FinancialAccount[],
+		preserveExisting = false
+	): Promise<void> {
 		const eligibleAccounts = loadedAccounts.filter(
 			(account) => account.source === 'connected' && account.transactionHistoryEnabled
 		);
-		activityByAccount = {};
-		activityErrorByAccount = {};
-		activityLoadingByAccount = Object.fromEntries(
-			eligibleAccounts.map((account) => [account.id, true])
-		);
+		const eligibleAccountIds = new Set(eligibleAccounts.map((account) => account.id));
+		activityByAccount = preserveExisting ? activityByAccount : {};
+		activityErrorByAccount = preserveExisting
+			? Object.fromEntries(
+					Object.entries(activityErrorByAccount).filter(
+						([accountId]) => !eligibleAccountIds.has(accountId)
+					)
+				)
+			: {};
+		activityLoadingByAccount = {
+			...(preserveExisting ? activityLoadingByAccount : {}),
+			...Object.fromEntries(eligibleAccounts.map((account) => [account.id, true]))
+		};
 		await Promise.all(
 			eligibleAccounts.map(async (account) => {
 				try {
@@ -676,15 +690,26 @@
 		);
 	}
 
-	async function loadBrokerageOrders(loadedAccounts: FinancialAccount[]): Promise<void> {
+	async function loadBrokerageOrders(
+		loadedAccounts: FinancialAccount[],
+		preserveExisting = false
+	): Promise<void> {
 		const eligibleAccounts = loadedAccounts.filter(
 			(account) => account.source === 'connected' && isEtradeBrokerage(account)
 		);
-		ordersByAccount = {};
-		ordersErrorByAccount = {};
-		ordersLoadingByAccount = Object.fromEntries(
-			eligibleAccounts.map((account) => [account.id, true])
-		);
+		const eligibleAccountIds = new Set(eligibleAccounts.map((account) => account.id));
+		ordersByAccount = preserveExisting ? ordersByAccount : {};
+		ordersErrorByAccount = preserveExisting
+			? Object.fromEntries(
+					Object.entries(ordersErrorByAccount).filter(
+						([accountId]) => !eligibleAccountIds.has(accountId)
+					)
+				)
+			: {};
+		ordersLoadingByAccount = {
+			...(preserveExisting ? ordersLoadingByAccount : {}),
+			...Object.fromEntries(eligibleAccounts.map((account) => [account.id, true]))
+		};
 		await Promise.all(
 			eligibleAccounts.map(async (account) => {
 				try {
@@ -768,19 +793,38 @@
 
 	async function loadSupplementalAccountData(
 		loadedAccounts: FinancialAccount[],
-		refreshPlaidEstimates = false
+		refreshPlaidEstimates = false,
+		preserveExisting = false
 	): Promise<void> {
+		const requestedAccountIds = loadedAccounts.map((account) => account.id);
+		supplementalRequestedAccountIds = preserveExisting
+			? [...new Set([...supplementalRequestedAccountIds, ...requestedAccountIds])]
+			: requestedAccountIds;
 		await Promise.all([
-			loadAccountActivities(loadedAccounts),
-			loadBrokerageOrders(loadedAccounts),
+			loadAccountActivities(loadedAccounts, preserveExisting),
+			loadBrokerageOrders(loadedAccounts, preserveExisting),
 			loadPlaidEstimatedHistories(loadedAccounts, refreshPlaidEstimates)
 		]);
+	}
+
+	function toggleHiddenAccounts(): void {
+		showHidden = !showHidden;
+		if (!showHidden) return;
+		const unloadedHiddenAccounts = hiddenAccounts.filter(
+			(account) => !supplementalRequestedAccountIds.includes(account.id)
+		);
+		if (unloadedHiddenAccounts.length > 0) {
+			void loadSupplementalAccountData(unloadedHiddenAccounts, false, true);
+		}
 	}
 
 	async function reloadAccounts(refreshPlaidEstimates = false): Promise<void> {
 		const response = await requestJson<{ accounts: FinancialAccount[] }>(resolve('/api/accounts'));
 		accounts = response.accounts;
-		await loadSupplementalAccountData(response.accounts, refreshPlaidEstimates);
+		await loadSupplementalAccountData(
+			response.accounts.filter((account) => showHidden || !account.hidden),
+			refreshPlaidEstimates
+		);
 	}
 
 	async function syncConnectedAccounts(): Promise<void> {
@@ -837,6 +881,9 @@
 			accounts = accounts.map((candidate) =>
 				candidate.id === response.account.id ? response.account : candidate
 			);
+			if (!hidden && !supplementalRequestedAccountIds.includes(response.account.id)) {
+				void loadSupplementalAccountData([response.account], false, true);
+			}
 			showToast(hidden ? `${account.nickname} hidden.` : `${account.nickname} restored.`, {
 				undoAccountId: hidden ? account.id : null
 			});
@@ -999,7 +1046,7 @@
 							class="hidden-accounts-toggle"
 							type="button"
 							aria-expanded={showHidden}
-							onclick={() => (showHidden = !showHidden)}
+							onclick={toggleHiddenAccounts}
 						>
 							{showHidden ? 'Hide hidden accounts' : `Show hidden (${hiddenAccounts.length})`}
 						</button>
