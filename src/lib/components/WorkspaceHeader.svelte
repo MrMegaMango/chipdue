@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { asset, resolve } from '$app/paths';
 
-	type WorkspaceSection = 'overview' | 'cards' | 'accounts' | 'bonuses';
+	type WorkspaceSection = 'overview' | 'cards' | 'accounts' | 'bonuses' | 'settings';
 	type Props = {
 		current: WorkspaceSection;
 		mode: 'local' | 'cloud' | null;
@@ -43,6 +43,20 @@
 	</nav>
 
 	<div class="header-controls">
+		<a
+			class="settings-link"
+			href={resolve('/settings')}
+			aria-label="Settings"
+			aria-current={current === 'settings' ? 'page' : undefined}
+		>
+			<svg aria-hidden="true" viewBox="0 0 20 20">
+				<circle cx="10" cy="10" r="2.6"></circle>
+				<path
+					d="M10 2.8v2M10 15.2v2M2.8 10h2M15.2 10h2M4.9 4.9l1.4 1.4M13.7 13.7l1.4 1.4M15.1 4.9l-1.4 1.4M6.3 13.7l-1.4 1.4"
+				></path>
+			</svg>
+			<span>Settings</span>
+		</a>
 		{#if mode === 'cloud' && onlogout}
 			<button type="button" onclick={onlogout} disabled={loggingOut}>
 				{loggingOut ? 'Logging out…' : 'Log out'}
@@ -143,6 +157,37 @@
 		justify-self: end;
 	}
 
+	.settings-link {
+		display: inline-flex;
+		min-height: 34px;
+		gap: 0.4rem;
+		align-items: center;
+		padding: 0.4rem 0.6rem;
+		border: 1px solid transparent;
+		border-radius: 8px;
+		color: var(--muted);
+		font-size: 0.68rem;
+		font-weight: 700;
+		text-decoration: none;
+	}
+
+	.settings-link:hover,
+	.settings-link[aria-current='page'] {
+		border-color: var(--line);
+		color: var(--ink);
+		background: rgba(255, 255, 255, 0.65);
+	}
+
+	.settings-link svg {
+		width: 15px;
+		height: 15px;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.5;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+	}
+
 	button {
 		min-height: 34px;
 		padding: 0.4rem 0.65rem;
@@ -193,6 +238,10 @@
 
 		nav a {
 			text-align: center;
+		}
+
+		.settings-link span {
+			display: none;
 		}
 	}
 </style>

@@ -14,6 +14,10 @@ const headerSource = readFileSync(
 	'utf8'
 );
 const cardsRouteSource = readFileSync(new URL('./cards/+page.svelte', import.meta.url), 'utf8');
+const settingsRouteSource = readFileSync(
+	new URL('./settings/+page.svelte', import.meta.url),
+	'utf8'
+);
 
 describe('financial workspace navigation', () => {
 	it('offers overview, cards, accounts, and bonuses as first-class tabs', () => {
@@ -26,9 +30,22 @@ describe('financial workspace navigation', () => {
 			expect(headerSource).toContain(marker);
 		}
 		expect(headerSource).toContain("href: '/cards'");
+		expect(headerSource).toContain("href={resolve('/settings')}");
 		expect(cardsRouteSource).toContain('<DashboardPage />');
+		expect(settingsRouteSource).toContain('<DashboardPage />');
 		expect(dashboardSource).toContain("page.route.id === '/cards'");
-		expect(dashboardSource).toContain("{#if currentSection === 'cards'}");
+		expect(dashboardSource).toContain("page.route.id === '/settings'");
+		expect(dashboardSource).toContain("{:else if currentSection === 'cards'}");
+	});
+
+	it('keeps the overview focused and moves account management into settings', () => {
+		expect(dashboardSource).toContain("hidden={currentSection === 'overview'}");
+		expect(dashboardSource).toContain("hidden={currentSection !== 'settings'}");
+		expect(dashboardSource).toContain("hidden={currentSection !== 'cards'}");
+		expect(dashboardSource).toContain('Account and data connections');
+		expect(dashboardSource).toContain('Manage sign-in, privacy, and data connections.');
+		expect(accountsSource).toContain("resolve('/settings#plaid-connections')");
+		expect(dashboardSource).toContain("resolve('/settings#plaid-setup')");
 	});
 
 	it('makes accounts and bonuses first-class parts of the dashboard', () => {

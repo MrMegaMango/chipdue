@@ -199,8 +199,10 @@
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
 	import { financialProviderName } from '$lib/financial-data';
 
-	type PageSection = 'overview' | 'cards';
-	const currentSection: PageSection = $derived(page.route.id === '/cards' ? 'cards' : 'overview');
+	type PageSection = 'overview' | 'cards' | 'settings';
+	const currentSection: PageSection = $derived(
+		page.route.id === '/cards' ? 'cards' : page.route.id === '/settings' ? 'settings' : 'overview'
+	);
 
 	type FinancialDataProvider = 'plaid';
 	type CardSource = 'manual' | 'connected';
@@ -584,12 +586,21 @@
 	});
 	onMount(() => {
 		pageMounted = true;
-		const shouldCleanCallbackUrl = Boolean(window.location.search || window.location.hash);
+		const shouldCleanCallbackUrl = new URL(window.location.href).searchParams.has('google');
+		const settingsAnchor =
+			currentSection === 'settings' &&
+			(window.location.hash === '#plaid-setup' || window.location.hash === '#plaid-connections')
+				? window.location.hash.slice(1)
+				: null;
 		googleCallbackResult = readGoogleCallbackResult();
-		void initializeAuth().finally(() => {
+		void initializeAuth().finally(async () => {
 			// SvelteKit's root is not assigned when onMount begins. Shallow routing is safe
 			// after the asynchronous session initialization yields back to the router.
 			if (pageMounted && shouldCleanCallbackUrl) replaceState(resolve('/'), {});
+			if (pageMounted && settingsAnchor) {
+				await tick();
+				document.getElementById(settingsAnchor)?.scrollIntoView({ block: 'start' });
+			}
 		});
 		document.addEventListener('visibilitychange', handleVisibilityChange);
 		clockTimer = setInterval(() => {
@@ -1892,6 +1903,10 @@
 		const epoch = privateStateEpoch;
 		if (!isPrivateEpochCurrent(epoch)) return;
 		if (!plaid.configured) {
+			if (currentSection !== 'settings') {
+				window.location.assign(resolve('/settings#plaid-setup'));
+				return;
+			}
 			document
 				.getElementById('plaid-setup')
 				?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -2302,7 +2317,13 @@
 </script>
 
 <svelte:head>
-	<title>{currentSection === 'cards' ? 'Cards — ChipDue' : 'Overview — ChipDue'}</title>
+	<title
+		>{currentSection === 'cards'
+			? 'Cards — ChipDue'
+			: currentSection === 'settings'
+				? 'Settings — ChipDue'
+				: 'Overview — ChipDue'}</title
+	>
 </svelte:head>
 
 <svelte:window
@@ -2526,7 +2547,11 @@
 	</main>
 {:else}
 	<a class="skip-link" href="#main-content">
-		Skip to {currentSection === 'cards' ? 'cards' : 'overview'}
+		Skip to {currentSection === 'cards'
+			? 'cards'
+			: currentSection === 'settings'
+				? 'settings'
+				: 'overview'}
 	</a>
 
 	<div class="app-shell" inert={authBusy === 'logout'} aria-busy={authBusy === 'logout'}>
@@ -2540,7 +2565,7 @@
 		<main id="main-content">
 			<section
 				class:hero={showOnboardingHero && currentSection === 'overview'}
-				class:dashboard-toolbar={!showOnboardingHero || currentSection === 'cards'}
+				class:dashboard-toolbar={!showOnboardingHero || currentSection !== 'overview'}
 				aria-labelledby="page-title"
 			>
 				{#if showOnboardingHero && currentSection === 'overview'}
@@ -2556,18 +2581,23 @@
 					</div>
 				{:else}
 					<div>
-						<p class="section-kicker">
-							{currentSection === 'cards' ? 'Credit cards' : 'Overview'}
-						</p>
-						<h1 id="page-title">
-							{currentSection === 'cards' ? 'Cards' : 'Financial command center'}
-						</h1>
-						{#if currentSection === 'cards'}
+						{#if currentSection === 'overview'}
+							<h1 id="page-title">Overview</h1>
+							<p class="toolbar-description">
+								Your money, deadlines, and active offers at a glance.
+							</p>
+						{:else if currentSection === 'cards'}
+							<p class="section-kicker">Credit cards</p>
+							<h1 id="page-title">Cards</h1>
 							<p class="toolbar-description">Payments, rewards, activity, and due dates.</p>
+						{:else}
+							<p class="section-kicker">Workspace</p>
+							<h1 id="page-title">Settings</h1>
+							<p class="toolbar-description">Manage sign-in, privacy, and data connections.</p>
 						{/if}
 					</div>
 				{/if}
-				{#if showOnboardingHero || currentSection === 'cards'}
+				{#if (showOnboardingHero && currentSection === 'overview') || currentSection === 'cards'}
 					<div class:hero-action-stack={showOnboardingHero && currentSection === 'overview'}>
 						<div
 							class:hero-actions={showOnboardingHero && currentSection === 'overview'}
@@ -2617,7 +2647,7 @@
 				{/if}
 			</section>
 
-			{#if loadError}
+			{#if loadError && currentSection !== 'settings'}
 				<div class="load-error" role="alert">
 					<div>
 						<strong>Couldn’t load your cards</strong>
@@ -2629,6 +2659,8 @@
 
 			<section
 				class="summary-grid"
+				class:overview-summary={currentSection === 'overview'}
+				hidden={currentSection === 'settings'}
 				aria-label={currentSection === 'cards' ? 'Card summary' : 'Financial overview'}
 			>
 				<article class="summary-card summary-balance">
@@ -3110,8 +3142,18 @@
 				{/if}
 			</section>
 
-			<section class="info-grid" aria-label="Privacy and calendar tools">
-				<article id="plaid-connections" class="info-panel privacy-panel">
+			<section
+				class="info-grid"
+				class:settings-grid={currentSection === 'settings'}
+				class:card-tools-grid={currentSection === 'cards'}
+				hidden={currentSection === 'overview'}
+				aria-label={currentSection === 'settings' ? 'Account settings' : 'Card tools'}
+			>
+				<article
+					id="plaid-connections"
+					class="info-panel privacy-panel"
+					hidden={currentSection !== 'settings'}
+				>
 					<div class="panel-icon privacy-icon" aria-hidden="true">
 						<svg viewBox="0 0 24 24"
 							><path d="M12 3 5 6v5c0 4.6 2.8 8.2 7 10 4.2-1.8 7-5.4 7-10V6l-7-3Z"></path><path
@@ -3120,14 +3162,8 @@
 						>
 					</div>
 					<div class="panel-content">
-						<p class="section-kicker">
-							{authMode === 'cloud' ? 'Cloud privacy' : 'Privacy status'}
-						</p>
-						<h2>
-							{authMode === 'cloud'
-								? 'Your account. No persistent browser copies.'
-								: 'Local first. Always.'}
-						</h2>
+						<p class="section-kicker">Privacy &amp; connections</p>
+						<h2>Account and data connections</h2>
 						<p>
 							ChipDue adds no analytics and stores no financial details in persistent browser
 							storage.
@@ -3136,9 +3172,12 @@
 								: ''}
 							The Plaid Link script is requested only after you press Connect Plaid.
 						</p>
-						<p class="trust-note">
-							<strong>Before you connect:</strong> Plaid’s CDN script runs in this dashboard page and
-							can access data rendered here. Refresh the page after connecting to unload it.
+						<p
+							id={currentSection === 'settings' ? 'plaid-consent-copy' : undefined}
+							class="trust-note"
+						>
+							<strong>Before you connect:</strong> Plaid’s CDN script runs on this page and can access
+							data rendered here. Refresh the page after connecting to unload it.
 						</p>
 						{#if authMode === 'cloud' && googleConfigured}
 							<section class="google-access" aria-labelledby="google-access-title">
@@ -3330,15 +3369,26 @@
 										</small>
 									{/if}
 								</div>
-								<button
-									class="button button-secondary plaid-replace-button"
-									type="button"
-									disabled={busyAction !== null}
-									onclick={() => {
-										plaidSetupEditing = true;
-										void tick().then(() => document.getElementById('plaid-client-id')?.focus());
-									}}>Change</button
-								>
+								<div class="plaid-ready-actions">
+									<button
+										class="button button-primary"
+										type="button"
+										disabled={busyAction !== null}
+										onclick={connectPlaid}
+										aria-busy={busyAction === 'connect'}
+									>
+										{busyAction === 'connect' ? 'Opening…' : 'Connect institution'}
+									</button>
+									<button
+										class="button button-secondary plaid-replace-button"
+										type="button"
+										disabled={busyAction !== null}
+										onclick={() => {
+											plaidSetupEditing = true;
+											void tick().then(() => document.getElementById('plaid-client-id')?.focus());
+										}}>Change</button
+									>
+								</div>
 							</div>
 						{/if}
 
@@ -3433,7 +3483,7 @@
 					</div>
 				</article>
 
-				<article class="info-panel calendar-panel">
+				<article class="info-panel calendar-panel" hidden={currentSection !== 'cards'}>
 					<div class="panel-icon calendar-icon" aria-hidden="true">
 						<svg viewBox="0 0 24 24"
 							><rect x="3" y="5" width="18" height="16" rx="3"></rect><path
@@ -4691,11 +4741,26 @@
 		gap: 1.5rem;
 		align-items: flex-end;
 		justify-content: space-between;
-		padding: 2.2rem 0 1.45rem;
+		padding: 1.65rem 0 1.1rem;
 	}
 
 	.dashboard-toolbar .section-kicker {
 		margin-bottom: 0.25rem;
+	}
+
+	.dashboard-toolbar h1 {
+		margin: 0;
+		font-size: clamp(1.7rem, 3vw, 2.2rem);
+		font-weight: 740;
+		line-height: 1.08;
+		letter-spacing: -0.04em;
+	}
+
+	.toolbar-description {
+		margin: 0.35rem 0 0;
+		color: var(--muted);
+		font-size: 0.78rem;
+		line-height: 1.5;
 	}
 
 	.dashboard-actions {
@@ -4880,6 +4945,34 @@
 		border-radius: 10px;
 		background: var(--ink);
 		box-shadow: 6px 6px 0 #c9c1b5;
+	}
+
+	.summary-grid[hidden] {
+		display: none;
+	}
+
+	.summary-grid.overview-summary {
+		gap: 0.85rem;
+		color: var(--ink);
+		border: 0;
+		background: transparent;
+		box-shadow: none;
+	}
+
+	.overview-summary .summary-card {
+		border: 1px solid var(--line);
+		border-radius: 10px;
+		background: rgba(255, 253, 249, 0.78);
+		box-shadow: var(--shadow-sm);
+	}
+
+	.overview-summary .summary-card + .summary-card {
+		border-left: 1px solid var(--line);
+	}
+
+	.overview-summary .summary-card p,
+	.overview-summary .summary-card span {
+		color: var(--muted);
 	}
 
 	.summary-card {
@@ -5741,6 +5834,24 @@
 		padding-bottom: 4.5rem;
 	}
 
+	.info-grid[hidden],
+	.info-panel[hidden] {
+		display: none;
+	}
+
+	.info-grid.settings-grid,
+	.info-grid.card-tools-grid {
+		grid-template-columns: 1fr;
+	}
+
+	.info-grid.settings-grid {
+		max-width: 920px;
+	}
+
+	.info-grid.card-tools-grid {
+		max-width: 700px;
+	}
+
 	.info-panel {
 		display: flex;
 		gap: 1.15rem;
@@ -6038,6 +6149,19 @@
 		display: grid;
 		flex: 1;
 		gap: 0.16rem;
+	}
+
+	.plaid-personal-ready .plaid-ready-actions {
+		display: flex;
+		flex: 0 0 auto;
+		gap: 0.45rem;
+	}
+
+	.plaid-ready-actions .button {
+		min-height: 36px;
+		padding: 0.5rem 0.7rem;
+		font-size: 0.62rem;
+		white-space: nowrap;
 	}
 
 	.plaid-personal-ready strong {
@@ -7254,6 +7378,10 @@
 			border-left: 0;
 		}
 
+		.overview-summary .summary-card + .summary-card {
+			border-left: 1px solid var(--line);
+		}
+
 		.workspace-modules {
 			grid-template-columns: 1fr;
 		}
@@ -7393,6 +7521,19 @@
 
 		.plaid-setup-form {
 			grid-template-columns: 1fr;
+		}
+
+		.plaid-personal-ready {
+			align-items: flex-start;
+			flex-wrap: wrap;
+		}
+
+		.plaid-personal-ready .plaid-ready-actions {
+			width: 100%;
+		}
+
+		.plaid-ready-actions .button {
+			flex: 1;
 		}
 
 		.connection-actions button {

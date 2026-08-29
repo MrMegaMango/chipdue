@@ -164,8 +164,10 @@ describe('Google-only setup privacy contract', () => {
 	it('defers callback URL cleanup until after SvelteKit hydration', () => {
 		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
 		expect(source).toMatch(
-			/initializeAuth\(\)\.finally\(\(\) => \{[\s\S]*replaceState\(resolve\('\/'\), \{\}\);[\s\S]*\}\);/
+			/initializeAuth\(\)\.finally\(async \(\) => \{[\s\S]*replaceState\(resolve\('\/'\), \{\}\);[\s\S]*\}\);/
 		);
+		expect(source).toContain("searchParams.has('google')");
+		expect(source).not.toContain('Boolean(window.location.search || window.location.hash)');
 	});
 });
 
@@ -321,10 +323,10 @@ describe('returning-user overview', () => {
 		expect(source).toContain('workspaceBonuses.length === 0');
 		expect(source).toContain("{#if showOnboardingHero && currentSection === 'overview'}");
 		expect(source).toContain(
-			"class:dashboard-toolbar={!showOnboardingHero || currentSection === 'cards'}"
+			"class:dashboard-toolbar={!showOnboardingHero || currentSection !== 'overview'}"
 		);
-		expect(source).toContain("{currentSection === 'cards' ? 'Credit cards' : 'Overview'}");
-		expect(source).toContain("{currentSection === 'cards' ? 'Cards' : 'Financial command center'}");
+		expect(source).toContain('<h1 id="page-title">Overview</h1>');
+		expect(source).toContain('Your money, deadlines, and active offers at a glance.');
 		expect(source).toContain(
 			"class:visually-hidden={!showOnboardingHero || currentSection === 'cards'}"
 		);

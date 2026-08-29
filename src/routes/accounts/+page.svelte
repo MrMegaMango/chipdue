@@ -971,10 +971,7 @@
 			</div>
 			<div class="account-toolbar-actions">
 				{#if plaidConfigured}
-					<a
-						class="finance-button secondary"
-						href={connections.length > 0 ? resolve('/#plaid-connections') : resolve('/')}
-					>
+					<a class="finance-button secondary" href={resolve('/settings#plaid-connections')}>
 						{connections.length > 0 ? 'Manage connections' : 'Connect a provider'}
 					</a>
 				{/if}
@@ -1036,7 +1033,9 @@
 				</p>
 				<div class="empty-account-actions">
 					{#if plaidConfigured}
-						<a class="finance-button" href={resolve('/')}>Connect a provider</a>
+						<a class="finance-button" href={resolve('/settings#plaid-connections')}
+							>Connect a provider</a
+						>
 					{/if}
 					<button class="finance-button secondary" type="button" onclick={openAdd}
 						>Add manually</button
