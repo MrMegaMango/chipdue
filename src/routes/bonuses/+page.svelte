@@ -731,7 +731,7 @@
 									>
 										{#each tracker.offer.tiers as tier (tier.thresholdCents)}
 											<div class:reached={(tracker.balanceCents ?? 0) >= tier.thresholdCents}>
-												<strong>{formatMoney(tier.rewardCents)}</strong>
+												<strong>Reward {formatMoney(tier.rewardCents)}</strong>
 												<span>{tier.label}</span>
 											</div>
 										{/each}
