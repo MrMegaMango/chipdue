@@ -1,4 +1,4 @@
-import { createHash, createHmac, pbkdf2Sync, randomBytes } from 'node:crypto';
+import { createDecipheriv, createHash, createHmac, pbkdf2Sync, randomBytes } from 'node:crypto';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { neon } from '@neondatabase/serverless';
@@ -12,6 +12,8 @@ import {
 } from '../src/lib/server/cloud-role.js';
 import {
 	cloudSchemaRelationCount,
+	CLOUD_SCHEMA_LEGACY_CATALOG_CONTRACT,
+	CLOUD_SCHEMA_LEGACY_VERSION,
 	CLOUD_SCHEMA_STATEMENTS,
 	CLOUD_SCHEMA_VERSION,
 	CLOUD_SCHEMA_VERSION_STATEMENT,
@@ -21,6 +23,9 @@ import {
 import { isDirectNeonDatabaseHost } from '../src/lib/server/neon-url.js';
 
 const SCRAM_ITERATIONS = 4096;
+const LEGACY_TENANT_ID = '00000000-0000-4000-8000-000000000001';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const OPAQUE_REFERENCE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 let failurePhase = 'configuration validation';
 
 /** @typedef {Record<string, unknown>} MigrationRow */
@@ -65,6 +70,20 @@ function runtimeRole() {
 
 function runtimeRolePassword() {
 	return databasePassword('CARDDUE_DATABASE_PASSWORD');
+}
+
+function migrationMasterKey() {
+	const value = required('CARDDUE_MASTER_KEY');
+	const key = Buffer.from(value, 'base64url');
+	if (
+		!OPAQUE_REFERENCE_PATTERN.test(value) ||
+		key.length !== 32 ||
+		key.toString('base64url') !== value
+	) {
+		key.fill(0);
+		throw new Error('CARDDUE_MASTER_KEY must be the existing generated 256-bit base64url key.');
+	}
+	return key;
 }
 
 /** @param {string} name */
@@ -118,14 +137,160 @@ export function createPasswordRotationParameters(role, password) {
 /** @param {MigrationQuery} query */
 export async function verifyExistingSchema(query) {
 	const relationCount = await cloudSchemaRelationCount(query);
-	if (relationCount === 0) return;
-	await verifyCloudSchemaCatalog(query);
+	if (relationCount === 0) return 'empty';
 	const rows = await query(
 		`SELECT value FROM public.carddue_metadata WHERE key = 'schema_version'`
 	);
-	if (rows.length > 1 || (rows.length === 1 && rows[0].value !== String(CLOUD_SCHEMA_VERSION))) {
+	if (rows.length !== 1) {
 		throw new Error('The existing cloud schema version cannot be migrated by this release.');
 	}
+	if (rows[0].value === String(CLOUD_SCHEMA_VERSION)) {
+		await verifyCloudSchemaCatalog(query);
+		return 'current';
+	}
+	if (rows[0].value === String(CLOUD_SCHEMA_LEGACY_VERSION)) {
+		await verifyCloudSchemaCatalog(query, CLOUD_SCHEMA_LEGACY_CATALOG_CONTRACT);
+		return 'legacy';
+	}
+	throw new Error('The existing cloud schema version cannot be migrated by this release.');
+}
+
+/**
+ * @param {Buffer} key
+ * @param {string} tenantId
+ */
+export function deriveTenantReference(key, tenantId) {
+	if (!Buffer.isBuffer(key) || key.length !== 32 || !UUID_PATTERN.test(tenantId)) {
+		throw new Error('A valid existing master key and tenant identifier are required.');
+	}
+	return createHmac('sha256', key)
+		.update('carddue:carddue-tenant-owner-v1:')
+		.update(tenantId)
+		.digest('base64url');
+}
+
+/**
+ * @param {Buffer} key
+ * @param {string} itemReference
+ */
+export function tenantReferenceFromPlaidItem(key, itemReference) {
+	if (OPAQUE_REFERENCE_PATTERN.test(itemReference)) {
+		return deriveTenantReference(key, LEGACY_TENANT_ID);
+	}
+	const parts = itemReference.split(':');
+	if (
+		parts.length !== 2 ||
+		!UUID_PATTERN.test(parts[0] ?? '') ||
+		!OPAQUE_REFERENCE_PATTERN.test(parts[1] ?? '')
+	) {
+		throw new Error('Existing Plaid ownership data could not be backfilled.');
+	}
+	return deriveTenantReference(key, parts[0]);
+}
+
+/**
+ * @param {Buffer} key
+ * @param {string} id
+ * @param {string} envelope
+ */
+export function tenantReferenceFromCardPayload(key, id, envelope) {
+	try {
+		const [version, ivPart, tagPart, ciphertextPart, extra] = envelope.split('.');
+		if (
+			version !== 'v1' ||
+			!ivPart ||
+			!tagPart ||
+			ciphertextPart === undefined ||
+			extra !== undefined
+		) {
+			throw new Error('invalid envelope');
+		}
+		const iv = Buffer.from(ivPart, 'base64url');
+		const tag = Buffer.from(tagPart, 'base64url');
+		if (iv.length !== 12 || tag.length !== 16) throw new Error('invalid envelope');
+		const decipher = createDecipheriv('aes-256-gcm', key, iv);
+		decipher.setAAD(Buffer.from(`carddue:card:${id}`, 'utf8'));
+		decipher.setAuthTag(tag);
+		const payload = JSON.parse(
+			Buffer.concat([
+				decipher.update(Buffer.from(ciphertextPart, 'base64url')),
+				decipher.final()
+			]).toString('utf8')
+		);
+		if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+			throw new Error('invalid payload');
+		}
+		if (payload.tenantRef === undefined) {
+			return deriveTenantReference(key, LEGACY_TENANT_ID);
+		}
+		if (
+			typeof payload.tenantRef !== 'string' ||
+			!OPAQUE_REFERENCE_PATTERN.test(payload.tenantRef)
+		) {
+			throw new Error('invalid tenant reference');
+		}
+		return payload.tenantRef;
+	} catch {
+		throw new Error('Existing encrypted card ownership data could not be backfilled.');
+	}
+}
+
+/**
+ * @param {MigrationQuery} query
+ * @param {Buffer} key
+ */
+export async function readLegacyTenantBackfill(query, key) {
+	const [items, cards] = await Promise.all([
+		query(`SELECT id::text, item_ref FROM public.carddue_plaid_items`),
+		query(`SELECT id::text, plaid_item_id::text, payload_enc FROM public.carddue_cards`)
+	]);
+	const itemUpdates = items.map((row) => ({
+		id: String(row.id),
+		tenantRef: tenantReferenceFromPlaidItem(key, String(row.item_ref))
+	}));
+	const itemReferences = new Map(itemUpdates.map((update) => [update.id, update.tenantRef]));
+	const cardUpdates = cards.map((row) => {
+		const id = String(row.id);
+		const tenantRef = tenantReferenceFromCardPayload(key, id, String(row.payload_enc));
+		if (row.plaid_item_id !== null && row.plaid_item_id !== undefined) {
+			const itemTenantRef = itemReferences.get(String(row.plaid_item_id));
+			if (!itemTenantRef || itemTenantRef !== tenantRef) {
+				throw new Error('Existing connected-record ownership data is inconsistent.');
+			}
+		}
+		return { id, tenantRef };
+	});
+	return { itemUpdates, cardUpdates };
+}
+
+/** @param {{itemUpdates: Array<{id: string, tenantRef: string}>, cardUpdates: Array<{id: string, tenantRef: string}>}} backfill */
+export function legacyTenantUpgradeStatements(backfill) {
+	return [
+		{ text: `ALTER TABLE public.carddue_plaid_items ADD COLUMN tenant_ref TEXT`, params: [] },
+		{ text: `ALTER TABLE public.carddue_cards ADD COLUMN tenant_ref TEXT`, params: [] },
+		...backfill.itemUpdates.map(({ id, tenantRef }) => ({
+			text: `UPDATE public.carddue_plaid_items SET tenant_ref = $1 WHERE id = $2`,
+			params: [tenantRef, id]
+		})),
+		...backfill.cardUpdates.map(({ id, tenantRef }) => ({
+			text: `UPDATE public.carddue_cards SET tenant_ref = $1 WHERE id = $2`,
+			params: [tenantRef, id]
+		})),
+		{
+			text: `ALTER TABLE public.carddue_plaid_items
+			       ALTER COLUMN tenant_ref SET NOT NULL,
+			       ADD CONSTRAINT carddue_plaid_items_tenant_ref_check
+			       CHECK (tenant_ref ~ '^[A-Za-z0-9_-]{43}$')`,
+			params: []
+		},
+		{
+			text: `ALTER TABLE public.carddue_cards
+			       ALTER COLUMN tenant_ref SET NOT NULL,
+			       ADD CONSTRAINT carddue_cards_tenant_ref_check
+			       CHECK (tenant_ref ~ '^[A-Za-z0-9_-]{43}$')`,
+			params: []
+		}
+	];
 }
 
 const CONFIGURE_PASSWORD_ROTATION = `WITH configured AS (
@@ -349,7 +514,8 @@ async function main() {
 	}
 
 	failurePhase = 'existing schema validation';
-	await verifyExistingSchema(query);
+	const schemaState = await verifyExistingSchema(query);
+	const masterKey = schemaState === 'legacy' ? migrationMasterKey() : undefined;
 
 	failurePhase = 'runtime role preflight';
 	const existing = await readCloudRoleState(query, role);
@@ -439,6 +605,16 @@ async function main() {
 		failurePhase = 'runtime session survivor check';
 	}
 	assertRuntimeSessionsInvalidated(allTerminated, remainingCount);
+	/** @type {{itemUpdates: Array<{id: string, tenantRef: string}>, cardUpdates: Array<{id: string, tenantRef: string}>}} */
+	let tenantBackfill = { itemUpdates: [], cardUpdates: [] };
+	if (masterKey) {
+		failurePhase = 'tenant ownership backfill preparation';
+		try {
+			tenantBackfill = await readLegacyTenantBackfill(query, masterKey);
+		} finally {
+			masterKey.fill(0);
+		}
+	}
 	failurePhase = 'runtime SCRAM storage verification';
 	const scramResults = await sql.transaction((transaction) => [
 		transaction.query(`SET LOCAL ROLE neon_superuser`),
@@ -471,7 +647,12 @@ async function main() {
 			`REVOKE ${privileges} ON TABLE ${target} FROM ${roleIdentifier}`
 		];
 	});
+	const tenantUpgradeStatements =
+		schemaState === 'legacy' ? legacyTenantUpgradeStatements(tenantBackfill) : [];
 	await sql.transaction((transaction) => [
+		...tenantUpgradeStatements.map((statement) =>
+			transaction.query(statement.text, statement.params ?? [])
+		),
 		...CLOUD_SCHEMA_STATEMENTS.map((statement) => transaction.query(statement)),
 		transaction.query(`REVOKE CREATE ON SCHEMA public FROM PUBLIC`),
 		transaction.query(`REVOKE CREATE ON SCHEMA public FROM ${roleIdentifier}`),

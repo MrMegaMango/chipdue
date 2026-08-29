@@ -9,6 +9,7 @@ import {
 	currentTenantId,
 	plaidItemBelongsToCurrentTenant,
 	plaidItemReference,
+	tenantReference,
 	tenantIdFromPlaidItemReference
 } from './tenant';
 
@@ -74,7 +75,9 @@ export async function listPlaidConnections(): Promise<FinancialConnection[]> {
 		getRuntimeMode() === 'cloud'
 			? await cloudQuery<PublicPlaidItemRow>(
 					`SELECT id::text, item_ref, institution_name_enc, status, last_synced_at, created_at
-					 FROM public.carddue_plaid_items ORDER BY created_at`
+					 FROM public.carddue_plaid_items
+					 WHERE tenant_ref = $1 ORDER BY created_at`,
+					[tenantReference()]
 				)
 			: (getDatabase()
 					.prepare(
@@ -94,8 +97,8 @@ export async function getPrivatePlaidItem(id: string): Promise<PrivatePlaidItem>
 					await cloudQuery<PlaidItemRow>(
 						`SELECT id::text, item_ref, item_id_enc, access_token_enc, institution_name_enc,
 						        status, last_synced_at, created_at
-						 FROM public.carddue_plaid_items WHERE id = $1`,
-						[id]
+						 FROM public.carddue_plaid_items WHERE tenant_ref = $1 AND id = $2`,
+						[tenantReference(), id]
 					)
 				)[0]
 			: (getDatabase()
@@ -142,8 +145,8 @@ export async function savePlaidItem(
 		await cloudQuery(
 			`INSERT INTO public.carddue_plaid_items AS current_item
 			 (id, item_ref, item_id_enc, access_token_enc, institution_name_enc, status,
-			  last_synced_at, created_at, updated_at)
-			 VALUES ($1, $2, $3, $4, $5, 'healthy', NULL, $6, $6)
+			  last_synced_at, created_at, updated_at, tenant_ref)
+			 VALUES ($1, $2, $3, $4, $5, 'healthy', NULL, $6, $6, $7)
 			 ON CONFLICT (item_ref) DO UPDATE SET
 			 item_id_enc = EXCLUDED.item_id_enc,
 			 access_token_enc = EXCLUDED.access_token_enc,
@@ -152,8 +155,17 @@ export async function savePlaidItem(
 			   current_item.institution_name_enc
 			 ),
 			 status = 'healthy',
+			 tenant_ref = EXCLUDED.tenant_ref,
 			 updated_at = EXCLUDED.updated_at`,
-			[id, reference, itemIdEncrypted, accessTokenEncrypted, institutionEncrypted, now]
+			[
+				id,
+				reference,
+				itemIdEncrypted,
+				accessTokenEncrypted,
+				institutionEncrypted,
+				now,
+				tenantReference(tenantId)
+			]
 		);
 	} else if (existing) {
 		getDatabase()
@@ -181,8 +193,9 @@ export async function markPlaidItemSynced(id: string, syncedAt: string): Promise
 	if (getRuntimeMode() === 'cloud') {
 		await cloudQuery(
 			`UPDATE public.carddue_plaid_items
-			 SET status = 'healthy', last_synced_at = $1, updated_at = $1 WHERE id = $2`,
-			[syncedAt, id]
+			 SET status = 'healthy', last_synced_at = $1, updated_at = $1
+			 WHERE tenant_ref = $2 AND id = $3`,
+			[syncedAt, tenantReference(), id]
 		);
 	} else {
 		getDatabase()
@@ -199,8 +212,8 @@ export async function markPlaidItemNeedsUpdate(id: string): Promise<void> {
 	if (getRuntimeMode() === 'cloud') {
 		await cloudQuery(
 			`UPDATE public.carddue_plaid_items
-			 SET status = 'needs_update', updated_at = $1 WHERE id = $2`,
-			[now, id]
+			 SET status = 'needs_update', updated_at = $1 WHERE tenant_ref = $2 AND id = $3`,
+			[now, tenantReference(), id]
 		);
 	} else {
 		getDatabase()
@@ -212,8 +225,9 @@ export async function markPlaidItemNeedsUpdate(id: string): Promise<void> {
 export async function removeLocalPlaidItem(id: string): Promise<void> {
 	if (getRuntimeMode() === 'cloud') {
 		const rows = await cloudQuery<{ id: string }>(
-			`DELETE FROM public.carddue_plaid_items WHERE id = $1 RETURNING id::text`,
-			[id]
+			`DELETE FROM public.carddue_plaid_items
+			 WHERE tenant_ref = $1 AND id = $2 RETURNING id::text`,
+			[tenantReference(), id]
 		);
 		if (!rows[0]) throw new AppError('PLAID_ITEM_NOT_FOUND', 'Connection not found.', 404);
 	} else {
@@ -230,8 +244,8 @@ export async function publicPlaidConnection(id: string): Promise<FinancialConnec
 			? (
 					await cloudQuery<PublicPlaidItemRow>(
 						`SELECT id::text, item_ref, institution_name_enc, status, last_synced_at, created_at
-						 FROM public.carddue_plaid_items WHERE id = $1`,
-						[id]
+						 FROM public.carddue_plaid_items WHERE tenant_ref = $1 AND id = $2`,
+						[tenantReference(), id]
 					)
 				)[0]
 			: (getDatabase()

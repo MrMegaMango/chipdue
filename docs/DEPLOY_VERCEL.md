@@ -75,6 +75,8 @@ When the named role already exists, the protected migration process requires bot
 - `CARDDUE_CURRENT_DATABASE_PASSWORD`: the generated 256-bit base64url password accepted by the runtime role before migration
 - `CARDDUE_DATABASE_PASSWORD`: a fresh generated 256-bit base64url password desired after migration; it must be different from the current value
 
+Upgrading a schema 1 deployment to schema 2 also requires `CARDDUE_MASTER_KEY` set to that deployment's existing `masterKey`. The migration uses it only in memory to authenticate and backfill opaque tenant references from the existing encrypted records, cross-checks connected records against their owning Plaid Item, and refuses inconsistent or unreadable data. Do not generate or substitute a new key.
+
 Treat these as old/current and new/desired credentials, respectively. Do not overwrite the deployed `DATABASE_URL` or recovery record with the desired value before the migration and verification gates succeed. The migration refuses an existing role that does not already satisfy the restricted preflight boundary.
 
 The role name must begin with `carddue_`, contain only lowercase letters, digits, and underscores, and must not contain `owner`. Do not pre-create it through Neon Console, CLI, or API.

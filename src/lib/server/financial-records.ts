@@ -38,7 +38,7 @@ import {
 	type UpdateBonusData,
 	type UpdateFinancialAccountData
 } from './schemas';
-import { payloadBelongsToCurrentTenant, tenantPayloadFields } from './tenant';
+import { payloadBelongsToCurrentTenant, tenantPayloadFields, tenantReference } from './tenant';
 
 interface PrivateRecordRow extends Record<string, unknown> {
 	id: string;
@@ -260,7 +260,8 @@ async function listRows(): Promise<PrivateRecordRow[]> {
 		? await cloudQuery<PrivateRecordRow>(
 				`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
 				        last_synced_at, created_at, updated_at
-				 FROM public.carddue_cards`
+				 FROM public.carddue_cards WHERE tenant_ref = $1`,
+				[tenantReference()]
 			)
 		: (getDatabase()
 				.prepare(
@@ -277,8 +278,8 @@ async function getRow(id: string): Promise<PrivateRecordRow | undefined> {
 				await cloudQuery<PrivateRecordRow>(
 					`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
 					        last_synced_at, created_at, updated_at
-					 FROM public.carddue_cards WHERE id = $1`,
-					[id]
+					 FROM public.carddue_cards WHERE tenant_ref = $1 AND id = $2`,
+					[tenantReference(), id]
 				)
 			)[0]
 		: (getDatabase()
@@ -296,9 +297,9 @@ async function insertRecord(id: string, payload: PrivateRecordPayload, now: stri
 		await cloudQuery(
 			`INSERT INTO public.carddue_cards
 			 (id, source, plaid_item_id, external_account_ref, payload_enc,
-			  last_synced_at, created_at, updated_at)
-			 VALUES ($1, 'manual', NULL, NULL, $2, NULL, $3, $3)`,
-			[id, encrypted, now]
+			  last_synced_at, created_at, updated_at, tenant_ref)
+			 VALUES ($1, 'manual', NULL, NULL, $2, NULL, $3, $3, $4)`,
+			[id, encrypted, now, tenantReference()]
 		);
 		return;
 	}
@@ -317,8 +318,8 @@ async function updateRecord(id: string, payload: PrivateRecordPayload, now: stri
 	if (getRuntimeMode() === 'cloud') {
 		const rows = await cloudQuery<{ id: string }>(
 			`UPDATE public.carddue_cards SET payload_enc = $1, updated_at = $2
-			 WHERE id = $3 RETURNING id::text`,
-			[encrypted, now, id]
+			 WHERE tenant_ref = $3 AND id = $4 RETURNING id::text`,
+			[encrypted, now, tenantReference(), id]
 		);
 		if (!rows[0]) throw new AppError('RECORD_NOT_FOUND', 'Record not found.', 404);
 		return;
@@ -331,7 +332,11 @@ async function updateRecord(id: string, payload: PrivateRecordPayload, now: stri
 
 async function deleteRecord(id: string): Promise<void> {
 	if (getRuntimeMode() === 'cloud') {
-		await cloudQuery(`DELETE FROM public.carddue_cards WHERE id = $1 AND source = 'manual'`, [id]);
+		await cloudQuery(
+			`DELETE FROM public.carddue_cards
+			 WHERE tenant_ref = $1 AND id = $2 AND source = 'manual'`,
+			[tenantReference(), id]
+		);
 		return;
 	}
 	getDatabase().prepare(`DELETE FROM cards WHERE id = ? AND source = 'manual'`).run(id);
@@ -478,12 +483,14 @@ async function replaceCloudConnectedAccounts(
 	syncedAt: string
 ): Promise<void> {
 	const storedSource = storedSourceForProvider(provider);
+	const tenantRef = tenantReference();
 	const existing = accountRows(
 		await cloudQuery<PrivateRecordRow>(
 			`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
 			        last_synced_at, created_at, updated_at
-			 FROM public.carddue_cards WHERE plaid_item_id = $1 AND source = $2`,
-			[connectionId, storedSource]
+			 FROM public.carddue_cards
+			 WHERE tenant_ref = $1 AND plaid_item_id = $2 AND source = $3`,
+			[tenantRef, connectionId, storedSource]
 		)
 	);
 	const existingByReference = new Map(
@@ -505,21 +512,23 @@ async function replaceCloudConnectedAccounts(
 		statements.push({
 			text: `INSERT INTO public.carddue_cards
 			       (id, source, plaid_item_id, external_account_ref, payload_enc,
-			        last_synced_at, created_at, updated_at)
-			       VALUES ($1, $2, $3, $4, $5, $6, $6, $6)
+			        last_synced_at, created_at, updated_at, tenant_ref)
+			       VALUES ($1, $2, $3, $4, $5, $6, $6, $6, $7)
 			       ON CONFLICT (plaid_item_id, external_account_ref) DO UPDATE SET
 			       payload_enc = EXCLUDED.payload_enc,
 			       last_synced_at = EXCLUDED.last_synced_at,
+			       tenant_ref = EXCLUDED.tenant_ref,
 			       updated_at = EXCLUDED.updated_at`,
-			params: [id, storedSource, connectionId, reference, encrypted, syncedAt]
+			params: [id, storedSource, connectionId, reference, encrypted, syncedAt, tenantRef]
 		});
 	}
 
 	for (const { row } of existing) {
 		if (!seenIds.has(row.id)) {
 			statements.push({
-				text: `DELETE FROM public.carddue_cards WHERE id = $1 AND source = $2`,
-				params: [row.id, storedSource]
+				text: `DELETE FROM public.carddue_cards
+				       WHERE tenant_ref = $1 AND id = $2 AND source = $3`,
+				params: [tenantRef, row.id, storedSource]
 			});
 		}
 	}

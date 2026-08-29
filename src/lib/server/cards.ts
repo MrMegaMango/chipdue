@@ -35,7 +35,7 @@ import {
 	storedSourceForProvider,
 	type StoredRecordSource
 } from './provider-storage';
-import { payloadBelongsToCurrentTenant, tenantPayloadFields } from './tenant';
+import { payloadBelongsToCurrentTenant, tenantPayloadFields, tenantReference } from './tenant';
 
 interface StoredCardRewardCategory {
 	id: string;
@@ -652,7 +652,8 @@ export async function listCards(): Promise<Card[]> {
 			? await cloudQuery<CardRow>(
 					`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
 					        last_synced_at, created_at, updated_at
-					 FROM public.carddue_cards`
+					 FROM public.carddue_cards WHERE tenant_ref = $1`,
+					[tenantReference()]
 				)
 			: (getDatabase()
 					.prepare(
@@ -670,8 +671,8 @@ async function findCardRow(id: string): Promise<CardRow | undefined> {
 				await cloudQuery<CardRow>(
 					`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
 						        last_synced_at, created_at, updated_at
-						 FROM public.carddue_cards WHERE id = $1`,
-					[id]
+					 FROM public.carddue_cards WHERE tenant_ref = $1 AND id = $2`,
+					[tenantReference(), id]
 				)
 			)[0]
 		: (getDatabase()
@@ -701,9 +702,9 @@ export async function createManualCard(input: CreateManualCardData): Promise<Car
 		await cloudQuery(
 			`INSERT INTO public.carddue_cards
 			 (id, source, plaid_item_id, external_account_ref, payload_enc,
-			  last_synced_at, created_at, updated_at)
-			 VALUES ($1, 'manual', NULL, NULL, $2, NULL, $3, $3)`,
-			[id, payloadEncrypted, now]
+			  last_synced_at, created_at, updated_at, tenant_ref)
+			 VALUES ($1, 'manual', NULL, NULL, $2, NULL, $3, $3, $4)`,
+			[id, payloadEncrypted, now, tenantReference()]
 		);
 	} else {
 		getDatabase()
@@ -774,10 +775,10 @@ export async function updateManualCard(id: string, changes: UpdateManualCardData
 	if (getRuntimeMode() === 'cloud') {
 		const rows = await cloudQuery<CardRow>(
 			`UPDATE public.carddue_cards SET payload_enc = $1, updated_at = $2
-			 WHERE id = $3 AND source = 'manual'
+			 WHERE tenant_ref = $3 AND id = $4 AND source = 'manual'
 			 RETURNING id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
 			           last_synced_at, created_at, updated_at`,
-			[encrypted, now, id]
+			[encrypted, now, tenantReference(), id]
 		);
 		if (!rows[0]) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
 		const card = rowToCard(rows[0]);
@@ -825,10 +826,10 @@ export async function updateCardRewards(id: string, changes: UpdateCardRewardsDa
 	if (getRuntimeMode() === 'cloud') {
 		const rows = await cloudQuery<CardRow>(
 			`UPDATE public.carddue_cards SET payload_enc = $1, updated_at = $2
-			 WHERE id = $3
+			 WHERE tenant_ref = $3 AND id = $4
 			 RETURNING id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
 			           last_synced_at, created_at, updated_at`,
-			[encrypted, now, id]
+			[encrypted, now, tenantReference(), id]
 		);
 		const card = rows[0] ? rowToCard(rows[0]) : null;
 		if (!card) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
@@ -861,10 +862,10 @@ export async function applyAutomaticCardRewardProfile(
 	if (getRuntimeMode() === 'cloud') {
 		const rows = await cloudQuery<CardRow>(
 			`UPDATE public.carddue_cards SET payload_enc = $1, updated_at = $2
-			 WHERE id = $3
+			 WHERE tenant_ref = $3 AND id = $4
 			 RETURNING id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
 			           last_synced_at, created_at, updated_at`,
-			[encrypted, now, id]
+			[encrypted, now, tenantReference(), id]
 		);
 		const card = rows[0] ? rowToCard(rows[0]) : null;
 		if (!card) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
@@ -888,7 +889,11 @@ export async function deleteManualCard(id: string): Promise<void> {
 		);
 	}
 	if (getRuntimeMode() === 'cloud') {
-		await cloudQuery(`DELETE FROM public.carddue_cards WHERE id = $1 AND source = 'manual'`, [id]);
+		await cloudQuery(
+			`DELETE FROM public.carddue_cards
+			 WHERE tenant_ref = $1 AND id = $2 AND source = 'manual'`,
+			[tenantReference(), id]
+		);
 	} else {
 		getDatabase().prepare(`DELETE FROM cards WHERE id = ? AND source = 'manual'`).run(id);
 	}
@@ -901,11 +906,13 @@ async function replaceCloudConnectedCards(
 	syncedAt: string
 ): Promise<void> {
 	const storedSource = storedSourceForProvider(provider);
+	const tenantRef = tenantReference();
 	const existingRows = await cloudQuery<CardRow>(
 		`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
 		        last_synced_at, created_at, updated_at
-		 FROM public.carddue_cards WHERE plaid_item_id = $1 AND source = $2`,
-		[connectionId, storedSource]
+		 FROM public.carddue_cards
+		 WHERE tenant_ref = $1 AND plaid_item_id = $2 AND source = $3`,
+		[tenantRef, connectionId, storedSource]
 	);
 	const existingCards = existingRows.flatMap((row) => {
 		const payload = decodePayload(row);
@@ -927,11 +934,12 @@ async function replaceCloudConnectedCards(
 		return {
 			text: `INSERT INTO public.carddue_cards
 			       (id, source, plaid_item_id, external_account_ref, payload_enc,
-			        last_synced_at, created_at, updated_at)
-			       VALUES ($1, $2, $3, $4, $5, $6, $6, $6)
+			        last_synced_at, created_at, updated_at, tenant_ref)
+			       VALUES ($1, $2, $3, $4, $5, $6, $6, $6, $7)
 			       ON CONFLICT (plaid_item_id, external_account_ref) DO UPDATE SET
 			       payload_enc = EXCLUDED.payload_enc,
 			       last_synced_at = EXCLUDED.last_synced_at,
+			       tenant_ref = EXCLUDED.tenant_ref,
 			       updated_at = EXCLUDED.updated_at`,
 			params: [
 				id,
@@ -939,15 +947,17 @@ async function replaceCloudConnectedCards(
 				connectionId,
 				reference,
 				encryptJson(snapshotPayload(snapshot, rewardsByReference.get(reference)), `card:${id}`),
-				syncedAt
+				syncedAt,
+				tenantRef
 			]
 		};
 	});
 	for (const { row } of existingCards) {
 		if (row.external_account_ref && !references.has(row.external_account_ref)) {
 			statements.push({
-				text: `DELETE FROM public.carddue_cards WHERE id = $1 AND source = $2`,
-				params: [row.id, storedSource]
+				text: `DELETE FROM public.carddue_cards
+				       WHERE tenant_ref = $1 AND id = $2 AND source = $3`,
+				params: [tenantRef, row.id, storedSource]
 			});
 		}
 	}
@@ -1038,8 +1048,8 @@ export async function readConnectionTransactionState(
 					`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
 					        last_synced_at, created_at, updated_at
 					 FROM public.carddue_cards
-					 WHERE plaid_item_id = $1 AND source = $2`,
-					[connectionId, storedSource]
+					 WHERE tenant_ref = $1 AND plaid_item_id = $2 AND source = $3`,
+					[tenantReference(), connectionId, storedSource]
 				)
 			: (getDatabase()
 					.prepare(
@@ -1330,8 +1340,8 @@ export async function listCardTransactions(
 					await cloudQuery<CardRow>(
 						`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
 						        last_synced_at, created_at, updated_at
-						 FROM public.carddue_cards WHERE id = $1`,
-						[cardId]
+						 FROM public.carddue_cards WHERE tenant_ref = $1 AND id = $2`,
+						[tenantReference(), cardId]
 					)
 				)[0]
 			: (getDatabase()

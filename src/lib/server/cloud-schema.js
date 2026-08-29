@@ -3,7 +3,8 @@ import { CLOUD_TABLE_NAMES } from './cloud-role.js';
 /** @typedef {Record<string, unknown>} CloudCatalogRow */
 /** @typedef {(text: string, parameters?: unknown[]) => Promise<CloudCatalogRow[]>} CloudCatalogQuery */
 
-export const CLOUD_SCHEMA_VERSION = 1;
+export const CLOUD_SCHEMA_VERSION = 2;
+export const CLOUD_SCHEMA_LEGACY_VERSION = 1;
 
 export const CLOUD_SCHEMA_STATEMENTS = Object.freeze([
 	`CREATE TABLE IF NOT EXISTS public.carddue_metadata (
@@ -19,7 +20,8 @@ export const CLOUD_SCHEMA_STATEMENTS = Object.freeze([
 	  status TEXT NOT NULL CHECK (status IN ('healthy', 'needs_update')) DEFAULT 'healthy',
 	  last_synced_at TEXT,
 	  created_at TEXT NOT NULL,
-	  updated_at TEXT NOT NULL
+	  updated_at TEXT NOT NULL,
+	  tenant_ref TEXT NOT NULL CHECK (tenant_ref ~ '^[A-Za-z0-9_-]{43}$')
 	)`,
 	`CREATE TABLE IF NOT EXISTS public.carddue_cards (
 	  id UUID PRIMARY KEY,
@@ -30,6 +32,7 @@ export const CLOUD_SCHEMA_STATEMENTS = Object.freeze([
 	  last_synced_at TEXT,
 	  created_at TEXT NOT NULL,
 	  updated_at TEXT NOT NULL,
+	  tenant_ref TEXT NOT NULL CHECK (tenant_ref ~ '^[A-Za-z0-9_-]{43}$'),
 	  CHECK (
 	    (source = 'manual' AND plaid_item_id IS NULL AND external_account_ref IS NULL) OR
 	    (source = 'plaid' AND plaid_item_id IS NOT NULL AND external_account_ref IS NOT NULL)
@@ -40,6 +43,10 @@ export const CLOUD_SCHEMA_STATEMENTS = Object.freeze([
 	 ON public.carddue_cards(source)`,
 	`CREATE INDEX IF NOT EXISTS carddue_cards_plaid_item_idx
 	 ON public.carddue_cards(plaid_item_id)`,
+	`CREATE INDEX IF NOT EXISTS carddue_cards_tenant_ref_idx
+	 ON public.carddue_cards(tenant_ref)`,
+	`CREATE INDEX IF NOT EXISTS carddue_plaid_items_tenant_ref_idx
+	 ON public.carddue_plaid_items(tenant_ref)`,
 	`CREATE TABLE IF NOT EXISTS public.carddue_auth_sessions (
 	  token_hash TEXT PRIMARY KEY,
 	  password_config_ref TEXT NOT NULL,
@@ -88,9 +95,9 @@ const EXPECTED_RELATIONS = Object.freeze(
 const EXPECTED_COLUMN_TABLE_STARTS = Object.freeze([
 	{ index: 0 },
 	{ index: 2 },
-	{ index: 11 },
-	{ index: 19 },
-	{ index: 24 }
+	{ index: 12 },
+	{ index: 21 },
+	{ index: 26 }
 ]);
 
 const EXPECTED_COLUMNS = Object.freeze(
@@ -106,6 +113,7 @@ const EXPECTED_COLUMNS = Object.freeze(
 		['carddue_plaid_items', 'last_synced_at', 'text', false, ''],
 		['carddue_plaid_items', 'created_at', 'text', true, ''],
 		['carddue_plaid_items', 'updated_at', 'text', true, ''],
+		['carddue_plaid_items', 'tenant_ref', 'text', true, ''],
 		['carddue_cards', 'id', 'uuid', true, ''],
 		['carddue_cards', 'source', 'text', true, ''],
 		['carddue_cards', 'plaid_item_id', 'uuid', false, ''],
@@ -114,6 +122,7 @@ const EXPECTED_COLUMNS = Object.freeze(
 		['carddue_cards', 'last_synced_at', 'text', false, ''],
 		['carddue_cards', 'created_at', 'text', true, ''],
 		['carddue_cards', 'updated_at', 'text', true, ''],
+		['carddue_cards', 'tenant_ref', 'text', true, ''],
 		['carddue_auth_sessions', 'token_hash', 'text', true, ''],
 		['carddue_auth_sessions', 'password_config_ref', 'text', true, ''],
 		['carddue_auth_sessions', 'created_at', 'bigint', true, ''],
@@ -172,6 +181,17 @@ const EXPECTED_CONSTRAINTS = Object.freeze(
 			'',
 			"checkstatus=anyarray['healthy','needs_update']"
 		],
+		[
+			'carddue_plaid_items',
+			'c',
+			'tenant_ref',
+			'',
+			'',
+			'',
+			'',
+			'',
+			"checktenant_ref~'^[a-za-z0-9_-]{43}$'"
+		],
 		['carddue_cards', 'p', 'id', '', '', '', '', '', ''],
 		['carddue_cards', 'u', 'plaid_item_id,external_account_ref', '', '', '', '', '', ''],
 		['carddue_cards', 'f', 'plaid_item_id', 'carddue_plaid_items', 'id', 'a', 'c', 's', ''],
@@ -186,6 +206,17 @@ const EXPECTED_CONSTRAINTS = Object.freeze(
 			'',
 			'',
 			"checksource='manual'andplaid_item_idisnullandexternal_account_refisnullorsource='plaid'andplaid_item_idisnotnullandexternal_account_refisnotnull"
+		],
+		[
+			'carddue_cards',
+			'c',
+			'tenant_ref',
+			'',
+			'',
+			'',
+			'',
+			'',
+			"checktenant_ref~'^[a-za-z0-9_-]{43}$'"
 		],
 		['carddue_auth_sessions', 'p', 'token_hash', '', '', '', '', '', ''],
 		['carddue_auth_rate_limits', 'p', 'bucket_ref', '', '', '', '', '', '']
@@ -224,6 +255,8 @@ const EXPECTED_INDEXES = Object.freeze(
 	[
 		['carddue_cards', 'carddue_cards_source_idx', 'source'],
 		['carddue_cards', 'carddue_cards_plaid_item_idx', 'plaid_item_id'],
+		['carddue_cards', 'carddue_cards_tenant_ref_idx', 'tenant_ref'],
+		['carddue_plaid_items', 'carddue_plaid_items_tenant_ref_idx', 'tenant_ref'],
 		['carddue_auth_sessions', 'carddue_auth_sessions_expiry_idx', 'expires_at'],
 		['carddue_auth_rate_limits', 'carddue_auth_rate_limits_updated_idx', 'updated_at']
 	].map(([table_name, index_name, columns]) =>
@@ -246,6 +279,15 @@ export const CLOUD_SCHEMA_CATALOG_CONTRACT = Object.freeze({
 	columns: EXPECTED_COLUMNS,
 	constraints: EXPECTED_CONSTRAINTS,
 	indexes: EXPECTED_INDEXES
+});
+
+export const CLOUD_SCHEMA_LEGACY_CATALOG_CONTRACT = Object.freeze({
+	relations: EXPECTED_RELATIONS,
+	columns: Object.freeze(EXPECTED_COLUMNS.filter((column) => column.column_name !== 'tenant_ref')),
+	constraints: Object.freeze(
+		EXPECTED_CONSTRAINTS.filter((constraint) => constraint.columns !== 'tenant_ref')
+	),
+	indexes: Object.freeze(EXPECTED_INDEXES.filter((index) => index.columns !== 'tenant_ref'))
 });
 
 const RELATION_QUERY = `SELECT relation.relname AS table_name,
@@ -466,23 +508,26 @@ export async function readCloudSchemaCatalog(query) {
 	return { relations, columns, constraints, indexes };
 }
 
-/** @param {CloudCatalogQuery} query */
-export async function verifyCloudSchemaCatalog(query) {
+/**
+ * @param {CloudCatalogQuery} query
+ * @param {{relations: readonly CloudCatalogRow[], columns: readonly CloudCatalogRow[], constraints: readonly CloudCatalogRow[], indexes: readonly CloudCatalogRow[]}} [contract]
+ */
+export async function verifyCloudSchemaCatalog(query, contract = CLOUD_SCHEMA_CATALOG_CONTRACT) {
 	const { relations, columns, constraints, indexes } = await readCloudSchemaCatalog(query);
 
-	const expectedColumns = EXPECTED_COLUMNS.map((row) => ({
+	const expectedColumns = contract.columns.map((row) => ({
 		...row,
 		default_expression: canonicalDefault(row.default_expression)
 	}));
-	const expectedConstraints = EXPECTED_CONSTRAINTS.map((row) => ({
+	const expectedConstraints = contract.constraints.map((row) => ({
 		...row,
 		check_expression: canonicalCheck(row.check_expression)
 	}));
 	if (
-		!sameRows(relations, EXPECTED_RELATIONS, comparableRelation) ||
+		!sameRows(relations, contract.relations, comparableRelation) ||
 		!sameRows(columns, expectedColumns, comparableColumn) ||
 		!sameRows(constraints, expectedConstraints, comparableConstraint) ||
-		!sameRows(indexes, EXPECTED_INDEXES, comparableIndex)
+		!sameRows(indexes, contract.indexes, comparableIndex)
 	) {
 		throw new Error('The cloud schema catalog does not match this ChipDue release.');
 	}

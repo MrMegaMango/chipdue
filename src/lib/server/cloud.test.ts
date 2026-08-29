@@ -9,7 +9,7 @@ import {
 	resetAuthStateForTests,
 	setSessionCookie
 } from './auth';
-import { createManualCard } from './cards';
+import { createManualCard, listCards } from './cards';
 import {
 	CLOUD_MIGRATION_STATEMENTS,
 	CLOUD_SCHEMA_VERSION,
@@ -20,8 +20,16 @@ import {
 	type CloudStatement
 } from './cloud-database';
 import { resetCryptoStateForTests } from './crypto';
+import {
+	createBonus,
+	createFinancialAccount,
+	listBonuses,
+	listFinancialAccounts
+} from './financial-records';
+import { listPlaidConnections, savePlaidItem } from './plaid-store';
 import { getCloudRuntimeConfig, getRuntimeMode } from './runtime';
-import { createManualCardSchema } from './schemas';
+import { createBonusSchema, createFinancialAccountSchema, createManualCardSchema } from './schemas';
+import { runAsTenant } from './tenant';
 
 const CLOUD_ENV_KEYS = [
 	'CARDDUE_MODE',
@@ -171,23 +179,55 @@ class AuthMemoryAdapter implements CloudDatabaseAdapter {
 
 class CardMemoryAdapter implements CloudDatabaseAdapter {
 	readonly observed: unknown[][] = [];
-	private row: Record<string, unknown> | undefined;
+	readonly queries: Array<{ text: string; params: unknown[] }> = [];
+	private readonly cards = new Map<string, Record<string, unknown>>();
+	private readonly items = new Map<string, Record<string, unknown>>();
 
 	async query<T extends CloudRow>(text: string, params: unknown[] = []): Promise<T[]> {
 		this.observed.push(params);
+		this.queries.push({ text, params });
 		if (text.includes('INSERT INTO') && text.includes('carddue_cards')) {
-			this.row = {
+			this.cards.set(String(params[0]), {
 				id: params[0],
 				source: 'manual',
+				plaid_item_id: null,
+				external_account_ref: null,
 				payload_enc: params[1],
 				last_synced_at: null,
 				created_at: params[2],
-				updated_at: params[2]
-			};
+				updated_at: params[2],
+				tenant_ref: params[3]
+			});
 			return [];
 		}
-		if (text.includes('FROM public.carddue_cards WHERE id')) {
-			return (this.row ? [this.row] : []) as T[];
+		if (text.includes('FROM public.carddue_cards')) {
+			const tenantRef = String(params[0]);
+			const id = text.includes('AND id = $2') ? String(params[1]) : undefined;
+			return [...this.cards.values()].filter(
+				(row) => row.tenant_ref === tenantRef && (id === undefined || row.id === id)
+			) as T[];
+		}
+		if (text.includes('INSERT INTO') && text.includes('carddue_plaid_items')) {
+			this.items.set(String(params[0]), {
+				id: params[0],
+				item_ref: params[1],
+				item_id_enc: params[2],
+				access_token_enc: params[3],
+				institution_name_enc: params[4],
+				status: 'healthy',
+				last_synced_at: null,
+				created_at: params[5],
+				updated_at: params[5],
+				tenant_ref: params[6]
+			});
+			return [];
+		}
+		if (text.includes('FROM public.carddue_plaid_items')) {
+			const tenantRef = String(params[0]);
+			const id = text.includes('AND id = $2') ? String(params[1]) : undefined;
+			return [...this.items.values()].filter(
+				(row) => row.tenant_ref === tenantRef && (id === undefined || row.id === id)
+			) as T[];
 		}
 		throw new Error(`Unexpected test query: ${text.slice(0, 50)}`);
 	}
@@ -265,7 +305,7 @@ describe.sequential('cloud mode privacy and authentication', () => {
 
 	it('keeps cloud schema free of plaintext financial fields and runtime DDL', () => {
 		const migration = CLOUD_MIGRATION_STATEMENTS.join('\n').toLowerCase();
-		expect(CLOUD_SCHEMA_VERSION).toBe(1);
+		expect(CLOUD_SCHEMA_VERSION).toBe(2);
 		expect(migration).toContain('payload_enc');
 		expect(migration).toContain('access_token_enc');
 		for (const plaintextField of ['nickname', 'last4', 'statement_balance', 'minimum_payment']) {
@@ -290,6 +330,44 @@ describe.sequential('cloud mode privacy and authentication', () => {
 		expect(durableValues).not.toContain('Cloud private issuer');
 		expect(durableValues).not.toContain('9876');
 		expect(durableValues).not.toContain('54321');
+	});
+
+	it('filters cloud dashboard reads by an opaque tenant reference before decrypting', async () => {
+		const adapter = new CardMemoryAdapter();
+		setCloudDatabaseAdapterForTests(adapter);
+		const firstTenant = '10000000-0000-4000-8000-000000000001';
+		const secondTenant = '20000000-0000-4000-8000-000000000002';
+
+		await runAsTenant(firstTenant, async () => {
+			await createManualCard(
+				createManualCardSchema.parse({ nickname: 'First card', last4: '1001' })
+			);
+			const account = await createFinancialAccount(
+				createFinancialAccountSchema.parse({ nickname: 'First account', accountType: 'checking' })
+			);
+			await createBonus(
+				createBonusSchema.parse({ accountId: account.id, name: 'First bonus', requirements: [] })
+			);
+			await savePlaidItem('first-item', 'first-token', 'First Bank');
+		});
+
+		await runAsTenant(secondTenant, async () => {
+			expect(await listCards()).toEqual([]);
+			expect(await listFinancialAccounts()).toEqual([]);
+			expect(await listBonuses()).toEqual([]);
+			expect(await listPlaidConnections()).toEqual([]);
+		});
+
+		const customerReads = adapter.queries.filter(
+			({ text }) =>
+				text.includes('FROM public.carddue_cards') ||
+				text.includes('FROM public.carddue_plaid_items')
+		);
+		expect(customerReads.length).toBeGreaterThan(0);
+		for (const { text, params } of customerReads) {
+			expect(text).toContain('tenant_ref = $1');
+			expect(params[0]).toMatch(/^[A-Za-z0-9_-]{43}$/);
+		}
 	});
 
 	it('stores opaque session, password, and rate-limit references only', async () => {

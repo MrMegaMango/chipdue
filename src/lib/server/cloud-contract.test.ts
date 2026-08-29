@@ -1,16 +1,23 @@
+import { createCipheriv, createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
 	assertDistinctRuntimePasswords,
 	assertRuntimeSessionsInvalidated,
 	createPasswordRotationParameters,
 	createScramVerifier,
+	deriveTenantReference,
 	isAuthenticationRejection,
+	legacyTenantUpgradeStatements,
 	PASSWORD_ROTATION_SQL,
+	readLegacyTenantBackfill,
+	tenantReferenceFromCardPayload,
+	tenantReferenceFromPlaidItem,
 	verifyExistingSchema
 } from '../../../scripts/migrate-cloud.mjs';
 import { CLOUD_TABLE_ACCESS, verifyCloudRoleBoundary } from './cloud-role.js';
 import {
 	CLOUD_SCHEMA_CATALOG_CONTRACT,
+	CLOUD_SCHEMA_LEGACY_CATALOG_CONTRACT,
 	CLOUD_SCHEMA_STATEMENTS,
 	verifyCloudSchemaCatalog
 } from './cloud-schema.js';
@@ -95,6 +102,22 @@ function catalogQuery(contract = CLOUD_SCHEMA_CATALOG_CONTRACT) {
 	};
 }
 
+function encryptedPayload(key: Buffer, id: string, payload: unknown): string {
+	const iv = Buffer.alloc(12, 9);
+	const cipher = createCipheriv('aes-256-gcm', key, iv);
+	cipher.setAAD(Buffer.from(`carddue:card:${id}`, 'utf8'));
+	const ciphertext = Buffer.concat([
+		cipher.update(JSON.stringify(payload), 'utf8'),
+		cipher.final()
+	]);
+	return [
+		'v1',
+		iv.toString('base64url'),
+		cipher.getAuthTag().toString('base64url'),
+		ciphertext.toString('base64url')
+	].join('.');
+}
+
 describe('cloud SQL security contract', () => {
 	it('accepts only the exact restricted role and table privilege boundary', async () => {
 		await expect(
@@ -145,10 +168,67 @@ describe('cloud SQL security contract', () => {
 	it('refuses to relabel a future schema version', async () => {
 		const query = async (text: string) => {
 			if (text.includes('AS relation_count')) return [{ relation_count: 5 }];
-			if (text.includes("WHERE key = 'schema_version'")) return [{ value: '2' }];
+			if (text.includes("WHERE key = 'schema_version'")) return [{ value: '3' }];
 			return catalogQuery()(text);
 		};
 		await expect(verifyExistingSchema(query)).rejects.toThrow(/cannot be migrated/);
+	});
+
+	it('accepts the exact prior catalog only as the supported tenant backfill source', async () => {
+		const query = async (text: string) => {
+			if (text.includes('AS relation_count')) return [{ relation_count: 5 }];
+			if (text.includes("WHERE key = 'schema_version'")) return [{ value: '1' }];
+			return catalogQuery(CLOUD_SCHEMA_LEGACY_CATALOG_CONTRACT)(text);
+		};
+		await expect(verifyExistingSchema(query)).resolves.toBe('legacy');
+	});
+
+	it('backfills opaque tenant ownership from authenticated legacy data', async () => {
+		const key = Buffer.alloc(32, 7);
+		const tenantId = '10000000-0000-4000-8000-000000000001';
+		const tenantRef = deriveTenantReference(key, tenantId);
+		const providerRef = Buffer.alloc(32, 3).toString('base64url');
+		const itemId = '30000000-0000-4000-8000-000000000003';
+		const cardId = '40000000-0000-4000-8000-000000000004';
+		const legacyCardId = '50000000-0000-4000-8000-000000000005';
+		const legacyRef = createHmac('sha256', key)
+			.update('carddue:carddue-tenant-owner-v1:')
+			.update('00000000-0000-4000-8000-000000000001')
+			.digest('base64url');
+		const query = async (text: string) => {
+			if (text.includes('carddue_plaid_items')) {
+				return [{ id: itemId, item_ref: `${tenantId}:${providerRef}` }];
+			}
+			return [
+				{
+					id: cardId,
+					plaid_item_id: itemId,
+					payload_enc: encryptedPayload(key, cardId, { tenantRef })
+				},
+				{
+					id: legacyCardId,
+					plaid_item_id: null,
+					payload_enc: encryptedPayload(key, legacyCardId, { nickname: 'legacy' })
+				}
+			];
+		};
+		const backfill = await readLegacyTenantBackfill(query, key);
+		expect(tenantReferenceFromPlaidItem(key, `${tenantId}:${providerRef}`)).toBe(tenantRef);
+		expect(
+			tenantReferenceFromCardPayload(key, cardId, encryptedPayload(key, cardId, { tenantRef }))
+		).toBe(tenantRef);
+		expect(backfill).toEqual({
+			itemUpdates: [{ id: itemId, tenantRef }],
+			cardUpdates: [
+				{ id: cardId, tenantRef },
+				{ id: legacyCardId, tenantRef: legacyRef }
+			]
+		});
+		const statements = legacyTenantUpgradeStatements(backfill);
+		expect(
+			statements.some(({ text }) => text.includes('ALTER COLUMN tenant_ref SET NOT NULL'))
+		).toBe(true);
+		expect(JSON.stringify(statements)).not.toContain(tenantId);
 	});
 
 	it('uses public-qualified DDL and a non-plaintext SCRAM verifier', () => {
