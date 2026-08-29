@@ -1,8 +1,8 @@
 # Google-only authentication
 
-Google-only mode is an optional private-cloud configuration for one owner. It removes ChipDue's password-login endpoint and accepts only the single Google identity established during a one-time, operator-authorized bootstrap. Local mode is unchanged.
+Google-only mode is an optional private-cloud configuration that removes ChipDue's password-login endpoint. Ordinary validated Google sign-ins create isolated ChipDue accounts. The one-time operator-authorized bootstrap described here is needed only to attach a Google identity to pre-existing operator data. Local mode is unchanged.
 
-This mode has no independent ChipDue recovery password. A Google outage, account suspension, OAuth-client error, or loss of the linked Google account can lock the owner out. Protect the Google account and Cloud project with phishing-resistant MFA and keep provider recovery methods current before enabling it.
+This mode has no independent ChipDue recovery password. A Google outage, account suspension, OAuth-client error, or loss of a linked Google account can lock that user out. Protect Google accounts and the Cloud project with phishing-resistant MFA and keep provider recovery methods current before enabling it.
 
 ## Security model
 
@@ -11,9 +11,9 @@ This mode has no independent ChipDue recovery password. A Google outage, account
 - The Vercel Function necessarily receives the raw setup token once in the encrypted HTTPS request and hashes it transiently. ChipDue never persists or logs it, puts it in a URL, cookie, database row, browser storage, or build artifact, or sends it to Google or Plaid.
 - Bootstrap uses the same exact-host HTTPS checks, authorization-code flow, PKCE S256, random state and nonce, encrypted short-lived transaction cookie, one-time database marker, Google response-issuer check, RS256 signature verification, and issuer/audience/expiry/freshness/nonce/subject checks as ordinary Google login.
 - ChipDue stores only a master-keyed fingerprint of Google's normalized issuer and stable `sub`. It does not request or retain an email, profile, provider token, or raw provider response.
-- The first validated subject is inserted atomically. Bootstrap-verifier replacement and final subject binding serialize on the same active claim row, so a replaced flow cannot later win the owner binding.
+- A normal validated subject receives an immutable random tenant mapping. Bootstrap-verifier replacement and final legacy-operator binding serialize on the same active claim row, so a replaced flow cannot later win that binding.
 
-The setup verifier is a temporary bootstrap authority, not an everyday login secret. Remove it immediately after the first successful callback.
+The setup verifier is a temporary authority over the pre-existing operator tenant, not an everyday login secret. Remove it immediately after the successful operator callback. On a fresh deployment with no legacy data, omit it and let users sign in normally.
 
 ## Provision
 
@@ -59,11 +59,11 @@ Immediately after a successful callback:
 4. Sign in with Google again and verify the same owner reaches the dashboard.
 5. Delete the temporary bootstrap bundle and clear the clipboard through the operating system's protected workflow. Remove superseded deployments that still contain the verifier.
 
-The linked fingerprint remains in Neon. Removing the bootstrap hash does not remove the linked identity or invalidate an already issued ChipDue session.
+The operator fingerprint remains in Neon. Removing the bootstrap hash does not remove that identity or invalidate an already issued ChipDue session.
 
 ## Recovery and identity changes
 
-This release intentionally provides no unlink, reset, or rebind endpoint. Google-only configuration requires both client variables. Removing them and redeploying is an emergency containment action that makes the entire application fail closed with `503`; it does not erase the binding. Rotating only the Google client secret does not invalidate existing ChipDue sessions.
+This release intentionally provides no account deletion, unlink, reset, or rebind endpoint. Google-only configuration requires both client variables. Removing them and redeploying is an emergency containment action that makes the entire application fail closed with `503`; it does not erase tenant bindings. Rotating only the Google client secret does not invalidate existing ChipDue sessions.
 
 Do not replace the metadata fingerprint manually while leaving existing Google-only sessions active: sessions are bound to the authentication mode and OAuth client, not to the mutable database row. Any separately reviewed identity-reset procedure must first invalidate every existing session. A temporary password-mode recovery must deploy a fresh password hash and complete one successful fresh password login; issuing that session globally deletes stored sessions bound to the old Google configuration. Merely switching modes is insufficient because an unpresented old row could become valid again after returning to Google with the same client ID. An owner-authorized database recovery may instead delete every session row and verify the table is empty before changing the binding or restoring Google mode. Neither recovery path is exposed by the application, and both require a new security review and verified rollback plan.
 

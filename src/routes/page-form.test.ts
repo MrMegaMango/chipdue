@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-	ACCESS_REQUEST_PATH,
 	authorizeGoogleCallbackResult,
 	cardBrandForIssuer,
 	canOfferGoogleLogin,
@@ -97,11 +96,10 @@ describe('Google-only setup privacy contract', () => {
 		expect(canShowGoogleBootstrap('local', 'local', true)).toBe(false);
 	});
 
-	it('offers an invite request addressed to the configured admin', () => {
-		expect(ACCESS_REQUEST_PATH).toBe('/api/access-request');
+	it('explains that a first Google sign-in creates an isolated account', () => {
 		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
-		expect(source).toContain('ChipDue is invite-only.');
-		expect(source).toContain('Notify Admin');
+		expect(source).toContain('Your first sign-in creates it automatically.');
+		expect(source).toContain('separate from every other user');
 		expect(source).not.toContain('mailto:');
 	});
 

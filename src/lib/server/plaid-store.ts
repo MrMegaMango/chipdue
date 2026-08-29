@@ -1,13 +1,20 @@
 import { randomUUID } from 'node:crypto';
 import type { PlaidConnection } from '$lib/types';
 import { cloudQuery } from './cloud-database';
-import { decryptSecret, encryptSecret, privateFingerprint, privateUuid } from './crypto';
+import { decryptSecret, encryptSecret, privateUuid } from './crypto';
 import { getDatabase } from './database';
 import { AppError } from './errors';
 import { getRuntimeMode } from './runtime';
+import {
+	currentTenantId,
+	plaidItemBelongsToCurrentTenant,
+	plaidItemReference,
+	tenantIdFromPlaidItemReference
+} from './tenant';
 
 interface PlaidItemRow extends Record<string, unknown> {
 	id: string;
+	item_ref: string;
 	item_id_enc: string;
 	access_token_enc: string;
 	institution_name_enc: string | null;
@@ -18,6 +25,7 @@ interface PlaidItemRow extends Record<string, unknown> {
 
 interface PublicPlaidItemRow extends Record<string, unknown> {
 	id: string;
+	item_ref: string;
 	institution_name_enc: string | null;
 	status: 'healthy' | 'needs_update';
 	last_synced_at: string | null;
@@ -64,16 +72,18 @@ export async function listPlaidConnections(): Promise<PlaidConnection[]> {
 	const rows =
 		getRuntimeMode() === 'cloud'
 			? await cloudQuery<PublicPlaidItemRow>(
-					`SELECT id::text, institution_name_enc, status, last_synced_at, created_at
+					`SELECT id::text, item_ref, institution_name_enc, status, last_synced_at, created_at
 					 FROM public.carddue_plaid_items ORDER BY created_at`
 				)
 			: (getDatabase()
 					.prepare(
-						`SELECT id, institution_name_enc, status, last_synced_at, created_at
+						`SELECT id, item_ref, institution_name_enc, status, last_synced_at, created_at
 						 FROM plaid_items ORDER BY created_at`
 					)
 					.all() as PublicPlaidItemRow[]);
-	return rows.map(publicRowToConnection);
+	return rows
+		.filter((row) => plaidItemBelongsToCurrentTenant(row.item_ref))
+		.map(publicRowToConnection);
 }
 
 export async function getPrivatePlaidItem(id: string): Promise<PrivatePlaidItem> {
@@ -81,7 +91,7 @@ export async function getPrivatePlaidItem(id: string): Promise<PrivatePlaidItem>
 		getRuntimeMode() === 'cloud'
 			? (
 					await cloudQuery<PlaidItemRow>(
-						`SELECT id::text, item_id_enc, access_token_enc, institution_name_enc,
+						`SELECT id::text, item_ref, item_id_enc, access_token_enc, institution_name_enc,
 						        status, last_synced_at, created_at
 						 FROM public.carddue_plaid_items WHERE id = $1`,
 						[id]
@@ -89,12 +99,14 @@ export async function getPrivatePlaidItem(id: string): Promise<PrivatePlaidItem>
 				)[0]
 			: (getDatabase()
 					.prepare(
-						`SELECT id, item_id_enc, access_token_enc, institution_name_enc, status,
+						`SELECT id, item_ref, item_id_enc, access_token_enc, institution_name_enc, status,
 						        last_synced_at, created_at
 						 FROM plaid_items WHERE id = ?`
 					)
 					.get(id) as PlaidItemRow | undefined);
-	if (!row) throw new AppError('PLAID_ITEM_NOT_FOUND', 'Connection not found.', 404);
+	if (!row || !plaidItemBelongsToCurrentTenant(row.item_ref)) {
+		throw new AppError('PLAID_ITEM_NOT_FOUND', 'Connection not found.', 404);
+	}
 	return decodeItem(row);
 }
 
@@ -103,13 +115,14 @@ export async function savePlaidItem(
 	accessToken: string,
 	institutionName: string | null
 ): Promise<string> {
-	const reference = privateFingerprint(itemId, 'plaid-item');
+	const tenantId = currentTenantId();
+	const reference = plaidItemReference(itemId, tenantId);
 	const cloud = getRuntimeMode() === 'cloud';
 	let id: string;
 	let existing: { id: string } | undefined;
 
 	if (cloud) {
-		id = privateUuid(itemId, 'plaid-item');
+		id = privateUuid(itemId, `plaid-item:${tenantId}`);
 	} else {
 		existing = getDatabase()
 			.prepare(`SELECT id FROM plaid_items WHERE item_ref = ?`)
@@ -215,17 +228,40 @@ export async function publicPlaidConnection(id: string): Promise<PlaidConnection
 		getRuntimeMode() === 'cloud'
 			? (
 					await cloudQuery<PublicPlaidItemRow>(
-						`SELECT id::text, institution_name_enc, status, last_synced_at, created_at
+						`SELECT id::text, item_ref, institution_name_enc, status, last_synced_at, created_at
 						 FROM public.carddue_plaid_items WHERE id = $1`,
 						[id]
 					)
 				)[0]
 			: (getDatabase()
 					.prepare(
-						`SELECT id, institution_name_enc, status, last_synced_at, created_at
+						`SELECT id, item_ref, institution_name_enc, status, last_synced_at, created_at
 						 FROM plaid_items WHERE id = ?`
 					)
 					.get(id) as PublicPlaidItemRow | undefined);
-	if (!row) throw new AppError('PLAID_ITEM_NOT_FOUND', 'Connection not found.', 404);
+	if (!row || !plaidItemBelongsToCurrentTenant(row.item_ref)) {
+		throw new AppError('PLAID_ITEM_NOT_FOUND', 'Connection not found.', 404);
+	}
 	return publicRowToConnection(row);
+}
+
+export async function listPlaidConnectionTenants(): Promise<
+	Array<{ tenantId: string; connection: PlaidConnection }>
+> {
+	const rows =
+		getRuntimeMode() === 'cloud'
+			? await cloudQuery<PublicPlaidItemRow>(
+					`SELECT id::text, item_ref, institution_name_enc, status, last_synced_at, created_at
+					 FROM public.carddue_plaid_items ORDER BY created_at`
+				)
+			: (getDatabase()
+					.prepare(
+						`SELECT id, item_ref, institution_name_enc, status, last_synced_at, created_at
+						 FROM plaid_items ORDER BY created_at`
+					)
+					.all() as PublicPlaidItemRow[]);
+	return rows.flatMap((row) => {
+		const tenantId = tenantIdFromPlaidItemReference(row.item_ref);
+		return tenantId ? [{ tenantId, connection: publicRowToConnection(row) }] : [];
+	});
 }

@@ -1,6 +1,6 @@
 # Deploy a private Vercel instance
 
-This guide deploys ChipDue's one supported hosted topology: one owner, one reviewed Vercel production project, one exact production hostname, and one Neon production database. The production URL is reachable from the internet. ChipDue's selected single-owner authentication mode and server-side request guards protect the records; obscurity and Vercel preview protection do not.
+This guide deploys ChipDue's hosted topology: one reviewed Vercel production project, one exact production hostname, and one Neon production database serving isolated Google-backed accounts. The production URL is reachable from the internet. ChipDue's authentication, tenant checks, and server-side request guards protect the records; obscurity and Vercel preview protection do not.
 
 Use [local mode](../README.md#start-locally) instead if you do not want Vercel to hold the decryption key or do not want an internet-facing login.
 
@@ -12,8 +12,8 @@ Use [local mode](../README.md#start-locally) instead if you do not want Vercel t
 - The Neon runtime role connects through a direct, unpooled TLS URL. It can read and change ChipDue's compatibility-stable `carddue_*` table rows but cannot migrate the schema.
 - An owner-capable direct, unpooled Neon TLS URL is used only for explicit migration from a trusted local environment.
 - Vercel Preview and Development receive no real database, key, authentication verifier, recovery bundle, Google secret, or Plaid credentials.
-- Google is optional in password mode or can be the sole login in an explicitly bootstrapped Google-only mode. Google receives no card fields from ChipDue.
-- Plaid is optional. Manual entry works without any Plaid environment variables.
+- Google is optional for the original password-backed operator account and is required to create additional accounts. Google receives no financial fields from ChipDue.
+- Plaid is optional. Each user can supply an independent Plaid Production team from the dashboard; manual entry works without Plaid.
 
 This design limits a Neon-only disclosure. It does not protect data from someone who controls the Vercel project, production build, Function runtime, owner session, or recovery bundle.
 
@@ -24,7 +24,7 @@ Neon remains inside the trusted service boundary. Fresh-role creation uses a loc
 1. Read [PRIVACY.md](../PRIVACY.md), [SECURITY.md](../SECURITY.md), and [THREAT_MODEL.md](THREAT_MODEL.md).
 2. Run the complete [publishing checklist](PUBLISHING.md) and `npm run ci` from a credential-free checkout.
 3. Protect GitHub, Vercel, Neon, Google, the password manager, and optional Plaid account with unique credentials and phishing-resistant MFA where available.
-4. Restrict project membership to the owner. Review installed GitHub and Vercel integrations before any production build receives secrets.
+4. Restrict infrastructure project membership to trusted operators. End users need only a ChipDue session and never receive Vercel or Neon access. Review installed GitHub and Vercel integrations before any production build receives secrets.
 5. Choose a Neon region near the Vercel Function region configured in `vite.config.ts`. Cross-region traffic adds latency and expands operational dependencies.
 6. Prepare encrypted offline storage for the recovery bundle and a separate encrypted location for database backups. Neither location may be inside or symlinked into a Git checkout, cloud-synced source tree, CI workspace, or Vercel project.
 
@@ -137,7 +137,7 @@ Use the Vercel dashboard's protected input rather than CLI arguments. Scope ever
 | `CARDDUE_OWNER_PASSWORD_HASH`   | Required only in password mode; forbidden in Google-only mode                                   |
 | `CARDDUE_ALLOWED_HOSTS`         | The one canonical lowercase authority only; no scheme, path, wildcard, comma, or trailing slash |
 | `CARDDUE_SESSION_TTL_HOURS`     | Optional integer from 1 through 720; default is 24                                              |
-| `CARDDUE_ADMIN_EMAIL`           | Optional recipient for invite requests from the signed-out screen                               |
+| `CARDDUE_ADMIN_EMAIL`           | Legacy optional recipient for the access-request endpoint                                       |
 | `CARDDUE_GOOGLE_CLIENT_ID`      | Optional Google Web OAuth client ID; configure only together with its secret                    |
 | `CARDDUE_GOOGLE_CLIENT_SECRET`  | Optional Google Web OAuth client secret; configure only together with its ID                    |
 | `CARDDUE_GOOGLE_BOOTSTRAP_HASH` | Temporary Google-only first-owner verifier; remove immediately after successful setup           |
@@ -182,11 +182,11 @@ References: [Google OpenID Connect](https://developers.google.com/identity/openi
 
 Skip this section for manual-only ChipDue. Plaid is not required for deployment or login.
 
-After manual cloud mode is verified, add `PLAID_CLIENT_ID`, `PLAID_SECRET`, and `PLAID_ENV` as Sensitive, Production-only values. Start with Plaid Sandbox. Move to Production only after reviewing Plaid's current access, pricing, redirect, and data-retention settings.
+Installation-level `PLAID_CLIENT_ID`, `PLAID_SECRET`, and `PLAID_ENV` remain optional for the original operator account. Do not configure them merely to support additional users: each user enters an independent Plaid client ID and Production secret inside their authenticated dashboard. ChipDue verifies and encrypts those values and never returns them to the browser. Users must separately configure the canonical ChipDue redirect URI in their Plaid team when required and remain responsible for Plaid access, pricing, and terms.
 
 Never add Plaid credentials to Preview, Development, a browser-exposed variable, or the recovery bundle. The browser receives only Plaid's short-lived Link token. ChipDue asks for Accounts, Investments, Liabilities, and Transactions, maps only the documented account/card/activity fields, encrypts financial records, transaction history, the incremental cursor, and the long-lived access token server-side, and discards each raw response. Confirm the desired Plaid products are enabled before Production use; missing Investments or Liabilities coverage degrades gracefully to balances without holdings cost basis or detailed card-payment fields.
 
-The committed Vercel schedule refreshes every Plaid connection during the 9 AM and 5 PM hours in `America/Los_Angeles`. Four once-daily UTC candidates keep those two Pacific windows correct across daylight-saving changes; the two inactive candidates exit before contacting Plaid. Each period is claimed atomically in `carddue_metadata`, so duplicate deliveries do not repeat a completed sync. Vercel supplies `Authorization: Bearer CRON_SECRET`; the endpoint also requires Vercel's Cron user agent and otherwise remains unavailable. On Vercel Hobby, an invocation can occur anywhere within the scheduled hour; Pro and Enterprise schedules have per-minute precision.
+The committed Vercel schedule refreshes every Plaid connection, grouped under its owning account and Plaid credentials, during the 9 AM and 5 PM hours in `America/Los_Angeles`. Four once-daily UTC candidates keep those two Pacific windows correct across daylight-saving changes; the two inactive candidates exit before contacting Plaid. Each period is claimed atomically in `carddue_metadata`, so duplicate deliveries do not repeat a completed sync. Vercel supplies `Authorization: Bearer CRON_SECRET`; the endpoint also requires Vercel's Cron user agent and otherwise remains unavailable. On Vercel Hobby, an invocation can occur anywhere within the scheduled hour; Pro and Enterprise schedules have per-minute precision.
 
 ## 8. Deploy and verify before entering real data
 

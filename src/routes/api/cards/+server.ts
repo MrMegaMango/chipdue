@@ -2,12 +2,16 @@ import type { RequestHandler } from './$types';
 import { createManualCard, listCards } from '$lib/server/cards';
 import { apiError, apiJson, assertSameOrigin, readJson } from '$lib/server/http';
 import { createManualCardSchema } from '$lib/server/schemas';
-import { isPlaidConfigured } from '$lib/server/plaid';
+import { plaidConfigurationStatus } from '$lib/server/plaid';
 import { listPlaidConnections } from '$lib/server/plaid-store';
 
 export const GET: RequestHandler = async () => {
 	try {
-		const [connections, cards] = await Promise.all([listPlaidConnections(), listCards()]);
+		const [connections, cards, configuration] = await Promise.all([
+			listPlaidConnections(),
+			listCards(),
+			plaidConfigurationStatus()
+		]);
 		const lastSyncedAt =
 			connections
 				.map((connection) => connection.lastSyncedAt)
@@ -17,7 +21,9 @@ export const GET: RequestHandler = async () => {
 		return apiJson({
 			cards,
 			plaid: {
-				configured: isPlaidConfigured(),
+				configured: configuration.configured,
+				source: configuration.source,
+				environment: configuration.environment,
 				connectedItems: connections.length,
 				lastSyncedAt
 			}

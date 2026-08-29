@@ -10,6 +10,7 @@ const plaidMocks = vi.hoisted(() => ({
 	investmentsHoldingsGet: vi.fn(),
 	transactionsSync: vi.fn(),
 	itemGet: vi.fn(),
+	institutionsGet: vi.fn(),
 	institutionsGetById: vi.fn()
 }));
 
@@ -42,6 +43,10 @@ vi.mock('plaid', async (importOriginal) => {
 				return plaidMocks.itemGet(request);
 			}
 
+			institutionsGet(request: unknown) {
+				return plaidMocks.institutionsGet(request);
+			}
+
 			institutionsGetById(request: unknown) {
 				return plaidMocks.institutionsGetById(request);
 			}
@@ -53,6 +58,7 @@ import { listCards, listCardTransactions, updateCardRewards } from './cards';
 import { resetCryptoStateForTests } from './crypto';
 import { closeDatabaseForTests, getDatabase } from './database';
 import {
+	configurePersonalPlaid,
 	createPlaidLinkToken,
 	createPlaidTransactionsUpdateToken,
 	createPlaidUpdateToken,
@@ -209,6 +215,25 @@ describe.sequential('Plaid transaction history', () => {
 		if (previousSecret === undefined) delete process.env.PLAID_SECRET;
 		else process.env['PLAID_SECRET'] = previousSecret;
 		rmSync(temporaryDirectory, { recursive: true, force: true });
+	});
+
+	it('verifies and encrypts a personal Production configuration', async () => {
+		plaidMocks.institutionsGet.mockResolvedValue({ data: { institutions: [] } });
+		const status = await configurePersonalPlaid('personal-client-id', 'personal-production-secret');
+
+		expect(plaidMocks.institutionsGet).toHaveBeenCalledWith({
+			count: 1,
+			offset: 0,
+			country_codes: ['US']
+		});
+		expect(status).toEqual({
+			configured: true,
+			source: 'personal',
+			environment: 'production'
+		});
+		const durableMetadata = JSON.stringify(getDatabase().prepare('SELECT * FROM metadata').all());
+		expect(durableMetadata).not.toContain('personal-client-id');
+		expect(durableMetadata).not.toContain('personal-production-secret');
 	});
 
 	it('requests broad account consent for new and existing Items', async () => {

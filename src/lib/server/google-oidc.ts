@@ -1,9 +1,9 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type { Cookies } from '@sveltejs/kit';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { z } from 'zod';
 import {
-	authenticateSession,
+	authenticatedTenantId,
 	consumeGoogleOidcBootstrapRateLimit,
 	consumeGoogleOidcStartRateLimit,
 	issueGoogleOidcSession,
@@ -14,6 +14,7 @@ import { decryptJson, encryptJson, privateFingerprint, secretsEqual } from './cr
 import { AppError } from './errors';
 import { assertSecureCloudRequest, expectedRequestOrigin } from './request-security';
 import { getCloudRuntimeConfig, getRuntimeMode, type GoogleOidcConfig } from './runtime';
+import { isTenantId, LEGACY_TENANT_ID } from './tenant';
 
 export const GOOGLE_TRANSACTION_COOKIE_NAME = '__Host-carddue_google_tx';
 export const GOOGLE_CALLBACK_PATH = '/api/auth/google/callback';
@@ -25,6 +26,7 @@ const GOOGLE_AUTHORIZATION_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GOOGLE_JWKS_URL = 'https://www.googleapis.com/oauth2/v3/certs';
 const GOOGLE_LINK_METADATA_KEY = 'google_oidc_subject_ref_v1';
+const GOOGLE_USER_KEY_PREFIX = 'google_user_v1:';
 const GOOGLE_BOOTSTRAP_CLAIM_METADATA_KEY = 'google_oidc_bootstrap_claim_ref_v1';
 const TRANSACTION_COOKIE_PURPOSE = 'google-oidc-transaction-cookie-v1';
 const TRANSACTION_REFERENCE_PURPOSE = 'google-oidc-transaction-reference-v1';
@@ -214,14 +216,11 @@ async function requireCurrentBootstrapClaim(expectedClaimReference: string): Pro
 	}
 }
 
-async function requireMatchingLinkedSubject(subjectReference: string): Promise<void> {
-	const linked = await readLinkedSubjectReference();
-	if (!linked || !secretsEqual(linked, subjectReference)) {
-		throw new AppError('GOOGLE_AUTH_FAILED', 'Google authentication could not be completed.', 401);
-	}
+function googleUserKey(subjectReference: string): string {
+	return `${GOOGLE_USER_KEY_PREFIX}${subjectReference}`;
 }
 
-async function linkSubject(subjectReference: string): Promise<void> {
+async function linkLegacySubject(subjectReference: string): Promise<void> {
 	const rows = await cloudQuery<MetadataRow>(
 		`INSERT INTO public.carddue_metadata AS linked_identity (key, value)
 		 VALUES ($1, $2)
@@ -241,6 +240,75 @@ async function linkSubject(subjectReference: string): Promise<void> {
 			409
 		);
 	}
+}
+
+async function tenantForGoogleSubject(subjectReference: string): Promise<string | null> {
+	const legacySubject = await readLinkedSubjectReference();
+	if (legacySubject && secretsEqual(legacySubject, subjectReference)) return LEGACY_TENANT_ID;
+	const rows = await cloudQuery<MetadataRow>(
+		`SELECT value FROM public.carddue_metadata WHERE key = $1`,
+		[googleUserKey(subjectReference)]
+	);
+	if (rows.length === 1 && isTenantId(rows[0].value)) return rows[0].value;
+	return null;
+}
+
+async function linkSubjectToTenant(subjectReference: string, tenantId: string): Promise<void> {
+	const existing = await tenantForGoogleSubject(subjectReference);
+	if (existing && existing !== tenantId) {
+		throw new AppError(
+			'GOOGLE_LINK_CONFLICT',
+			'This Google identity belongs to a different ChipDue account.',
+			409
+		);
+	}
+	if (tenantId === LEGACY_TENANT_ID) await linkLegacySubject(subjectReference);
+	const rows = await cloudQuery<MetadataRow>(
+		`INSERT INTO public.carddue_metadata AS google_user (key, value)
+		 VALUES ($1, $2)
+		 ON CONFLICT (key) DO UPDATE SET value = google_user.value
+		 WHERE google_user.value = EXCLUDED.value
+		 RETURNING value`,
+		[googleUserKey(subjectReference), tenantId]
+	);
+	if (rows.length !== 1 || rows[0].value !== tenantId) {
+		throw new AppError('GOOGLE_LINK_CONFLICT', 'Google sign-in could not be linked.', 409);
+	}
+}
+
+async function findOrCreateGoogleTenant(subjectReference: string): Promise<string> {
+	const existing = await tenantForGoogleSubject(subjectReference);
+	if (existing) {
+		await linkSubjectToTenant(subjectReference, existing);
+		return existing;
+	}
+	const tenantId = randomUUID();
+	const rows = await cloudQuery<MetadataRow>(
+		`INSERT INTO public.carddue_metadata (key, value) VALUES ($1, $2)
+		 ON CONFLICT (key) DO NOTHING
+		 RETURNING value`,
+		[googleUserKey(subjectReference), tenantId]
+	);
+	if (rows.length === 1 && rows[0].value === tenantId) return tenantId;
+	const winner = await tenantForGoogleSubject(subjectReference);
+	if (!winner) {
+		throw new AppError(
+			'GOOGLE_AUTH_UNAVAILABLE',
+			'Google sign-in is temporarily unavailable.',
+			503
+		);
+	}
+	return winner;
+}
+
+async function tenantHasGoogleSubject(tenantId: string): Promise<boolean> {
+	if (tenantId === LEGACY_TENANT_ID && (await readLinkedSubjectReference())) return true;
+	const rows = await cloudQuery<MetadataRow>(
+		`SELECT value FROM public.carddue_metadata
+		 WHERE key LIKE $1 AND value = $2 LIMIT 1`,
+		[`${GOOGLE_USER_KEY_PREFIX}%`, tenantId]
+	);
+	return rows.length === 1;
 }
 
 async function claimBootstrap(claimReference: string): Promise<void> {
@@ -414,7 +482,10 @@ function authorizationUrl(config: GoogleOidcConfig, transaction: GoogleTransacti
 	return authorization.toString();
 }
 
-export async function getGoogleAuthStatus(authenticated: boolean): Promise<{
+export async function getGoogleAuthStatus(
+	authenticated: boolean,
+	tenantId: string | null = null
+): Promise<{
 	configured: boolean;
 	linked: boolean | null;
 	bootstrapAvailable: boolean;
@@ -429,7 +500,7 @@ export async function getGoogleAuthStatus(authenticated: boolean): Promise<{
 	if (!authenticated) return { configured, linked: null, bootstrapAvailable };
 	return {
 		configured,
-		linked: configured && Boolean(await readLinkedSubjectReference()),
+		linked: configured && Boolean(tenantId && (await tenantHasGoogleSubject(tenantId))),
 		bootstrapAvailable
 	};
 }
@@ -451,16 +522,12 @@ export async function beginGoogleOidc(
 			throw new AppError('GOOGLE_AUTH_UNAVAILABLE', 'Google sign-in is not available.', 409);
 		}
 		linkSessionToken = cookies.get(SESSION_COOKIE_NAME) ?? null;
-		if (!(await authenticateSession(linkSessionToken ?? undefined))) {
+		if (!(await authenticatedTenantId(linkSessionToken ?? undefined))) {
 			throw new AppError('AUTH_REQUIRED', 'Authentication is required.', 401);
 		}
 	}
 
 	await consumeGoogleOidcStartRateLimit(request, intent);
-	if (intent === 'login' && !(await readLinkedSubjectReference())) {
-		throw new AppError('GOOGLE_NOT_LINKED', 'Google sign-in has not been linked.', 409);
-	}
-
 	const now = Date.now();
 	await pruneExpiredTransactions(now);
 	const transaction: GoogleTransaction = {
@@ -737,7 +804,7 @@ export async function completeGoogleOidc(
 
 	if (
 		transaction.intent === 'link' &&
-		!(await authenticateSession(transaction.linkSessionToken ?? undefined))
+		!(await authenticatedTenantId(transaction.linkSessionToken ?? undefined))
 	) {
 		throw new AppError('AUTH_REQUIRED', 'Authentication is required.', 401);
 	}
@@ -745,10 +812,11 @@ export async function completeGoogleOidc(
 	const subjectReference = await verifyGoogleIdToken(idToken, config.clientId, transaction.nonce);
 
 	if (transaction.intent === 'link') {
-		if (!(await authenticateSession(transaction.linkSessionToken ?? undefined))) {
+		const tenantId = await authenticatedTenantId(transaction.linkSessionToken ?? undefined);
+		if (!tenantId) {
 			throw new AppError('AUTH_REQUIRED', 'Authentication is required.', 401);
 		}
-		await linkSubject(subjectReference);
+		await linkSubjectToTenant(subjectReference, tenantId);
 		return { outcome: 'linked' };
 	}
 	if (transaction.intent === 'bootstrap') {
@@ -761,11 +829,15 @@ export async function completeGoogleOidc(
 		}
 		await requireCurrentBootstrapClaim(transaction.bootstrapClaimRef);
 		await bootstrapSubject(subjectReference, transaction.bootstrapClaimRef);
-		return { outcome: 'linked', sessionToken: await issueGoogleOidcSession() };
+		await linkSubjectToTenant(subjectReference, LEGACY_TENANT_ID);
+		return {
+			outcome: 'linked',
+			sessionToken: await issueGoogleOidcSession(LEGACY_TENANT_ID)
+		};
 	}
 
-	await requireMatchingLinkedSubject(subjectReference);
-	return { outcome: 'login', sessionToken: await issueGoogleOidcSession() };
+	const tenantId = await findOrCreateGoogleTenant(subjectReference);
+	return { outcome: 'login', sessionToken: await issueGoogleOidcSession(tenantId) };
 }
 
 export function resetGoogleOidcStateForTests(): void {

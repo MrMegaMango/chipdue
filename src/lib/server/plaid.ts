@@ -30,6 +30,7 @@ import {
 } from './financial-records';
 import {
 	getPrivatePlaidItem,
+	listPlaidConnectionTenants,
 	listPlaidConnections,
 	markPlaidItemNeedsUpdate,
 	markPlaidItemSynced,
@@ -37,8 +38,15 @@ import {
 	removeLocalPlaidItem,
 	savePlaidItem
 } from './plaid-store';
+import {
+	getPlaidConfiguration,
+	isInstallationPlaidConfigured,
+	requirePlaidConfiguration,
+	savePersonalPlaidConfiguration,
+	type PlaidConfiguration
+} from './plaid-config';
+import { currentTenantId, LEGACY_TENANT_ID, runAsTenant } from './tenant';
 
-type PlaidEnvironmentName = 'sandbox' | 'production';
 const TRANSACTION_HISTORY_DAYS = 730;
 const MAX_TRANSACTION_SYNC_PAGES = 100;
 const MAX_TRANSACTION_SYNC_RESTARTS = 3;
@@ -47,34 +55,22 @@ const MAX_INSTITUTION_LOGO_BYTES = 256_000;
 const MAX_STORED_HOLDINGS_PER_ACCOUNT = 1_000;
 let cachedClient: { signature: string; client: PlaidApi } | undefined;
 
-function plaidConfiguration(): {
-	clientId: string;
-	secret: string;
-	environment: PlaidEnvironmentName;
-} {
-	const clientId = process.env.PLAID_CLIENT_ID?.trim();
-	const secret = process.env.PLAID_SECRET?.trim();
-	const environmentValue = process.env.PLAID_ENV?.trim().toLowerCase() || 'sandbox';
-	if (!clientId || !secret) {
-		throw new AppError('PLAID_NOT_CONFIGURED', 'Plaid credentials are not configured.', 503);
-	}
-	if (!['sandbox', 'production'].includes(environmentValue)) {
-		throw new AppError('PLAID_NOT_CONFIGURED', 'The Plaid environment is invalid.', 503);
-	}
-	return { clientId, secret, environment: environmentValue as PlaidEnvironmentName };
+export async function plaidConfigurationStatus(): Promise<{
+	configured: boolean;
+	source: 'personal' | 'installation' | null;
+	environment: 'sandbox' | 'production' | null;
+}> {
+	const config = await getPlaidConfiguration();
+	return {
+		configured: config !== null,
+		source: config?.source ?? null,
+		environment: config?.environment ?? null
+	};
 }
 
-export function isPlaidConfigured(): boolean {
-	try {
-		plaidConfiguration();
-		return true;
-	} catch {
-		return false;
-	}
-}
+export { isInstallationPlaidConfigured };
 
-function getPlaidClient(): PlaidApi {
-	const config = plaidConfiguration();
+function clientForConfiguration(config: PlaidConfiguration): PlaidApi {
 	const signature = `${config.environment}:${config.clientId}:${config.secret}`;
 	if (cachedClient?.signature === signature) return cachedClient.client;
 
@@ -90,6 +86,10 @@ function getPlaidClient(): PlaidApi {
 	const client = new PlaidApi(configuration);
 	cachedClient = { signature, client };
 	return client;
+}
+
+async function getPlaidClient(): Promise<PlaidApi> {
+	return clientForConfiguration(await requirePlaidConfiguration());
 }
 
 function plaidErrorCode(error: unknown): string | null {
@@ -123,23 +123,30 @@ async function sanitizedPlaidError(error: unknown, itemId?: string): Promise<App
 
 async function baseLinkTokenRequest(): Promise<Omit<LinkTokenCreateRequest, 'products'>> {
 	const redirectUri = process.env.PLAID_REDIRECT_URI?.trim();
+	const tenantId = currentTenantId();
 	return {
 		client_name: 'ChipDue',
 		country_codes: [CountryCode.Us],
 		language: 'en',
-		user: { client_user_id: await getInstallId() },
+		user: {
+			client_user_id:
+				tenantId === LEGACY_TENANT_ID
+					? await getInstallId()
+					: privateFingerprint(tenantId, 'plaid-client-user-v1')
+		},
 		...(redirectUri ? { redirect_uri: redirectUri } : {})
 	};
 }
 
 export async function createPlaidLinkToken(): Promise<{ linkToken: string; expiration: string }> {
+	const client = await getPlaidClient();
 	const request = {
 		...(await baseLinkTokenRequest()),
 		products: [Products.Transactions],
 		transactions: { days_requested: TRANSACTION_HISTORY_DAYS }
 	};
 	try {
-		const response = await getPlaidClient().linkTokenCreate({
+		const response = await client.linkTokenCreate({
 			...request,
 			additional_consented_products: [Products.Liabilities, Products.Investments]
 		});
@@ -150,7 +157,7 @@ export async function createPlaidLinkToken(): Promise<{ linkToken: string; expir
 	}
 
 	try {
-		const response = await getPlaidClient().linkTokenCreate({
+		const response = await client.linkTokenCreate({
 			...request,
 			additional_consented_products: [Products.Liabilities]
 		});
@@ -161,7 +168,7 @@ export async function createPlaidLinkToken(): Promise<{ linkToken: string; expir
 	}
 
 	try {
-		const response = await getPlaidClient().linkTokenCreate(request);
+		const response = await client.linkTokenCreate(request);
 		return { linkToken: response.data.link_token, expiration: response.data.expiration };
 	} catch (error) {
 		if (error instanceof AppError) throw error;
@@ -173,8 +180,9 @@ export async function createPlaidTransactionsUpdateToken(
 	localItemId: string
 ): Promise<{ linkToken: string; expiration: string }> {
 	const item = await getPrivatePlaidItem(localItemId);
+	const client = await getPlaidClient();
 	try {
-		const response = await getPlaidClient().linkTokenCreate({
+		const response = await client.linkTokenCreate({
 			...(await baseLinkTokenRequest()),
 			access_token: item.accessToken,
 			additional_consented_products: [Products.Transactions]
@@ -190,13 +198,14 @@ export async function createPlaidUpdateToken(
 	localItemId: string
 ): Promise<{ linkToken: string; expiration: string }> {
 	const item = await getPrivatePlaidItem(localItemId);
+	const client = await getPlaidClient();
 	const request = {
 		...(await baseLinkTokenRequest()),
 		access_token: item.accessToken,
 		update: { account_selection_enabled: true }
 	};
 	try {
-		const response = await getPlaidClient().linkTokenCreate({
+		const response = await client.linkTokenCreate({
 			...request,
 			additional_consented_products: [Products.Transactions, Products.Investments]
 		});
@@ -209,7 +218,7 @@ export async function createPlaidUpdateToken(
 	}
 
 	try {
-		const response = await getPlaidClient().linkTokenCreate({
+		const response = await client.linkTokenCreate({
 			...request,
 			additional_consented_products: [Products.Transactions]
 		});
@@ -222,7 +231,7 @@ export async function createPlaidUpdateToken(
 	}
 
 	try {
-		const response = await getPlaidClient().linkTokenCreate(request);
+		const response = await client.linkTokenCreate(request);
 		return { linkToken: response.data.link_token, expiration: response.data.expiration };
 	} catch (error) {
 		if (error instanceof AppError) throw error;
@@ -234,10 +243,11 @@ export async function exchangePlaidPublicToken(
 	publicToken: string,
 	institutionName: string | null
 ): Promise<{ connection: PlaidConnection; synced: boolean }> {
+	const client = await getPlaidClient();
 	let itemId: string;
 	let accessToken: string;
 	try {
-		const response = await getPlaidClient().itemPublicTokenExchange({ public_token: publicToken });
+		const response = await client.itemPublicTokenExchange({ public_token: publicToken });
 		itemId = response.data.item_id;
 		accessToken = response.data.access_token;
 	} catch (error) {
@@ -304,17 +314,18 @@ function safeInstitutionLogo(value: string | null | undefined): string | null {
 }
 
 async function institutionBrand(
+	client: PlaidApi,
 	accessToken: string,
 	fallbackName: string | null
 ): Promise<{ name: string | null; logoBase64: string | null }> {
 	let name = fallbackName;
 	try {
-		const itemResponse = await getPlaidClient().itemGet({ access_token: accessToken });
+		const itemResponse = await client.itemGet({ access_token: accessToken });
 		name = safeText(itemResponse.data.item.institution_name, 80) ?? name;
 		const institutionId = safeText(itemResponse.data.item.institution_id, 128);
 		if (!institutionId) return { name, logoBase64: null };
 
-		const institutionResponse = await getPlaidClient().institutionsGetById({
+		const institutionResponse = await client.institutionsGetById({
 			institution_id: institutionId,
 			country_codes: [CountryCode.Us],
 			options: { include_optional_metadata: true }
@@ -353,6 +364,7 @@ function normalizeTransactionStatus(value: TransactionsUpdateStatus): Transactio
 }
 
 async function fetchTransactionUpdates(
+	client: PlaidApi,
 	accessToken: string,
 	cursor: string | null
 ): Promise<{
@@ -370,7 +382,7 @@ async function fetchTransactionUpdates(
 		let status: TransactionHistoryStatus;
 		try {
 			for (let page = 0; page < MAX_TRANSACTION_SYNC_PAGES; page += 1) {
-				const response = await getPlaidClient().transactionsSync({
+				const response = await client.transactionsSync({
 					access_token: accessToken,
 					...(pageCursor ? { cursor: pageCursor } : {}),
 					count: 500,
@@ -473,10 +485,10 @@ export async function syncPlaidItem(
 ): Promise<{ syncedAt: string; count: number; accountCount: number; transactionCount: number }> {
 	const item = await getPrivatePlaidItem(localItemId);
 	try {
-		const client = getPlaidClient();
+		const client = await getPlaidClient();
 		const [accountsResponse, brand] = await Promise.all([
 			client.accountsGet({ access_token: item.accessToken }),
-			institutionBrand(item.accessToken, item.institutionName)
+			institutionBrand(client, item.accessToken, item.institutionName)
 		]);
 		const plaidAccounts = accountsResponse.data.accounts;
 
@@ -559,7 +571,7 @@ export async function syncPlaidItem(
 			try {
 				transactionState = applyTransactionUpdates(
 					transactionState,
-					await fetchTransactionUpdates(item.accessToken, transactionState.cursor)
+					await fetchTransactionUpdates(client, item.accessToken, transactionState.cursor)
 				);
 			} catch (error) {
 				if (plaidErrorCode(error) !== 'PRODUCT_NOT_READY') throw error;
@@ -659,8 +671,12 @@ export async function syncAllPlaidItems(): Promise<{
 	transactionCount: number;
 	lastSyncedAt: string | null;
 }> {
-	const connections = await listPlaidConnections();
-	const results = await Promise.all(connections.map((connection) => syncPlaidItem(connection.id)));
+	const connections = await listPlaidConnectionTenants();
+	const results = await Promise.all(
+		connections.map(({ tenantId, connection }) =>
+			runAsTenant(tenantId, () => syncPlaidItem(connection.id))
+		)
+	);
 	return {
 		syncedItems: results.length,
 		cardCount: results.reduce((total, result) => total + result.count, 0),
@@ -677,7 +693,7 @@ export async function syncAllPlaidItems(): Promise<{
 export async function disconnectPlaidItem(localItemId: string): Promise<void> {
 	const item = await getPrivatePlaidItem(localItemId);
 	try {
-		await getPlaidClient().itemRemove({ access_token: item.accessToken });
+		await (await getPlaidClient()).itemRemove({ access_token: item.accessToken });
 	} catch (error) {
 		if (error instanceof AppError) throw error;
 		const code = plaidErrorCode(error);
@@ -686,6 +702,49 @@ export async function disconnectPlaidItem(localItemId: string): Promise<void> {
 		}
 	}
 	await removeLocalPlaidItem(localItemId);
+}
+
+export async function configurePersonalPlaid(
+	clientId: string,
+	secret: string
+): Promise<Awaited<ReturnType<typeof plaidConfigurationStatus>>> {
+	const normalizedClientId = clientId.trim();
+	const normalizedSecret = secret.trim();
+	const [current, connections] = await Promise.all([
+		getPlaidConfiguration(),
+		listPlaidConnections()
+	]);
+	if (connections.length > 0 && (!current || current.clientId !== normalizedClientId)) {
+		throw new AppError(
+			'PLAID_CONFIGURATION_IN_USE',
+			'Disconnect existing institutions before changing Plaid teams.',
+			409
+		);
+	}
+
+	const candidate: PlaidConfiguration = {
+		clientId: normalizedClientId,
+		secret: normalizedSecret,
+		environment: 'production',
+		source: 'personal'
+	};
+	try {
+		await clientForConfiguration(candidate).institutionsGet({
+			count: 1,
+			offset: 0,
+			country_codes: [CountryCode.Us]
+		});
+	} catch {
+		throw new AppError(
+			'PLAID_CREDENTIALS_INVALID',
+			'Plaid could not verify those Production credentials.',
+			400
+		);
+	}
+
+	await savePersonalPlaidConfiguration(normalizedClientId, normalizedSecret);
+	cachedClient = undefined;
+	return plaidConfigurationStatus();
 }
 
 export function resetPlaidClientForTests(): void {

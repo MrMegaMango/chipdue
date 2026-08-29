@@ -69,7 +69,13 @@ describe.sequential('cards API contract', () => {
 		expect(response.headers.get('cache-control')).toContain('no-store');
 		expect(await response.json()).toEqual({
 			cards: [],
-			plaid: { configured: false, connectedItems: 0, lastSyncedAt: null }
+			plaid: {
+				configured: false,
+				source: null,
+				environment: null,
+				connectedItems: 0,
+				lastSyncedAt: null
+			}
 		});
 	});
 

@@ -1,8 +1,9 @@
 import type { Handle, HandleServerError } from '@sveltejs/kit';
-import { authenticateSession, SESSION_COOKIE_NAME } from '$lib/server/auth';
+import { authenticatedTenantId, SESSION_COOKIE_NAME } from '$lib/server/auth';
 import { apiError, apiJson } from '$lib/server/http';
 import { assertSecureCloudRequest, isLocalAuthority } from '$lib/server/request-security';
 import { getRuntimeAuthMode, getRuntimeMode } from '$lib/server/runtime';
+import { LEGACY_TENANT_ID, runAsTenant } from '$lib/server/tenant';
 
 function secureHeaders(response: Response): Response {
 	response.headers.set('cache-control', 'no-store, max-age=0');
@@ -35,9 +36,11 @@ export function isPublicCloudApiPath(path: string): boolean {
 }
 
 export const handle: Handle = async ({ event, resolve }) => {
+	let tenantId: string | null = null;
 	try {
 		const mode = getRuntimeMode();
 		if (mode === 'local') {
+			tenantId = LEGACY_TENANT_ID;
 			if (
 				process.env.CARDDUE_ALLOW_REMOTE !== '1' &&
 				!isLocalAuthority(event.request.headers.get('host'))
@@ -68,8 +71,8 @@ export const handle: Handle = async ({ event, resolve }) => {
 			}
 			const publicApi = isPublicCloudApiPath(matchedPath);
 			if (matchedPath.startsWith('/api/') && !publicApi) {
-				const authenticated = await authenticateSession(event.cookies.get(SESSION_COOKIE_NAME));
-				if (!authenticated) {
+				tenantId = await authenticatedTenantId(event.cookies.get(SESSION_COOKIE_NAME));
+				if (!tenantId) {
 					return secureHeaders(
 						apiJson(
 							{ error: { code: 'AUTH_REQUIRED', message: 'Authentication is required.' } },
@@ -83,6 +86,10 @@ export const handle: Handle = async ({ event, resolve }) => {
 		return secureHeaders(apiError(error));
 	}
 
+	if (tenantId) {
+		if (event.locals) event.locals.tenantId = tenantId;
+		return secureHeaders(await runAsTenant(tenantId, () => resolve(event)));
+	}
 	return secureHeaders(await resolve(event));
 };
 

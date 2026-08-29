@@ -772,6 +772,7 @@
 										Balances are snapshots and cannot prove new-money sources or uninterrupted
 										minimums. Activity is a conservative estimate from posted Plaid transactions. {tracker
 											.offer.activityNote}
+										<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- Provider terms are an external URL. -->
 										<a href={tracker.offer.sourceUrl} target="_blank" rel="noreferrer"
 											>Official terms</a
 										>

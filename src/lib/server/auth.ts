@@ -2,10 +2,11 @@ import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 import type { Cookies } from '@sveltejs/kit';
 import { cloudQuery, cloudTransaction } from './cloud-database';
-import { privateFingerprint } from './crypto';
+import { privateFingerprint, secretsEqual } from './crypto';
 import { AppError } from './errors';
 import { parseScryptPasswordHash } from './password-hash';
 import { getCloudRuntimeConfig, getRuntimeMode } from './runtime';
+import { isTenantId, LEGACY_TENANT_ID } from './tenant';
 
 export const SESSION_COOKIE_NAME = '__Host-carddue_session';
 const RATE_WINDOW_MS = 15 * 60 * 1000;
@@ -144,23 +145,43 @@ async function assertRateLimitNotBlocked(bucketRef: string, now: number): Promis
 	}
 }
 
-async function issueSession(bucketRef: string | undefined, now: number): Promise<string> {
+function sessionConfigurationValue(tenantId: string): string {
+	if (!isTenantId(tenantId)) {
+		throw new AppError('AUTH_REQUIRED', 'Authentication is required.', 401);
+	}
+	return `${authConfigReference()}.${tenantId}`;
+}
+
+function tenantFromSessionConfiguration(value: string): string | null {
+	const separator = value.indexOf('.');
+	if (separator !== 43 || value.indexOf('.', separator + 1) !== -1) return null;
+	const configReference = value.slice(0, separator);
+	const tenantId = value.slice(separator + 1);
+	return /^[A-Za-z0-9_-]{43}$/.test(configReference) && isTenantId(tenantId) ? tenantId : null;
+}
+
+async function issueSession(
+	tenantId: string,
+	bucketRef: string | undefined,
+	now: number
+): Promise<string> {
 	const config = getCloudRuntimeConfig();
 	const token = randomBytes(32).toString('base64url');
 	const tokenHash = sessionTokenHash(token);
 	const passwordRef = authConfigReference();
+	const sessionConfig = sessionConfigurationValue(tenantId);
 	const expiresAt = now + config.sessionTtlSeconds * 1000;
 	const statements = [
 		{
 			text: `DELETE FROM public.carddue_auth_sessions
-			       WHERE expires_at <= $1 OR password_config_ref <> $2`,
+			       WHERE expires_at <= $1 OR split_part(password_config_ref, '.', 1) <> $2`,
 			params: [now, passwordRef]
 		},
 		{
 			text: `INSERT INTO public.carddue_auth_sessions
 			       (token_hash, password_config_ref, created_at, expires_at, last_seen_at)
 			       VALUES ($1, $2, $3, $4, $3)`,
-			params: [tokenHash, passwordRef, now, expiresAt]
+			params: [tokenHash, sessionConfig, now, expiresAt]
 		}
 	];
 	if (bucketRef) {
@@ -221,8 +242,8 @@ export async function consumeGoogleOidcBootstrapRateLimit(request: Request): Pro
 	});
 }
 
-export async function issueGoogleOidcSession(): Promise<string> {
-	return issueSession(undefined, Date.now());
+export async function issueGoogleOidcSession(tenantId: string): Promise<string> {
+	return issueSession(tenantId, undefined, Date.now());
 }
 
 export async function loginWithPassword(request: Request, password: string): Promise<string> {
@@ -250,12 +271,12 @@ export async function loginWithPassword(request: Request, password: string): Pro
 		throw new AppError('AUTH_UNAVAILABLE', 'Authentication is temporarily unavailable.', 503);
 	}
 	if (!valid) throw new AppError('AUTH_FAILED', 'Invalid password.', 401);
-	return issueSession(bucketRef, now);
+	return issueSession(LEGACY_TENANT_ID, bucketRef, now);
 }
 
-export async function authenticateSession(token: string | undefined): Promise<boolean> {
-	if (getRuntimeMode() === 'local') return true;
-	if (!token || !SESSION_TOKEN_PATTERN.test(token)) return false;
+export async function authenticatedTenantId(token: string | undefined): Promise<string | null> {
+	if (getRuntimeMode() === 'local') return LEGACY_TENANT_ID;
+	if (!token || !SESSION_TOKEN_PATTERN.test(token)) return null;
 	const tokenHash = sessionTokenHash(token);
 	const rows = await cloudQuery<SessionRow>(
 		`SELECT password_config_ref, expires_at, last_seen_at
@@ -263,15 +284,14 @@ export async function authenticateSession(token: string | undefined): Promise<bo
 		[tokenHash]
 	);
 	const row = rows[0];
-	if (!row) return false;
+	if (!row) return null;
 	const now = Date.now();
 	const passwordRef = authConfigReference();
-	const referenceMatches =
-		row.password_config_ref.length === passwordRef.length &&
-		timingSafeEqual(Buffer.from(row.password_config_ref), Buffer.from(passwordRef));
-	if (!referenceMatches || Number(row.expires_at) <= now) {
+	const tenantId = tenantFromSessionConfiguration(row.password_config_ref);
+	const storedPasswordRef = row.password_config_ref.slice(0, 43);
+	if (!tenantId || !secretsEqual(storedPasswordRef, passwordRef) || Number(row.expires_at) <= now) {
 		await cloudQuery(`DELETE FROM public.carddue_auth_sessions WHERE token_hash = $1`, [tokenHash]);
-		return false;
+		return null;
 	}
 	if (Number(row.last_seen_at) < now - 15 * 60 * 1000) {
 		await cloudQuery(
@@ -279,7 +299,11 @@ export async function authenticateSession(token: string | undefined): Promise<bo
 			[now, tokenHash]
 		);
 	}
-	return true;
+	return tenantId;
+}
+
+export async function authenticateSession(token: string | undefined): Promise<boolean> {
+	return (await authenticatedTenantId(token)) !== null;
 }
 
 export async function revokeSession(token: string | undefined): Promise<void> {

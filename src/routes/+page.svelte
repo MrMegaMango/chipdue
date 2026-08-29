@@ -4,7 +4,6 @@
 	export const LAST_FOUR_PATTERN = '[0-9][0-9][0-9][0-9]';
 	export const GOOGLE_BOOTSTRAP_CONTINUE_TO = '/api/auth/google/bootstrap/continue';
 	export const SETUP_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-	export const ACCESS_REQUEST_PATH = '/api/access-request';
 
 	export function inputToCents(value: string | number | undefined): number | null {
 		if (value === undefined || (typeof value === 'string' && !value.trim())) return null;
@@ -246,6 +245,8 @@
 
 	type PlaidStatus = {
 		configured: boolean;
+		source: 'personal' | 'installation' | null;
+		environment: 'sandbox' | 'production' | null;
 		connectedItems: number;
 		lastSyncedAt: string | null;
 	};
@@ -260,6 +261,8 @@
 
 	type PlaidStatusResponse = {
 		configured: boolean;
+		source: 'personal' | 'installation' | null;
+		environment: 'sandbox' | 'production' | null;
 		connections: PlaidConnection[];
 	};
 
@@ -315,6 +318,8 @@
 
 	const emptyPlaid: PlaidStatus = {
 		configured: false,
+		source: null,
+		environment: null,
 		connectedItems: 0,
 		lastSyncedAt: null
 	};
@@ -390,12 +395,17 @@
 		| 'disconnect'
 		| 'update'
 		| 'enable-history'
+		| 'configure-plaid'
 		| null
 	>(null);
 	let deletingId = $state<string | null>(null);
 	let plaidConnections = $state<PlaidConnection[]>([]);
 	let plaidStatusLoading = $state(true);
 	let plaidStatusError = $state('');
+	let plaidClientId = $state('');
+	let plaidSecret = $state('');
+	let plaidSetupError = $state('');
+	let plaidSetupEditing = $state(false);
 	let plaidItemActionId = $state<string | null>(null);
 	let historyCard = $state<CardView | null>(null);
 	let historyTransactions = $state<CardTransaction[]>([]);
@@ -892,6 +902,10 @@
 		loadError = '';
 		plaidStatusLoading = true;
 		plaidStatusError = '';
+		plaidClientId = '';
+		plaidSecret = '';
+		plaidSetupError = '';
+		plaidSetupEditing = false;
 		dialogMode = null;
 		editingId = null;
 		form = blankForm();
@@ -1050,6 +1064,8 @@
 					.at(-1) ?? null;
 			plaid = {
 				configured: payload.configured,
+				source: payload.source,
+				environment: payload.environment,
 				connectedItems: plaidConnections.length,
 				lastSyncedAt
 			};
@@ -1599,12 +1615,56 @@
 		return attempt;
 	}
 
+	async function configurePlaid(event: SubmitEvent): Promise<void> {
+		event.preventDefault();
+		if (busyAction || !plaidClientId.trim() || !plaidSecret.trim()) return;
+		const epoch = privateStateEpoch;
+		if (!isPrivateEpochCurrent(epoch)) return;
+		plaidSetupError = '';
+		busyAction = 'configure-plaid';
+		const secret = plaidSecret;
+		plaidSecret = '';
+		try {
+			const configuration = await requestJson<
+				Pick<PlaidStatus, 'configured' | 'source' | 'environment'>
+			>(
+				resolve('/api/plaid/config'),
+				{
+					method: 'PUT',
+					body: JSON.stringify({ clientId: plaidClientId.trim(), secret })
+				},
+				{ privateEpoch: epoch }
+			);
+			if (!isPrivateEpochCurrent(epoch)) return;
+			plaid = { ...plaid, ...configuration };
+			plaidClientId = '';
+			plaidSetupEditing = false;
+			await Promise.all([refreshPlaidStatus(true, epoch), refreshCards(true, epoch)]);
+			if (isPrivateEpochCurrent(epoch)) {
+				showNotice('Your Plaid developer account is ready. You can connect an institution now.');
+			}
+		} catch (error) {
+			if (isPrivateEpochCurrent(epoch)) {
+				plaidSetupError = readableError(
+					error,
+					'Plaid could not verify those Production credentials.'
+				);
+			}
+		} finally {
+			if (isPrivateEpochCurrent(epoch)) busyAction = null;
+		}
+	}
+
 	async function connectPlaid(): Promise<void> {
 		if (busyAction) return;
 		const epoch = privateStateEpoch;
 		if (!isPrivateEpochCurrent(epoch)) return;
 		if (!plaid.configured) {
-			showNotice('Plaid is not configured on this ChipDue installation.', 'error');
+			document
+				.getElementById('plaid-setup')
+				?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			void tick().then(() => document.getElementById('plaid-client-id')?.focus());
+			showNotice('Connect your Plaid developer account first.', 'error');
 			return;
 		}
 
@@ -2056,9 +2116,9 @@
 			<h1 id="login-title">Unlock your dashboard</h1>
 			<p class="auth-intro">
 				{googleOnlyMode
-					? 'ChipDue is invite-only. Sign in with an approved Google account to continue.'
+					? 'Sign in with Google to open your private ChipDue account. Your first sign-in creates it automatically.'
 					: googleLoginAvailable
-						? 'Continue with the Google account linked to this server. Your ChipDue password remains available for recovery and first-time linking.'
+						? 'Continue with Google to open your private ChipDue account. The server password remains available for the original account.'
 						: 'Enter the password for this ChipDue server.'}
 			</p>
 
@@ -2096,16 +2156,11 @@
 			{/if}
 
 			{#if googleOnlyMode}
-				<div class="invite-request">
-					<p><strong>Need an invitation?</strong> Ask the admin to approve your Google account.</p>
-					<a
-						class="button button-secondary invite-request-button"
-						href={resolve(ACCESS_REQUEST_PATH)}
-						aria-label="Notify the ChipDue admin by email"
-					>
-						Notify Admin
-					</a>
-					<small>Opens a pre-addressed request in your email app.</small>
+				<div class="account-create-note">
+					<p>
+						<strong>New here?</strong> Use your own Google login. ChipDue keeps your cards, accounts,
+						and Plaid credentials separate from every other user.
+					</p>
 				</div>
 			{/if}
 
@@ -2280,12 +2335,10 @@
 							class="button button-primary"
 							type="button"
 							onclick={connectPlaid}
-							disabled={busyAction !== null || loading || !plaid.configured}
+							disabled={busyAction !== null || loading}
 							aria-busy={busyAction === 'connect'}
 							aria-describedby="plaid-consent-copy"
-							title={plaid.configured
-								? 'Open Plaid Link'
-								: 'Plaid is not configured on this installation'}
+							title={plaid.configured ? 'Open Plaid Link' : 'Set up your Plaid account'}
 						>
 							<svg aria-hidden="true" viewBox="0 0 20 20">
 								<path d="M3 8.5 10 5l7 3.5L10 12 3 8.5Z"></path>
@@ -2293,9 +2346,11 @@
 							</svg>
 							{busyAction === 'connect'
 								? 'Connecting…'
-								: plaid.connectedItems > 0
-									? 'Connect another'
-									: 'Connect Plaid'}
+								: !plaid.configured
+									? 'Set up Plaid'
+									: plaid.connectedItems > 0
+										? 'Connect another'
+										: 'Connect Plaid'}
 						</button>
 					</div>
 					<p
@@ -2755,14 +2810,14 @@
 						</p>
 						<h2>
 							{authMode === 'cloud'
-								? 'Your server. No persistent browser copies.'
+								? 'Your account. No persistent browser copies.'
 								: 'Local first. Always.'}
 						</h2>
 						<p>
 							ChipDue adds no analytics and stores no financial details in persistent browser
 							storage.
 							{authMode === 'cloud'
-								? ' Your private server holds the encrypted database and controls this session.'
+								? ' The server encrypts private records and isolates them to this account.'
 								: ''}
 							The Plaid Link script is requested only after you press Connect Plaid.
 						</p>
@@ -2784,7 +2839,7 @@
 										<p>
 											{googleLinked === true
 												? googleOnlyMode
-													? 'Ready to use. Google is this server’s sign-in method.'
+													? 'Ready to use. Google identifies this private ChipDue account.'
 													: 'Ready to use. Your ChipDue password remains available for recovery.'
 												: googleLinked === false
 													? googleOnlyMode
@@ -2846,6 +2901,113 @@
 								</span>
 							</li>
 						</ul>
+
+						{#if !plaid.configured || plaidSetupEditing}
+							<section id="plaid-setup" class="plaid-setup" aria-labelledby="plaid-setup-title">
+								<div class="plaid-setup-heading">
+									<div>
+										<p class="section-kicker">Your own connection allowance</p>
+										<h3 id="plaid-setup-title">
+											{plaid.configured
+												? 'Replace your Plaid credentials'
+												: 'Connect your Plaid developer account'}
+										</h3>
+									</div>
+									<span class="plaid-private-badge">Encrypted</span>
+								</div>
+								<p>
+									{plaid.configured
+										? 'Re-enter the same client ID to rotate its Production secret. To change Plaid teams, disconnect your institutions first.'
+										: 'Create a free personal Plaid team, enable its Trial plan, then add its Production credentials here. Its ten-Item trial allowance belongs only to you.'}
+								</p>
+								<a
+									class="text-link plaid-dashboard-link"
+									href="https://dashboard.plaid.com/signup"
+									target="_blank"
+									rel="noopener noreferrer"
+								>
+									Create a Plaid account
+									<svg aria-hidden="true" viewBox="0 0 16 16"
+										><path d="M6 3h7v7M13 3 5 11M3 6v7h7"></path></svg
+									>
+								</a>
+								<form class="plaid-setup-form" autocomplete="off" onsubmit={configurePlaid}>
+									<label class="field">
+										<span>Plaid client ID</span>
+										<input
+											id="plaid-client-id"
+											bind:value={plaidClientId}
+											name="plaid-client-id"
+											autocomplete="off"
+											autocapitalize="none"
+											spellcheck="false"
+											maxlength="128"
+											required
+										/>
+									</label>
+									<label class="field">
+										<span>Production secret</span>
+										<input
+											bind:value={plaidSecret}
+											name="plaid-production-secret"
+											type="password"
+											autocomplete="new-password"
+											autocapitalize="none"
+											spellcheck="false"
+											maxlength="256"
+											required
+										/>
+									</label>
+									<div class="plaid-setup-actions">
+										<button
+											class="button button-primary"
+											type="submit"
+											disabled={busyAction !== null || !plaidClientId.trim() || !plaidSecret.trim()}
+											aria-busy={busyAction === 'configure-plaid'}
+										>
+											{busyAction === 'configure-plaid' ? 'Verifying…' : 'Verify and save'}
+										</button>
+										{#if plaid.configured}
+											<button
+												class="button button-secondary"
+												type="button"
+												disabled={busyAction !== null}
+												onclick={() => {
+													plaidSetupEditing = false;
+													plaidClientId = '';
+													plaidSecret = '';
+													plaidSetupError = '';
+												}}>Cancel</button
+											>
+										{/if}
+									</div>
+								</form>
+								{#if plaidSetupError}
+									<p class="plaid-setup-error" role="alert">{plaidSetupError}</p>
+								{/if}
+								<small>
+									ChipDue encrypts both values on the server and never returns them to your browser.
+									You remain responsible for your Plaid account and its terms.
+								</small>
+							</section>
+						{:else if plaid.source === 'personal'}
+							<div class="plaid-personal-ready">
+								<span aria-hidden="true">✓</span>
+								<div>
+									<strong>Your Plaid developer account is connected</strong>
+									<small>Production credentials are encrypted for this ChipDue account only.</small>
+								</div>
+								<button
+									class="button button-secondary plaid-replace-button"
+									type="button"
+									disabled={busyAction !== null}
+									onclick={() => {
+										plaidSetupEditing = true;
+										void tick().then(() => document.getElementById('plaid-client-id')?.focus());
+									}}>Replace</button
+								>
+							</div>
+						{/if}
 
 						{#if plaidStatusLoading}
 							<div
@@ -3658,39 +3820,22 @@
 		background: #f2f2f2;
 	}
 
-	.invite-request {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto;
-		gap: 0.65rem 0.8rem;
-		align-items: center;
+	.account-create-note {
 		margin-top: 1.15rem;
 		padding-top: 1rem;
 		border-top: 1px solid var(--line);
 		text-align: left;
 	}
 
-	.invite-request p {
+	.account-create-note p {
 		margin: 0;
 		color: var(--muted);
 		font-size: 0.7rem;
 		line-height: 1.45;
 	}
 
-	.invite-request strong {
+	.account-create-note strong {
 		color: var(--ink);
-	}
-
-	.invite-request-button {
-		min-height: 38px;
-		padding: 0.55rem 0.8rem;
-		font-size: 0.67rem;
-		white-space: nowrap;
-	}
-
-	.invite-request small {
-		grid-column: 1 / -1;
-		color: var(--faint);
-		font-size: 0.6rem;
 	}
 
 	.google-button:focus-visible,
@@ -5207,6 +5352,133 @@
 		font-size: 0.72rem;
 	}
 
+	.plaid-setup {
+		margin-top: 1rem;
+		padding: 1rem;
+		border: 1px solid #b9cfc0;
+		border-radius: 10px;
+		background: #f5faf6;
+	}
+
+	.plaid-setup-heading {
+		display: flex;
+		gap: 0.75rem;
+		align-items: flex-start;
+		justify-content: space-between;
+	}
+
+	.plaid-setup h3,
+	.plaid-setup p {
+		margin: 0;
+	}
+
+	.plaid-setup h3 {
+		font-size: 0.88rem;
+		font-weight: 740;
+	}
+
+	.plaid-setup .section-kicker {
+		margin-bottom: 0.25rem;
+	}
+
+	.plaid-setup > p {
+		margin-top: 0.65rem;
+		color: var(--muted);
+		font-size: 0.7rem;
+		line-height: 1.55;
+	}
+
+	.plaid-private-badge {
+		padding: 0.28rem 0.45rem;
+		border-radius: 999px;
+		color: var(--accent);
+		font-size: 0.58rem;
+		font-weight: 760;
+		background: var(--accent-soft);
+	}
+
+	.plaid-dashboard-link {
+		padding: 0.65rem 0 0;
+		font-size: 0.67rem;
+	}
+
+	.plaid-setup-form {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+		gap: 0.65rem;
+		align-items: end;
+		margin-top: 0.8rem;
+	}
+
+	.plaid-setup-form .button {
+		min-height: 42px;
+		white-space: nowrap;
+	}
+
+	.plaid-setup-actions {
+		display: flex;
+		gap: 0.45rem;
+	}
+
+	.plaid-setup-error {
+		margin-top: 0.7rem !important;
+		color: #812d2d !important;
+		font-size: 0.67rem !important;
+	}
+
+	.plaid-setup > small {
+		display: block;
+		margin-top: 0.75rem;
+		color: var(--faint);
+		font-size: 0.59rem;
+		line-height: 1.5;
+	}
+
+	.plaid-personal-ready {
+		display: flex;
+		gap: 0.6rem;
+		align-items: center;
+		margin-top: 1rem;
+		padding: 0.75rem;
+		border: 1px solid #b9cfc0;
+		border-radius: 9px;
+		background: #f5faf6;
+	}
+
+	.plaid-personal-ready > span {
+		display: grid;
+		width: 24px;
+		height: 24px;
+		flex: 0 0 auto;
+		place-items: center;
+		border-radius: 50%;
+		color: white;
+		font-size: 0.68rem;
+		font-weight: 800;
+		background: var(--accent);
+	}
+
+	.plaid-personal-ready div {
+		display: grid;
+		flex: 1;
+		gap: 0.16rem;
+	}
+
+	.plaid-personal-ready strong {
+		font-size: 0.7rem;
+	}
+
+	.plaid-personal-ready small {
+		color: var(--muted);
+		font-size: 0.59rem;
+	}
+
+	.plaid-replace-button {
+		min-height: 36px;
+		padding: 0.5rem 0.7rem;
+		font-size: 0.62rem;
+	}
+
 	.check-mark {
 		display: grid;
 		width: 17px;
@@ -6228,6 +6500,10 @@
 
 		.google-link-button {
 			margin-left: 0;
+		}
+
+		.plaid-setup-form {
+			grid-template-columns: 1fr;
 		}
 
 		.connection-actions button {

@@ -611,6 +611,7 @@
 																: 'offers'}
 														</strong>
 													</div>
+													<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- bonusSetupHref resolves the route before appending its query. -->
 													<a href={bonusSetupHref(account)}>Choose your offer</a>
 												</section>
 											{/if}

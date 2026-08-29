@@ -24,6 +24,7 @@ import {
 	type UpdateBonusData,
 	type UpdateFinancialAccountData
 } from './schemas';
+import { payloadBelongsToCurrentTenant, tenantPayloadFields } from './tenant';
 
 interface PrivateRecordRow extends Record<string, unknown> {
 	id: string;
@@ -105,6 +106,10 @@ const storedTransactionHistorySchema = z.object({
 });
 
 const accountPayloadSchema = z.object({
+	tenantRef: z
+		.string()
+		.regex(/^[A-Za-z0-9_-]{43}$/)
+		.optional(),
 	recordType: z.literal('account'),
 	nickname: z.string(),
 	institution: nullableTextSchema,
@@ -122,6 +127,10 @@ const accountPayloadSchema = z.object({
 });
 
 const bonusPayloadSchema = z.object({
+	tenantRef: z
+		.string()
+		.regex(/^[A-Za-z0-9_-]{43}$/)
+		.optional(),
 	recordType: z.literal('bonus'),
 	accountId: z.string().uuid().nullable(),
 	offerTemplateId: z.string().max(100).nullable().optional().default(null),
@@ -149,6 +158,7 @@ function decodeRecord(row: PrivateRecordRow): PrivateRecordPayload | null {
 	// The legacy encryption context remains stable so existing cloud storage needs no migration.
 	const payload = decryptJson<unknown>(row.payload_enc, `card:${row.id}`);
 	if (!payload || typeof payload !== 'object' || !('recordType' in payload)) return null;
+	if (!payloadBelongsToCurrentTenant(payload as { tenantRef?: unknown })) return null;
 	const recordType = (payload as { recordType?: unknown }).recordType;
 	const parsed =
 		recordType === 'account'
@@ -245,7 +255,7 @@ async function getRow(id: string): Promise<PrivateRecordRow | undefined> {
 }
 
 async function insertRecord(id: string, payload: PrivateRecordPayload, now: string): Promise<void> {
-	const encrypted = encryptJson(payload, `card:${id}`);
+	const encrypted = encryptJson({ ...payload, ...tenantPayloadFields() }, `card:${id}`);
 	if (getRuntimeMode() === 'cloud') {
 		await cloudQuery(
 			`INSERT INTO public.carddue_cards
@@ -267,7 +277,7 @@ async function insertRecord(id: string, payload: PrivateRecordPayload, now: stri
 }
 
 async function updateRecord(id: string, payload: PrivateRecordPayload, now: string): Promise<void> {
-	const encrypted = encryptJson(payload, `card:${id}`);
+	const encrypted = encryptJson({ ...payload, ...tenantPayloadFields() }, `card:${id}`);
 	if (getRuntimeMode() === 'cloud') {
 		const rows = await cloudQuery<{ id: string }>(
 			`UPDATE public.carddue_cards SET payload_enc = $1, updated_at = $2
@@ -392,6 +402,7 @@ function plaidAccountPayload(
 	existing?: AccountPayload
 ): AccountPayload {
 	return {
+		...tenantPayloadFields(),
 		recordType: 'account',
 		nickname: existing?.nickname ?? snapshot.nickname,
 		institution: snapshot.institution,

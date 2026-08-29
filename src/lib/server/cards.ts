@@ -15,6 +15,7 @@ import { getDatabase } from './database';
 import { AppError } from './errors';
 import { getRuntimeMode } from './runtime';
 import type { CreateManualCardData, UpdateCardRewardsData, UpdateManualCardData } from './schemas';
+import { payloadBelongsToCurrentTenant, tenantPayloadFields } from './tenant';
 
 interface StoredCardRewardCategory {
 	id: string;
@@ -41,6 +42,7 @@ interface NormalizedCardRewards {
 }
 
 interface CardPayload {
+	tenantRef?: string;
 	nickname: string;
 	issuer: string | null;
 	issuerLogoBase64?: string | null;
@@ -189,6 +191,7 @@ function isStoredTransactionHistory(value: unknown): value is StoredTransactionH
 
 function transactionHistoryFromRow(row: CardRow): StoredTransactionHistory | undefined {
 	const value = decryptJson<unknown>(row.payload_enc, `card:${row.id}`);
+	if (value && typeof value === 'object' && !payloadBelongsToCurrentTenant(value)) return undefined;
 	if (value && typeof value === 'object' && 'recordType' in value) {
 		const record = value as { recordType?: unknown; transactionHistory?: unknown };
 		if (record.recordType !== 'account' || record.transactionHistory === undefined)
@@ -316,6 +319,7 @@ function decodePayload(row: CardRow): CardPayload | null {
 	) {
 		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
 	}
+	if (!payloadBelongsToCurrentTenant(payload)) return null;
 	if (
 		payload.transactionHistory !== undefined &&
 		!isStoredTransactionHistory(payload.transactionHistory)
@@ -457,6 +461,7 @@ function uniqueCards(rows: CardRow[]): Card[] {
 
 function snapshotPayload(snapshot: PlaidCardSnapshot, rewards?: StoredCardRewards): CardPayload {
 	return {
+		...tenantPayloadFields(),
 		nickname: snapshot.nickname,
 		issuer: snapshot.issuer,
 		...(snapshot.issuerLogoBase64 ? { issuerLogoBase64: snapshot.issuerLogoBase64 } : {}),
@@ -522,7 +527,7 @@ export async function getCard(id: string): Promise<Card> {
 export async function createManualCard(input: CreateManualCardData): Promise<Card> {
 	const id = randomUUID();
 	const now = new Date().toISOString();
-	const payload: CardPayload = { ...input };
+	const payload: CardPayload = { ...tenantPayloadFields(), ...input };
 	const payloadEncrypted = encryptJson(payload, `card:${id}`);
 
 	if (getRuntimeMode() === 'cloud') {
@@ -557,6 +562,7 @@ export async function updateManualCard(id: string, changes: UpdateManualCardData
 	}
 
 	const payload: CardPayload = {
+		...tenantPayloadFields(),
 		nickname: changes.nickname ?? existing.nickname,
 		issuer: changes.issuer === undefined ? existing.issuer : changes.issuer,
 		last4: changes.last4 === undefined ? existing.last4 : changes.last4,
@@ -622,6 +628,7 @@ export async function updateCardRewards(id: string, changes: UpdateCardRewardsDa
 	if (!row || !payload) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
 
 	const existing = normalizeStoredRewards(payload.rewards);
+	payload.tenantRef = tenantPayloadFields().tenantRef;
 	payload.rewards = {
 		programName:
 			changes.rewardProgramName === undefined ? existing.programName : changes.rewardProgramName,
@@ -965,6 +972,8 @@ export async function listCardTransactions(
 					)
 					.get(cardId) as CardRow | undefined);
 	if (!row) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
+	const payload = decodePayload(row);
+	if (!payload) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
 	if (row.source !== 'plaid') {
 		throw new AppError(
 			'TRANSACTION_HISTORY_UNAVAILABLE',
@@ -972,7 +981,6 @@ export async function listCardTransactions(
 			409
 		);
 	}
-	const payload = decodePayload(row);
 	const history = payload?.transactionHistory;
 	if (!history) {
 		throw new AppError(

@@ -8,6 +8,7 @@ import { GET as startEndpoint } from '../../routes/api/auth/google/start/+server
 import { POST as passwordLoginEndpoint } from '../../routes/api/auth/login/+server';
 import { GET as sessionEndpoint } from '../../routes/api/auth/session/+server';
 import {
+	authenticatedTenantId,
 	authenticateSession,
 	loginWithPassword,
 	resetAuthStateForTests,
@@ -52,6 +53,7 @@ const TRANSACTION_COOKIE_PURPOSE = 'google-oidc-transaction-cookie-v1';
 const TRANSACTION_REFERENCE_PURPOSE = 'google-oidc-transaction-reference-v1';
 const GOOGLE_SUBJECT_PURPOSE = 'google-oidc-subject-v1';
 const LINK_METADATA_KEY = 'google_oidc_subject_ref_v1';
+const GOOGLE_USER_KEY_PREFIX = 'google_user_v1:';
 const BOOTSTRAP_CLAIM_METADATA_KEY = 'google_oidc_bootstrap_claim_ref_v1';
 const BOOTSTRAP_TOKEN_DOMAIN = 'carddue:google-oidc-bootstrap-token:v1\0';
 
@@ -107,6 +109,31 @@ class GoogleMemoryAdapter implements CloudDatabaseAdapter {
 			this.metadata.set(claimKey, consumedValue);
 			this.metadata.set(key, value);
 			return [{ value }] as unknown as T[];
+		}
+		if (text.includes('INSERT INTO public.carddue_metadata AS google_user')) {
+			const [key, value] = params.map(String);
+			const existing = this.metadata.get(key);
+			if (existing !== undefined && existing !== value) return [];
+			this.metadata.set(key, value);
+			return [{ value }] as unknown as T[];
+		}
+		if (
+			text.includes('INSERT INTO public.carddue_metadata (key, value) VALUES ($1, $2)') &&
+			text.includes('ON CONFLICT (key) DO NOTHING')
+		) {
+			const [key, value] = params.map(String);
+			if (this.metadata.has(key)) return [];
+			this.metadata.set(key, value);
+			return [{ value }] as unknown as T[];
+		}
+		if (text.includes('WHERE key LIKE $1 AND value = $2 LIMIT 1')) {
+			const prefix = String(params[0]).replace(/%$/, '');
+			const expected = String(params[1]);
+			return ([...this.metadata].some(
+				([key, value]) => key.startsWith(prefix) && value === expected
+			)
+				? [{ value: expected }]
+				: []) as unknown as T[];
 		}
 		if (text.includes('SELECT value FROM public.carddue_metadata')) {
 			const value = this.metadata.get(String(params[0]));
@@ -220,7 +247,7 @@ class GoogleMemoryAdapter implements CloudDatabaseAdapter {
 			} else if (statement.text.includes('WHERE expires_at <=')) {
 				const [now, passwordRef] = params as [number, string];
 				for (const [key, row] of this.sessions) {
-					if (row.expires_at <= now || row.password_config_ref !== passwordRef) {
+					if (row.expires_at <= now || row.password_config_ref.split('.', 1)[0] !== passwordRef) {
 						this.sessions.delete(key);
 					}
 				}
@@ -416,7 +443,7 @@ function installTokenResponse(idToken: string) {
 	return fetchMock;
 }
 
-describe.sequential('single-owner Google OIDC', () => {
+describe.sequential('Google OIDC account isolation', () => {
 	let previousEnvironment: Record<string, string | undefined>;
 	let adapter: GoogleMemoryAdapter;
 
@@ -850,9 +877,10 @@ describe.sequential('single-owner Google OIDC', () => {
 		expect(unauthorized.status).toBe(303);
 		expect(unauthorized.headers.get('location')).toBe('/?google=error');
 		expect(cookies.values.has(GOOGLE_TRANSACTION_COOKIE_NAME)).toBe(false);
-		const unlinkedLogin = await callStart(cookies, startRequest('login'));
-		expect(unlinkedLogin.headers.get('location')).toBe('/?google=error');
-		expect(cookies.values.has(GOOGLE_TRANSACTION_COOKIE_NAME)).toBe(false);
+		const accountCreation = await callStart(cookies, startRequest('login'));
+		expect(accountCreation.headers.get('location')).toContain('accounts.google.com');
+		expect(cookies.values.has(GOOGLE_TRANSACTION_COOKIE_NAME)).toBe(true);
+		cookies.values.delete(GOOGLE_TRANSACTION_COOKIE_NAME);
 
 		const sameSite = startRequest('login', { 'sec-fetch-site': 'same-site' });
 		const rejectedOrigin = await callStart(cookies, sameSite);
@@ -1030,7 +1058,7 @@ describe.sequential('single-owner Google OIDC', () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
-	it('creates an opaque app session only for the previously linked identity', async () => {
+	it('creates isolated opaque app sessions for distinct Google identities', async () => {
 		const linkedSubject = 'linked-google-subject';
 		adapter.metadata.set(LINK_METADATA_KEY, linkedReference(linkedSubject));
 		const cookies = new TestCookies();
@@ -1044,6 +1072,8 @@ describe.sequential('single-owner Google OIDC', () => {
 		const sessionToken = cookies.values.get(SESSION_COOKIE_NAME);
 		expect(sessionToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
 		expect(await authenticateSession(sessionToken)).toBe(true);
+		const firstTenant = await authenticatedTenantId(sessionToken);
+		expect(firstTenant).toMatch(/^[0-9a-f-]{36}$/);
 
 		const secondCookies = new TestCookies();
 		await callStart(secondCookies, startRequest('login'));
@@ -1051,9 +1081,16 @@ describe.sequential('single-owner Google OIDC', () => {
 		installTokenResponse(
 			await signIdToken({ nonce: secondTransaction.nonce, subject: 'attacker-google-subject' })
 		);
-		const rejected = await callCallback(secondCookies, callbackUrl(secondTransaction));
-		expect(rejected.headers.get('location')).toBe('/?google=error');
-		expect(secondCookies.values.has(SESSION_COOKIE_NAME)).toBe(false);
+		const created = await callCallback(secondCookies, callbackUrl(secondTransaction));
+		expect(created.headers.get('location')).toBe('/?google=login');
+		const secondSessionToken = secondCookies.values.get(SESSION_COOKIE_NAME);
+		expect(secondSessionToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+		const secondTenant = await authenticatedTenantId(secondSessionToken);
+		expect(secondTenant).toMatch(/^[0-9a-f-]{36}$/);
+		expect(secondTenant).not.toBe(firstTenant);
+		expect(
+			adapter.metadata.get(`${GOOGLE_USER_KEY_PREFIX}${linkedReference('attacker-google-subject')}`)
+		).toBe(secondTenant);
 	});
 
 	it('never overwrites an existing link with a different Google identity', async () => {
