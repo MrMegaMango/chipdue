@@ -992,7 +992,7 @@
 				<div class="finance-section-heading">
 					<div>
 						<h2 id="account-list-title">Your account map</h2>
-						<p>Credit cards remain on the Dashboard with their payment details.</p>
+						<p>Credit cards have their own Cards tab with payment details and activity.</p>
 					</div>
 					{#if hiddenAccounts.length > 0}
 						<button

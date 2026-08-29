@@ -314,15 +314,19 @@ describe('banking visual identity', () => {
 	});
 });
 
-describe('returning-user dashboard', () => {
-	it('replaces onboarding copy with a compact toolbar after any financial record is added', () => {
+describe('returning-user overview', () => {
+	it('replaces onboarding copy with a compact overview toolbar after any record is added', () => {
 		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
 		expect(source).toContain('workspaceAccounts.length === 0');
 		expect(source).toContain('workspaceBonuses.length === 0');
-		expect(source).toContain('{#if showOnboardingHero}');
-		expect(source).toContain('class:dashboard-toolbar={!showOnboardingHero}');
-		expect(source).toContain('<p id="page-title" class="section-kicker">Dashboard</p>');
-		expect(source).not.toContain('Financial command center');
-		expect(source).toContain('class:visually-hidden={!showOnboardingHero}');
+		expect(source).toContain("{#if showOnboardingHero && currentSection === 'overview'}");
+		expect(source).toContain(
+			"class:dashboard-toolbar={!showOnboardingHero || currentSection === 'cards'}"
+		);
+		expect(source).toContain("{currentSection === 'cards' ? 'Credit cards' : 'Overview'}");
+		expect(source).toContain("{currentSection === 'cards' ? 'Cards' : 'Financial command center'}");
+		expect(source).toContain(
+			"class:visually-hidden={!showOnboardingHero || currentSection === 'cards'}"
+		);
 	});
 });

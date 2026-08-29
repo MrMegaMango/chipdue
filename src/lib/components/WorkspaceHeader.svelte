@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { asset, resolve } from '$app/paths';
 
-	type WorkspaceSection = 'dashboard' | 'accounts' | 'bonuses';
+	type WorkspaceSection = 'overview' | 'cards' | 'accounts' | 'bonuses';
 	type Props = {
 		current: WorkspaceSection;
 		mode: 'local' | 'cloud' | null;
@@ -11,15 +11,20 @@
 
 	let { current, mode, loggingOut = false, onlogout }: Props = $props();
 
-	const links: { id: WorkspaceSection; label: string; href: '/' | '/accounts' | '/bonuses' }[] = [
-		{ id: 'dashboard', label: 'Dashboard', href: '/' },
+	const links: {
+		id: WorkspaceSection;
+		label: string;
+		href: '/' | '/cards' | '/accounts' | '/bonuses';
+	}[] = [
+		{ id: 'overview', label: 'Overview', href: '/' },
+		{ id: 'cards', label: 'Cards', href: '/cards' },
 		{ id: 'accounts', label: 'Accounts', href: '/accounts' },
 		{ id: 'bonuses', label: 'Bonuses', href: '/bonuses' }
 	];
 </script>
 
 <header class="workspace-header">
-	<a class="workspace-brand" href={resolve('/')} aria-label="ChipDue dashboard">
+	<a class="workspace-brand" href={resolve('/')} aria-label="ChipDue overview">
 		<span class="brand-mark" aria-hidden="true">
 			<img src={asset('/logo-mark.svg')} alt="" />
 		</span>
@@ -183,7 +188,7 @@
 		nav {
 			display: grid;
 			width: 100%;
-			grid-template-columns: repeat(3, 1fr);
+			grid-template-columns: repeat(4, 1fr);
 		}
 
 		nav a {

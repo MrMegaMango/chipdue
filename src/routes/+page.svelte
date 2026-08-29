@@ -190,6 +190,7 @@
 <script lang="ts">
 	import { asset, resolve } from '$app/paths';
 	import { replaceState } from '$app/navigation';
+	import { page } from '$app/state';
 	import { onMount, tick } from 'svelte';
 	import {
 		AUTOMATIC_CARD_REWARD_PROFILES,
@@ -197,6 +198,9 @@
 	} from '$lib/card-reward-profiles';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
 	import { financialProviderName } from '$lib/financial-data';
+
+	type PageSection = 'overview' | 'cards';
+	const currentSection: PageSection = $derived(page.route.id === '/cards' ? 'cards' : 'overview');
 
 	type FinancialDataProvider = 'plaid';
 	type CardSource = 'manual' | 'connected';
@@ -2297,6 +2301,10 @@
 	}
 </script>
 
+<svelte:head>
+	<title>{currentSection === 'cards' ? 'Cards — ChipDue' : 'Overview — ChipDue'}</title>
+</svelte:head>
+
 <svelte:window
 	onkeydown={handleWindowKeydown}
 	onfocus={revalidateCloudSession}
@@ -2517,11 +2525,13 @@
 		</section>
 	</main>
 {:else}
-	<a class="skip-link" href="#main-content">Skip to dashboard</a>
+	<a class="skip-link" href="#main-content">
+		Skip to {currentSection === 'cards' ? 'cards' : 'overview'}
+	</a>
 
 	<div class="app-shell" inert={authBusy === 'logout'} aria-busy={authBusy === 'logout'}>
 		<WorkspaceHeader
-			current="dashboard"
+			current={currentSection}
 			mode={authMode}
 			loggingOut={authBusy === 'logout'}
 			onlogout={logout}
@@ -2529,11 +2539,11 @@
 
 		<main id="main-content">
 			<section
-				class:hero={showOnboardingHero}
-				class:dashboard-toolbar={!showOnboardingHero}
+				class:hero={showOnboardingHero && currentSection === 'overview'}
+				class:dashboard-toolbar={!showOnboardingHero || currentSection === 'cards'}
 				aria-labelledby="page-title"
 			>
-				{#if showOnboardingHero}
+				{#if showOnboardingHero && currentSection === 'overview'}
 					<div class="hero-copy">
 						<p class="eyebrow">Your private money command center</p>
 						<h1 id="page-title">Keep every dollar moving with purpose.</h1>
@@ -2546,55 +2556,65 @@
 					</div>
 				{:else}
 					<div>
-						<p id="page-title" class="section-kicker">Dashboard</p>
+						<p class="section-kicker">
+							{currentSection === 'cards' ? 'Credit cards' : 'Overview'}
+						</p>
+						<h1 id="page-title">
+							{currentSection === 'cards' ? 'Cards' : 'Financial command center'}
+						</h1>
+						{#if currentSection === 'cards'}
+							<p class="toolbar-description">Payments, rewards, activity, and due dates.</p>
+						{/if}
 					</div>
 				{/if}
-				<div class:hero-action-stack={showOnboardingHero}>
-					<div
-						class:hero-actions={showOnboardingHero}
-						class:dashboard-actions={!showOnboardingHero}
-					>
-						<button
-							class="button button-secondary"
-							type="button"
-							onclick={openAddDialog}
-							disabled={busyAction !== null || loading}
+				{#if showOnboardingHero || currentSection === 'cards'}
+					<div class:hero-action-stack={showOnboardingHero && currentSection === 'overview'}>
+						<div
+							class:hero-actions={showOnboardingHero && currentSection === 'overview'}
+							class:dashboard-actions={!showOnboardingHero || currentSection === 'cards'}
 						>
-							<svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 4v12M4 10h12"></path></svg>
-							Add manually
-						</button>
-						<button
-							class="button button-primary"
-							type="button"
-							onclick={connectPlaid}
-							disabled={busyAction !== null || loading}
-							aria-busy={busyAction === 'connect'}
-							aria-describedby="plaid-consent-copy"
-							title={plaid.configured ? 'Open Plaid Link' : 'Set up your Plaid account'}
+							<button
+								class="button button-secondary"
+								type="button"
+								onclick={openAddDialog}
+								disabled={busyAction !== null || loading}
+							>
+								<svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 4v12M4 10h12"></path></svg>
+								Add manually
+							</button>
+							<button
+								class="button button-primary"
+								type="button"
+								onclick={connectPlaid}
+								disabled={busyAction !== null || loading}
+								aria-busy={busyAction === 'connect'}
+								aria-describedby="plaid-consent-copy"
+								title={plaid.configured ? 'Open Plaid Link' : 'Set up your Plaid account'}
+							>
+								<svg aria-hidden="true" viewBox="0 0 20 20">
+									<path d="M3 8.5 10 5l7 3.5L10 12 3 8.5Z"></path>
+									<path d="M5 11v3.5M8.3 12.5V16m3.4-3.5V16m3.3-5v3.5M3 17h14"></path>
+								</svg>
+								{busyAction === 'connect'
+									? 'Connecting…'
+									: !plaid.configured
+										? 'Set up Plaid'
+										: plaid.connectedItems > 0
+											? 'Connect another'
+											: 'Connect Plaid'}
+							</button>
+						</div>
+						<p
+							id="plaid-consent-copy"
+							class:plaid-consent={showOnboardingHero && currentSection === 'overview'}
+							class:visually-hidden={!showOnboardingHero || currentSection === 'cards'}
 						>
-							<svg aria-hidden="true" viewBox="0 0 20 20">
-								<path d="M3 8.5 10 5l7 3.5L10 12 3 8.5Z"></path>
-								<path d="M5 11v3.5M8.3 12.5V16m3.4-3.5V16m3.3-5v3.5M3 17h14"></path>
-							</svg>
-							{busyAction === 'connect'
-								? 'Connecting…'
-								: !plaid.configured
-									? 'Set up Plaid'
-									: plaid.connectedItems > 0
-										? 'Connect another'
-										: 'Connect Plaid'}
-						</button>
+							Plaid’s CDN script runs in this page and can access data rendered here. It loads only
+							after you choose Connect Plaid. New connections request eligible bank, brokerage, and
+							card balances, investment holdings, liabilities, and up to 24 months of transactions.
+						</p>
 					</div>
-					<p
-						id="plaid-consent-copy"
-						class:plaid-consent={showOnboardingHero}
-						class:visually-hidden={!showOnboardingHero}
-					>
-						Plaid’s CDN script runs in this page and can access data rendered here. It loads only
-						after you choose Connect Plaid. New connections request eligible bank, brokerage, and
-						card balances, investment holdings, liabilities, and up to 24 months of transactions.
-					</p>
-				</div>
+				{/if}
 			</section>
 
 			{#if loadError}
@@ -2607,7 +2627,10 @@
 				</div>
 			{/if}
 
-			<section class="summary-grid" aria-label="Card summary">
+			<section
+				class="summary-grid"
+				aria-label={currentSection === 'cards' ? 'Card summary' : 'Financial overview'}
+			>
 				<article class="summary-card summary-balance">
 					<div class="summary-icon" aria-hidden="true">
 						<svg viewBox="0 0 24 24"
@@ -2669,20 +2692,51 @@
 						>
 					</div>
 					<div>
-						<p>Next deadline</p>
+						<p>{currentSection === 'cards' ? 'Next card due' : 'Next deadline'}</p>
 						<strong class="next-date">
-							{loading || !hasLoadedCards ? '—' : formatDate(nextWorkspaceDeadline?.date ?? null)}
+							{loading || !hasLoadedCards
+								? '—'
+								: formatDate(
+										currentSection === 'cards'
+											? (nextCard?.dueDate ?? null)
+											: (nextWorkspaceDeadline?.date ?? null)
+									)}
 						</strong>
 						<span
 							>{hasLoadedCards
-								? (nextWorkspaceDeadline?.label ?? 'No upcoming deadline')
+								? currentSection === 'cards'
+									? (nextCard?.nickname ?? 'No upcoming card payment')
+									: (nextWorkspaceDeadline?.label ?? 'No upcoming deadline')
 								: 'Awaiting local data'}</span
 						>
 					</div>
 				</article>
 			</section>
 
-			<section class="workspace-modules" aria-label="Financial workspace areas">
+			<section
+				class="workspace-modules"
+				aria-label="Financial workspace areas"
+				hidden={currentSection !== 'overview'}
+			>
+				<a class="workspace-module cards-module" href={resolve('/cards')}>
+					<span class="module-icon" aria-hidden="true">
+						<svg viewBox="0 0 24 24"
+							><rect x="3" y="5" width="18" height="14" rx="3"></rect><path d="M3 10h18M7 15h4"
+							></path></svg
+						>
+					</span>
+					<span>
+						<strong>Cards</strong>
+						<small
+							>{hasLoadedCards
+								? `${cards.length} tracked · payments, rewards, and activity`
+								: 'Payments, rewards, activity, and due dates'}</small
+						>
+					</span>
+					<svg class="module-arrow" aria-hidden="true" viewBox="0 0 20 20"
+						><path d="m7 4 6 6-6 6"></path></svg
+					>
+				</a>
 				<a class="workspace-module accounts-module" href={resolve('/accounts')}>
 					<span class="module-icon" aria-hidden="true">
 						<svg viewBox="0 0 24 24"
@@ -2723,7 +2777,11 @@
 				</a>
 			</section>
 
-			<section class="cards-section" aria-labelledby="cards-heading">
+			<section
+				class="cards-section"
+				aria-labelledby="cards-heading"
+				hidden={currentSection !== 'cards'}
+			>
 				<div class="section-heading">
 					<div>
 						<p class="section-kicker">Credit cards</p>
@@ -4907,9 +4965,14 @@
 
 	.workspace-modules {
 		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
+		grid-template-columns: repeat(3, minmax(0, 1fr));
 		gap: 0.85rem;
 		padding-top: 1rem;
+	}
+
+	.workspace-modules[hidden],
+	.cards-section[hidden] {
+		display: none;
 	}
 
 	.workspace-module {

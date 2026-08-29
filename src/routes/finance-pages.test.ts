@@ -9,8 +9,28 @@ const balanceHistoryChartSource = readFileSync(
 const bonusesSource = readFileSync(new URL('./bonuses/+page.svelte', import.meta.url), 'utf8');
 const dashboardSource = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
 const etradeSource = readFileSync(new URL('./etrade/+page.svelte', import.meta.url), 'utf8');
+const headerSource = readFileSync(
+	new URL('../lib/components/WorkspaceHeader.svelte', import.meta.url),
+	'utf8'
+);
+const cardsRouteSource = readFileSync(new URL('./cards/+page.svelte', import.meta.url), 'utf8');
 
 describe('financial workspace navigation', () => {
+	it('offers overview, cards, accounts, and bonuses as first-class tabs', () => {
+		for (const marker of [
+			"label: 'Overview'",
+			"label: 'Cards'",
+			"label: 'Accounts'",
+			"label: 'Bonuses'"
+		]) {
+			expect(headerSource).toContain(marker);
+		}
+		expect(headerSource).toContain("href: '/cards'");
+		expect(cardsRouteSource).toContain('<DashboardPage />');
+		expect(dashboardSource).toContain("page.route.id === '/cards'");
+		expect(dashboardSource).toContain("{#if currentSection === 'cards'}");
+	});
+
 	it('makes accounts and bonuses first-class parts of the dashboard', () => {
 		expect(dashboardSource).toContain("href={resolve('/accounts')}");
 		expect(dashboardSource).toContain("href={resolve('/bonuses')}");
