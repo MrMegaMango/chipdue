@@ -47,8 +47,8 @@
 		notes: string;
 	};
 	type AccountOwnershipGroup = {
-		id: FinancialAccountOwner;
-		title: string;
+		id: FinancialAccountOwner | 'all';
+		title: string | null;
 		accounts: FinancialAccount[];
 	};
 
@@ -102,6 +102,7 @@
 	let toast = $state('');
 	let toastError = $state(false);
 	let undoHiddenAccountId = $state<string | null>(null);
+	let supplementalRequestedAccountIds = $state<string[]>([]);
 	let toastTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const visibleAccounts = $derived(accounts.filter((account) => !account.hidden));
@@ -115,12 +116,14 @@
 			id: 'cash',
 			title: 'Cash accounts',
 			description: 'Checking, savings, and cash management.',
+			separateByOwner: true,
 			accounts: visibleAccounts.filter((account) => account.accountType !== 'brokerage')
 		},
 		{
 			id: 'brokerage',
 			title: 'Brokerage accounts',
 			description: 'Investments, positions, and performance.',
+			separateByOwner: false,
 			accounts: visibleAccounts.filter((account) => account.accountType === 'brokerage')
 		},
 		...(showHidden
@@ -129,6 +132,7 @@
 						id: 'hidden',
 						title: 'Hidden accounts',
 						description: 'Excluded from your account map and summary totals.',
+						separateByOwner: true,
 						accounts: hiddenAccounts
 					}
 				]
@@ -187,7 +191,13 @@
 		};
 	}
 
-	function splitAccountsByOwner(groupAccounts: FinancialAccount[]): AccountOwnershipGroup[] {
+	function splitAccountsByOwner(
+		groupAccounts: FinancialAccount[],
+		separateByOwner: boolean
+	): AccountOwnershipGroup[] {
+		if (!separateByOwner) {
+			return [{ id: 'all', title: null, accounts: sortAccountsByValue(groupAccounts) }];
+		}
 		return [
 			{
 				id: 'business',
@@ -250,7 +260,9 @@
 			loading = false;
 			// Activity, open orders, and estimated history can involve provider calls. Render the
 			// account inventory first, then let those details fill in without blocking the page.
-			void loadSupplementalAccountData(accountResponse.accounts);
+			void loadSupplementalAccountData(
+				accountResponse.accounts.filter((account) => !account.hidden)
+			);
 		} catch (error) {
 			pageError = readableError(error, 'Your accounts could not be loaded.');
 		} finally {
@@ -635,15 +647,26 @@
 		}
 	}
 
-	async function loadAccountActivities(loadedAccounts: FinancialAccount[]): Promise<void> {
+	async function loadAccountActivities(
+		loadedAccounts: FinancialAccount[],
+		preserveExisting = false
+	): Promise<void> {
 		const eligibleAccounts = loadedAccounts.filter(
 			(account) => account.source === 'connected' && account.transactionHistoryEnabled
 		);
-		activityByAccount = {};
-		activityErrorByAccount = {};
-		activityLoadingByAccount = Object.fromEntries(
-			eligibleAccounts.map((account) => [account.id, true])
-		);
+		const eligibleAccountIds = new Set(eligibleAccounts.map((account) => account.id));
+		activityByAccount = preserveExisting ? activityByAccount : {};
+		activityErrorByAccount = preserveExisting
+			? Object.fromEntries(
+					Object.entries(activityErrorByAccount).filter(
+						([accountId]) => !eligibleAccountIds.has(accountId)
+					)
+				)
+			: {};
+		activityLoadingByAccount = {
+			...(preserveExisting ? activityLoadingByAccount : {}),
+			...Object.fromEntries(eligibleAccounts.map((account) => [account.id, true]))
+		};
 		await Promise.all(
 			eligibleAccounts.map(async (account) => {
 				try {
@@ -676,15 +699,26 @@
 		);
 	}
 
-	async function loadBrokerageOrders(loadedAccounts: FinancialAccount[]): Promise<void> {
+	async function loadBrokerageOrders(
+		loadedAccounts: FinancialAccount[],
+		preserveExisting = false
+	): Promise<void> {
 		const eligibleAccounts = loadedAccounts.filter(
 			(account) => account.source === 'connected' && isEtradeBrokerage(account)
 		);
-		ordersByAccount = {};
-		ordersErrorByAccount = {};
-		ordersLoadingByAccount = Object.fromEntries(
-			eligibleAccounts.map((account) => [account.id, true])
-		);
+		const eligibleAccountIds = new Set(eligibleAccounts.map((account) => account.id));
+		ordersByAccount = preserveExisting ? ordersByAccount : {};
+		ordersErrorByAccount = preserveExisting
+			? Object.fromEntries(
+					Object.entries(ordersErrorByAccount).filter(
+						([accountId]) => !eligibleAccountIds.has(accountId)
+					)
+				)
+			: {};
+		ordersLoadingByAccount = {
+			...(preserveExisting ? ordersLoadingByAccount : {}),
+			...Object.fromEntries(eligibleAccounts.map((account) => [account.id, true]))
+		};
 		await Promise.all(
 			eligibleAccounts.map(async (account) => {
 				try {
@@ -768,19 +802,38 @@
 
 	async function loadSupplementalAccountData(
 		loadedAccounts: FinancialAccount[],
-		refreshPlaidEstimates = false
+		refreshPlaidEstimates = false,
+		preserveExisting = false
 	): Promise<void> {
+		const requestedAccountIds = loadedAccounts.map((account) => account.id);
+		supplementalRequestedAccountIds = preserveExisting
+			? [...new Set([...supplementalRequestedAccountIds, ...requestedAccountIds])]
+			: requestedAccountIds;
 		await Promise.all([
-			loadAccountActivities(loadedAccounts),
-			loadBrokerageOrders(loadedAccounts),
+			loadAccountActivities(loadedAccounts, preserveExisting),
+			loadBrokerageOrders(loadedAccounts, preserveExisting),
 			loadPlaidEstimatedHistories(loadedAccounts, refreshPlaidEstimates)
 		]);
+	}
+
+	function toggleHiddenAccounts(): void {
+		showHidden = !showHidden;
+		if (!showHidden) return;
+		const unloadedHiddenAccounts = hiddenAccounts.filter(
+			(account) => !supplementalRequestedAccountIds.includes(account.id)
+		);
+		if (unloadedHiddenAccounts.length > 0) {
+			void loadSupplementalAccountData(unloadedHiddenAccounts, false, true);
+		}
 	}
 
 	async function reloadAccounts(refreshPlaidEstimates = false): Promise<void> {
 		const response = await requestJson<{ accounts: FinancialAccount[] }>(resolve('/api/accounts'));
 		accounts = response.accounts;
-		await loadSupplementalAccountData(response.accounts, refreshPlaidEstimates);
+		await loadSupplementalAccountData(
+			response.accounts.filter((account) => showHidden || !account.hidden),
+			refreshPlaidEstimates
+		);
 	}
 
 	async function syncConnectedAccounts(): Promise<void> {
@@ -837,6 +890,9 @@
 			accounts = accounts.map((candidate) =>
 				candidate.id === response.account.id ? response.account : candidate
 			);
+			if (!hidden && !supplementalRequestedAccountIds.includes(response.account.id)) {
+				void loadSupplementalAccountData([response.account], false, true);
+			}
 			showToast(hidden ? `${account.nickname} hidden.` : `${account.nickname} restored.`, {
 				undoAccountId: hidden ? account.id : null
 			});
@@ -999,7 +1055,7 @@
 							class="hidden-accounts-toggle"
 							type="button"
 							aria-expanded={showHidden}
-							onclick={() => (showHidden = !showHidden)}
+							onclick={toggleHiddenAccounts}
 						>
 							{showHidden ? 'Hide hidden accounts' : `Show hidden (${hiddenAccounts.length})`}
 						</button>
@@ -1021,24 +1077,29 @@
 									<h3 id={`${accountGroup.id}-account-list-title`}>{accountGroup.title}</h3>
 									<p>{accountGroup.description}</p>
 								</div>
-								{#each splitAccountsByOwner(accountGroup.accounts) as ownershipGroup (ownershipGroup.id)}
+								{#each splitAccountsByOwner(accountGroup.accounts, accountGroup.separateByOwner) as ownershipGroup (ownershipGroup.id)}
 									{#if ownershipGroup.accounts.length > 0}
-										<section
+										<div
 											class="account-ownership-group"
-											aria-labelledby={`${accountGroup.id}-${ownershipGroup.id}-account-list-title`}
+											role={ownershipGroup.title ? 'region' : undefined}
+											aria-labelledby={ownershipGroup.title
+												? `${accountGroup.id}-${ownershipGroup.id}-account-list-title`
+												: undefined}
 										>
-											<div
-												class:business={ownershipGroup.id === 'business'}
-												class="account-ownership-heading"
-											>
-												<h4 id={`${accountGroup.id}-${ownershipGroup.id}-account-list-title`}>
-													{ownershipGroup.title}
-												</h4>
-												<span
-													>{ownershipGroup.accounts.length}
-													{ownershipGroup.accounts.length === 1 ? 'account' : 'accounts'}</span
+											{#if ownershipGroup.title}
+												<div
+													class:business={ownershipGroup.id === 'business'}
+													class="account-ownership-heading"
 												>
-											</div>
+													<h4 id={`${accountGroup.id}-${ownershipGroup.id}-account-list-title`}>
+														{ownershipGroup.title}
+													</h4>
+													<span
+														>{ownershipGroup.accounts.length}
+														{ownershipGroup.accounts.length === 1 ? 'account' : 'accounts'}</span
+													>
+												</div>
+											{/if}
 											<div class="finance-grid">
 												{#each ownershipGroup.accounts as account (account.id)}
 													{@const bonusOffers = availableBonusOffers(account)}
@@ -1111,12 +1172,14 @@
 																	<dd>{formatApy(account.apyBasisPoints)}</dd>
 																</div>
 															{/if}
-															<div>
-																<dt>Ownership</dt>
-																<dd>
-																	{account.ownerType === 'business' ? 'Business' : 'Personal'}
-																</dd>
-															</div>
+															{#if account.accountType !== 'brokerage'}
+																<div>
+																	<dt>Ownership</dt>
+																	<dd>
+																		{account.ownerType === 'business' ? 'Business' : 'Personal'}
+																	</dd>
+																</div>
+															{/if}
 															<div>
 																<dt>Opened</dt>
 																<dd>{formatDate(account.openedDate)}</dd>
@@ -1480,7 +1543,7 @@
 													</article>
 												{/each}
 											</div>
-										</section>
+										</div>
 									{/if}
 								{/each}
 							</section>
@@ -1548,13 +1611,15 @@
 							<option value="other">Other</option>
 						</select>
 					</div>
-					<div class="finance-field">
-						<label for="account-owner">Ownership</label>
-						<select id="account-owner" bind:value={form.ownerType}>
-							<option value="personal">Personal</option>
-							<option value="business">Business</option>
-						</select>
-					</div>
+					{#if form.accountType !== 'brokerage'}
+						<div class="finance-field">
+							<label for="account-owner">Ownership</label>
+							<select id="account-owner" bind:value={form.ownerType}>
+								<option value="personal">Personal</option>
+								<option value="business">Business</option>
+							</select>
+						</div>
+					{/if}
 					<div class="finance-field">
 						<label for="account-balance">Current balance</label>
 						<input
