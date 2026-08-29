@@ -134,7 +134,8 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain("account.ownerType === 'business'");
 		expect(accountsSource).toContain("title: 'Personal'");
 		expect(accountsSource).toContain("account.ownerType === 'personal'");
-		expect(accountsSource).toContain("{#if account.accountType !== 'brokerage'}");
+		expect(accountsSource).not.toContain('<dt>Ownership</dt>');
+		expect(accountsSource).toContain('<label for="account-owner">Ownership</label>');
 		expect(accountsSource).toContain("{#if form.accountType !== 'brokerage'}");
 		expect(accountsSource.indexOf("id: 'personal'")).toBeLessThan(
 			accountsSource.indexOf("id: 'business'")

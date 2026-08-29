@@ -1384,14 +1384,6 @@
 																	</dd>
 																</div>
 															{/if}
-															{#if account.accountType !== 'brokerage'}
-																<div>
-																	<dt>Ownership</dt>
-																	<dd>
-																		{account.ownerType === 'business' ? 'Business' : 'Personal'}
-																	</dd>
-																</div>
-															{/if}
 															{#if account.openedDate}
 																<div>
 																	<dt>Opened</dt>
