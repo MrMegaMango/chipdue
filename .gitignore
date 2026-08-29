@@ -12,6 +12,11 @@ node_modules
 /playwright-report
 /test-results
 
+# Deterministic install icons generated from the reviewed vector mark during builds
+/static/apple-touch-icon.png
+/static/icon-192.png
+/static/icon-512.png
+
 # OS
 .DS_Store
 Thumbs.db

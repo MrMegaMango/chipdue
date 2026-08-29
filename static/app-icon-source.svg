@@ -1,0 +1,27 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="512"
+  height="512"
+  viewBox="0 0 64 64"
+  role="img"
+  aria-labelledby="title"
+>
+  <title id="title">ChipDue</title>
+  <rect width="64" height="64" fill="#3d5afe"/>
+  <path
+    d="M43.25 19.75A18.5 18.5 0 1 0 43.25 44.25"
+    fill="none"
+    stroke="#fffdf9"
+    stroke-linecap="round"
+    stroke-width="5.5"
+  />
+  <path
+    d="M31.75 21.75v10.5l7.5 4.25"
+    fill="none"
+    stroke="#fffdf9"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="4.25"
+  />
+  <circle cx="47" cy="32" r="4.5" fill="#e5b855"/>
+</svg>

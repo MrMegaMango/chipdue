@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { generateAppIcons } from './generate-app-icons.mjs';
 import { assertCredentialFreeCheckout, verifyVercelOutput } from './verify-vercel-output.mjs';
 
 const viteCli = fileURLToPath(new URL('../node_modules/vite/bin/vite.js', import.meta.url));
@@ -12,6 +13,7 @@ if (vercelBuild) {
 		process.exit(1);
 	}
 }
+generateAppIcons();
 const result = spawnSync(process.execPath, [viteCli, 'build'], {
 	stdio: 'inherit',
 	env: vercelBuild ? { ...process.env, VERCEL: '1' } : process.env
