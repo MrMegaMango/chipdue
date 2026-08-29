@@ -56,8 +56,11 @@ describe('published account APYs', () => {
 				return new Response('<h3>High-Yield APY</h3><p class="apy">3.10% <span>APY</span></p>');
 			}
 			if (url.includes('viobank.com')) {
+				return new Response('', { status: 403 });
+			}
+			if (url.includes('yieldfinder.app')) {
 				return new Response(
-					'<header>Online Savings</header><div class="featured-product-card__rate js-rate-target">3.99</div>'
+					'<meta name="description" content="Current Vio Bank rates. Savings APY: 3.99%. Updated daily."/>'
 				);
 			}
 			return new Response('After that, you will earn the base 3.30% APY.');
@@ -79,10 +82,10 @@ describe('published account APYs', () => {
 		expect(first.every((account) => account.apyUpdatedAt === '2026-08-29T21:00:00.000Z')).toBe(
 			true
 		);
-		expect(fetchMock).toHaveBeenCalledTimes(3);
+		expect(fetchMock).toHaveBeenCalledTimes(4);
 
 		await addPublishedAccountApys(accounts);
-		expect(fetchMock).toHaveBeenCalledTimes(3);
+		expect(fetchMock).toHaveBeenCalledTimes(4);
 	});
 
 	it('keeps provider APYs authoritative and leaves unknown institutions unchanged', async () => {

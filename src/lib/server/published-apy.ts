@@ -7,8 +7,10 @@ const SOURCE_TIMEOUT_MS = 5_000;
 interface PublishedApyDefinition {
 	id: 'sofi-savings' | 'vio-online-savings' | 'wealthfront-cash';
 	url: string;
+	fallbackUrl?: string;
 	matches: (account: FinancialAccount) => boolean;
 	extract: (html: string) => number | null;
+	fallbackExtract?: (html: string) => number | null;
 }
 
 interface CachedPublishedApy {
@@ -50,6 +52,7 @@ const definitions: PublishedApyDefinition[] = [
 	{
 		id: 'vio-online-savings',
 		url: 'https://www.viobank.com/',
+		fallbackUrl: 'https://yieldfinder.app/institutions/vio-bank/',
 		matches: (account) =>
 			account.accountType === 'savings' && normalizedAccountText(account).includes('vio bank'),
 		extract: (html) =>
@@ -60,7 +63,9 @@ const definitions: PublishedApyDefinition[] = [
 			extractFirstPercent(
 				html,
 				/Online Savings Account APY:[\s\S]{0,300}?class=["']apy["'][^>]*>\s*([0-9]+(?:\.[0-9]+)?)%/i
-			)
+			),
+		fallbackExtract: (html) =>
+			extractFirstPercent(html, /Current Vio Bank rates\. Savings APY:\s*([0-9]+(?:\.[0-9]+)?)%/i)
 	},
 	{
 		id: 'wealthfront-cash',
@@ -84,28 +89,39 @@ async function fetchPublishedApy(
 
 	const request = (async () => {
 		try {
-			const response = await fetch(definition.url, {
-				headers: {
-					Accept: 'text/html',
-					'User-Agent': 'ChipDue APY monitor/1.0'
-				},
-				cache: 'no-store',
-				signal: AbortSignal.timeout(SOURCE_TIMEOUT_MS)
-			});
-			if (!response.ok) return cached ?? null;
-			const html = await response.text();
-			if (html.length > MAX_SOURCE_BYTES) return cached ?? null;
-			const basisPoints = definition.extract(html);
-			if (basisPoints === null) return cached ?? null;
-			const checkedAt = new Date().toISOString();
-			const result = {
-				basisPoints,
-				checkedAt,
-				expiresAt: Date.now() + RATE_CACHE_MS
-			};
-			successfulRates.set(definition.id, result);
-			return result;
-		} catch {
+			const sources = [
+				{ url: definition.url, extract: definition.extract },
+				...(definition.fallbackUrl && definition.fallbackExtract
+					? [{ url: definition.fallbackUrl, extract: definition.fallbackExtract }]
+					: [])
+			];
+			for (const source of sources) {
+				try {
+					const response = await fetch(source.url, {
+						headers: {
+							Accept: 'text/html',
+							'User-Agent': 'ChipDue APY monitor/1.0'
+						},
+						cache: 'no-store',
+						signal: AbortSignal.timeout(SOURCE_TIMEOUT_MS)
+					});
+					if (!response.ok) continue;
+					const html = await response.text();
+					if (html.length > MAX_SOURCE_BYTES) continue;
+					const basisPoints = source.extract(html);
+					if (basisPoints === null) continue;
+					const checkedAt = new Date().toISOString();
+					const result = {
+						basisPoints,
+						checkedAt,
+						expiresAt: Date.now() + RATE_CACHE_MS
+					};
+					successfulRates.set(definition.id, result);
+					return result;
+				} catch {
+					continue;
+				}
+			}
 			return cached ?? null;
 		} finally {
 			inFlightRates.delete(definition.id);
