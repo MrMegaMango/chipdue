@@ -172,11 +172,15 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain('<dd>{formatDate(account.openedDate)}</dd>');
 	});
 
-	it('keeps sync freshness in the low-emphasis account footer', () => {
+	it('replaces connected account pills with low-emphasis sync freshness', () => {
 		expect(accountsSource).not.toContain('<dt>Data source</dt>');
-		expect(accountsSource).toContain('<span class="account-footer-meta">');
-		expect(accountsSource).toContain('<small>{formatSyncTime(account.lastSyncedAt)}</small>');
-		expect(accountsSource).toContain('.account-footer-meta small');
+		expect(accountsSource).toContain('class="account-sync-time"');
+		expect(accountsSource).toContain('{formatSyncTime(account.lastSyncedAt)}</span');
+		expect(accountsSource).toContain("account.source === 'manual' || account.status !== 'active'");
+		expect(accountsSource).toContain('<span class="finance-pill source">Manual</span>');
+		expect(accountsSource).not.toContain("class:connected={account.source === 'connected'}");
+		expect(accountsSource).not.toContain('<small>{formatSyncTime(account.lastSyncedAt)}</small>');
+		expect(accountsSource).toContain('.account-sync-time {');
 	});
 
 	it('prioritizes automatic account updates over manual entry', () => {

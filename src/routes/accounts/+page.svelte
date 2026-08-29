@@ -1342,21 +1342,22 @@
 																</div>
 															</div>
 															<div class="account-pills">
-																<span
-																	class:connected={account.source === 'connected'}
-																	class="finance-pill source"
-																>
-																	{account.source === 'connected'
-																		? financialProviderName(account.connectionProvider)
-																		: 'Manual'}
-																</span>
-																<span
-																	class:good={account.status === 'active'}
-																	class:muted={account.status !== 'active'}
-																	class="finance-pill"
-																>
-																	{account.status}
-																</span>
+																{#if account.source === 'connected'}
+																	<span class="account-sync-time"
+																		>{formatSyncTime(account.lastSyncedAt)}</span
+																	>
+																{:else}
+																	<span class="finance-pill source">Manual</span>
+																{/if}
+																{#if account.source === 'manual' || account.status !== 'active'}
+																	<span
+																		class:good={account.status === 'active'}
+																		class:muted={account.status !== 'active'}
+																		class="finance-pill"
+																	>
+																		{account.status}
+																	</span>
+																{/if}
 																{#if account.hidden}
 																	<span class="finance-pill muted">Hidden</span>
 																{/if}
@@ -1724,16 +1725,11 @@
 														{/if}
 														<footer>
 															<span class="account-footer-meta">
-																<span>
-																	{account.hidden
-																		? 'Excluded from totals'
-																		: account.source === 'connected'
-																			? 'Automatic balance'
-																			: 'Manual balance'}
-																</span>
-																{#if account.source === 'connected'}
-																	<small>{formatSyncTime(account.lastSyncedAt)}</small>
-																{/if}
+																{account.hidden
+																	? 'Excluded from totals'
+																	: account.source === 'connected'
+																		? 'Automatic balance'
+																		: 'Manual balance'}
 															</span>
 															<div>
 																<button type="button" onclick={() => openEdit(account)}>
@@ -2558,7 +2554,17 @@
 	}
 
 	.account-pills {
+		flex: 0 0 auto;
 		justify-content: flex-end;
+	}
+
+	.account-sync-time {
+		color: var(--faint);
+		font-size: 0.56rem;
+		font-weight: 560;
+		line-height: 1.35;
+		text-align: right;
+		white-space: nowrap;
 	}
 
 	.finance-pill.source {
@@ -2566,33 +2572,14 @@
 		background: var(--paper-soft);
 	}
 
-	.finance-pill.source.connected {
-		color: var(--accent-dark);
-		background: var(--accent-soft);
-	}
-
 	.finance-card footer {
 		justify-content: space-between;
 	}
 
 	.finance-card footer > .account-footer-meta {
-		display: flex;
-		gap: 0.35rem;
-		align-items: baseline;
-		flex-wrap: wrap;
 		color: var(--faint);
 		font-size: 0.6rem;
 		font-weight: 680;
-	}
-
-	.account-footer-meta small {
-		font-size: 0.54rem;
-		font-weight: 520;
-	}
-
-	.account-footer-meta small::before {
-		margin-right: 0.35rem;
-		content: '·';
 	}
 
 	.finance-card footer button:disabled {
