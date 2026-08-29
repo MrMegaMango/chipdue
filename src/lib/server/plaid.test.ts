@@ -388,6 +388,56 @@ describe.sequential('Plaid transaction history', () => {
 		]);
 	});
 
+	it('uses installation credentials as the original Team fallback for legacy connections', async () => {
+		plaidMocks.institutionsGet.mockResolvedValue({ data: { institutions: [] } });
+		plaidMocks.linkTokenCreate.mockResolvedValue({
+			data: { link_token: 'test-link-value', expiration: '2026-08-28T00:00:00.000Z' }
+		});
+		const legacyConnectionId = await savePlaidItem(
+			'provider-item-without-team-snapshot',
+			'legacy-access-token',
+			'Legacy Bank'
+		);
+		await configurePersonalPlaid('new-client-id', 'new-production-secret');
+		getDatabase().prepare(`DELETE FROM metadata WHERE key LIKE 'plaid_item_config_v1:%'`).run();
+
+		expect(await plaidConfigurationStatus()).toEqual(
+			expect.objectContaining({ alternatingTeams: true, nextConnectionTeam: 'current' })
+		);
+		plaidMocks.clientCalls.length = 0;
+		await createPlaidUpdateToken(legacyConnectionId);
+		await createPlaidLinkToken();
+
+		plaidMocks.itemPublicTokenExchange.mockResolvedValueOnce({
+			data: { item_id: 'provider-item-new-team', access_token: 'new-access-token' }
+		});
+		await exchangePlaidPublicToken('new-public-token', 'New Team Bank');
+		await createPlaidLinkToken();
+
+		expect(plaidMocks.clientCalls).toEqual([
+			{
+				method: 'linkTokenCreate',
+				clientId: 'example-client-value',
+				secret: 'example-secret-value'
+			},
+			{
+				method: 'linkTokenCreate',
+				clientId: 'new-client-id',
+				secret: 'new-production-secret'
+			},
+			{
+				method: 'itemPublicTokenExchange',
+				clientId: 'new-client-id',
+				secret: 'new-production-secret'
+			},
+			{
+				method: 'linkTokenCreate',
+				clientId: 'example-client-value',
+				secret: 'example-secret-value'
+			}
+		]);
+	});
+
 	it('pins pre-upgrade Items to the original Plaid team before switching', async () => {
 		plaidMocks.institutionsGet.mockResolvedValue({ data: { institutions: [] } });
 		plaidMocks.linkTokenCreate.mockResolvedValue({

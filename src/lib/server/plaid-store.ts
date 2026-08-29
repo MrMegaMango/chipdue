@@ -177,7 +177,10 @@ async function listItemIdentityRows(): Promise<PlaidItemIdentityRow[]> {
 				.all() as PlaidItemIdentityRow[]);
 }
 
-async function listItemConfigurations(): Promise<PlaidClientConfiguration[]> {
+async function itemConfigurationSummary(): Promise<{
+	configurations: PlaidClientConfiguration[];
+	itemCount: number;
+}> {
 	const tenantId = currentTenantId();
 	const rows = (await listItemIdentityRows()).filter((row) =>
 		plaidItemBelongsToCurrentTenant(row.item_ref)
@@ -191,7 +194,7 @@ async function listItemConfigurations(): Promise<PlaidClientConfiguration[]> {
 			distinct.set(configuration.clientId, configuration);
 		}
 	}
-	return [...distinct.values()];
+	return { configurations: [...distinct.values()], itemCount: rows.length };
 }
 
 async function readNextPlaidClientId(): Promise<string | null> {
@@ -260,11 +263,15 @@ export interface PlaidLinkRouting {
 }
 
 export async function getPlaidLinkRouting(
-	current: PlaidClientConfiguration
+	current: PlaidClientConfiguration,
+	fallbackOriginal: PlaidClientConfiguration | null = null
 ): Promise<PlaidLinkRouting> {
-	const original = (await listItemConfigurations()).find(
-		(configuration) => configuration.clientId !== current.clientId
-	);
+	const summary = await itemConfigurationSummary();
+	const original =
+		summary.configurations.find((configuration) => configuration.clientId !== current.clientId) ??
+		(summary.itemCount > 0 && fallbackOriginal?.clientId !== current.clientId
+			? fallbackOriginal
+			: null);
 	if (!original) {
 		return { configuration: current, alternating: false, nextTeam: 'current' };
 	}
@@ -280,11 +287,15 @@ export async function getPlaidLinkRouting(
 
 export async function advancePlaidLinkAlternation(
 	current: PlaidClientConfiguration,
-	used: PlaidClientConfiguration
+	used: PlaidClientConfiguration,
+	fallbackOriginal: PlaidClientConfiguration | null = null
 ): Promise<void> {
-	const original = (await listItemConfigurations()).find(
-		(configuration) => configuration.clientId !== current.clientId
-	);
+	const summary = await itemConfigurationSummary();
+	const original =
+		summary.configurations.find((configuration) => configuration.clientId !== current.clientId) ??
+		(summary.itemCount > 0 && fallbackOriginal?.clientId !== current.clientId
+			? fallbackOriginal
+			: null);
 	if (!original) {
 		await resetPlaidLinkAlternation();
 		return;

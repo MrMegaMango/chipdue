@@ -74,7 +74,7 @@ async function readPersonalConfiguration(tenantId: string): Promise<PlaidConfigu
 	return row ? parseStoredConfiguration(row.value, tenantId) : null;
 }
 
-function installationConfiguration(): PlaidConfiguration | null {
+export function getInstallationPlaidConfiguration(): PlaidConfiguration | null {
 	const clientId = process.env.PLAID_CLIENT_ID?.trim();
 	const secret = process.env.PLAID_SECRET?.trim();
 	const environmentValue = process.env.PLAID_ENV?.trim().toLowerCase() || 'sandbox';
@@ -92,7 +92,7 @@ function installationConfiguration(): PlaidConfiguration | null {
 
 export function isInstallationPlaidConfigured(): boolean {
 	try {
-		return installationConfiguration() !== null;
+		return getInstallationPlaidConfiguration() !== null;
 	} catch {
 		return false;
 	}
@@ -102,7 +102,7 @@ export async function getPlaidConfiguration(): Promise<PlaidConfiguration | null
 	const tenantId = currentTenantId();
 	const personal = await readPersonalConfiguration(tenantId);
 	if (personal) return personal;
-	return tenantId === LEGACY_TENANT_ID ? installationConfiguration() : null;
+	return tenantId === LEGACY_TENANT_ID ? getInstallationPlaidConfiguration() : null;
 }
 
 export async function requirePlaidConfiguration(): Promise<PlaidConfiguration> {

@@ -47,6 +47,7 @@ import {
 } from './plaid-store';
 import {
 	getPlaidConfiguration,
+	getInstallationPlaidConfiguration,
 	isInstallationPlaidConfigured,
 	requirePlaidConfiguration,
 	savePersonalPlaidConfiguration,
@@ -73,7 +74,9 @@ export async function plaidConfigurationStatus(): Promise<{
 	nextConnectionTeam: 'current' | 'original' | null;
 }> {
 	const config = await getPlaidConfiguration();
-	const routing = config ? await getPlaidLinkRouting(config) : null;
+	const routing = config
+		? await getPlaidLinkRouting(config, installationFallbackForCurrentTenant())
+		: null;
 	return {
 		configured: config !== null,
 		source: config?.source ?? null,
@@ -103,10 +106,21 @@ function clientForConfiguration(config: PlaidClientConfiguration): PlaidApi {
 	return client;
 }
 
+function installationFallbackForCurrentTenant(): PlaidConfiguration | null {
+	return currentTenantId() === LEGACY_TENANT_ID ? getInstallationPlaidConfiguration() : null;
+}
+
 async function getPlaidClientForItem(
 	item: Awaited<ReturnType<typeof getPrivatePlaidItem>>
 ): Promise<PlaidApi> {
-	return clientForConfiguration(item.configuration ?? (await requirePlaidConfiguration()));
+	if (item.configuration) return clientForConfiguration(item.configuration);
+	const current = await requirePlaidConfiguration();
+	const installation = installationFallbackForCurrentTenant();
+	return clientForConfiguration(
+		current.source === 'personal' && installation && installation.clientId !== current.clientId
+			? installation
+			: current
+	);
 }
 
 function plaidErrorCode(error: unknown): string | null {
@@ -160,7 +174,10 @@ export async function createPlaidLinkToken(): Promise<{
 	expiration: string;
 	team: 'current' | 'original';
 }> {
-	const routing = await getPlaidLinkRouting(await requirePlaidConfiguration());
+	const routing = await getPlaidLinkRouting(
+		await requirePlaidConfiguration(),
+		installationFallbackForCurrentTenant()
+	);
 	const client = clientForConfiguration(routing.configuration);
 	const request = {
 		...(await baseLinkTokenRequest()),
@@ -278,7 +295,8 @@ export async function exchangePlaidPublicToken(
 	institutionName: string | null
 ): Promise<{ connection: FinancialConnection; synced: boolean }> {
 	const current = await requirePlaidConfiguration();
-	const routing = await getPlaidLinkRouting(current);
+	const installation = installationFallbackForCurrentTenant();
+	const routing = await getPlaidLinkRouting(current, installation);
 	const configuration = routing.configuration;
 	const client = clientForConfiguration(configuration);
 	let itemId: string;
@@ -293,7 +311,7 @@ export async function exchangePlaidPublicToken(
 	}
 
 	const localItemId = await savePlaidItem(itemId, accessToken, institutionName, configuration);
-	await advancePlaidLinkAlternation(current, configuration);
+	await advancePlaidLinkAlternation(current, configuration, installation);
 	return { connection: await publicPlaidConnection(localItemId), synced: false };
 }
 
