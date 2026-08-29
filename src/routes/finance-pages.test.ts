@@ -80,6 +80,13 @@ describe('financial workspace navigation', () => {
 		expect(etradeSource).toContain('placing, changing, or cancelling trades');
 	});
 
+	it('builds estimated history for Plaid-connected brokerages such as Chase', () => {
+		expect(accountsSource).toContain('loadPlaidEstimatedHistories');
+		expect(accountsSource).toContain('Estimated portfolio history');
+		expect(accountsSource).toContain('Sync activity first');
+		expect(accountsSource).toContain('financialProviderName(account.connectionProvider)');
+	});
+
 	it('explains cash sweeps without presenting them as stock sales or gains', () => {
 		expect(accountsSource).toContain("return action === 'used' ? 'Cash used'");
 		expect(accountsSource).toContain('Paid from QACDS for a purchase or withdrawal');

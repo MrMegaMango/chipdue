@@ -172,8 +172,8 @@ export interface BrokerageOrdersResponse {
 }
 
 export interface BrokerageHistoryEstimateResponse {
-	availability: BrokerageOrdersAvailability;
-	provider: 'etrade';
+	availability: BrokerageOrdersAvailability | 'activity_required';
+	provider: 'etrade' | 'plaid';
 	account: FinancialAccount | null;
 	estimatedPointCount: number;
 	startDate: string | null;

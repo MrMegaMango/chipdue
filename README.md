@@ -1,6 +1,6 @@
 # ChipDue
 
-ChipDue is a privacy-first financial workspace for tracking bank and brokerage accounts, signup bonuses, investment performance, credit-card payments, and the deadlines that connect them. Optional financial-data connections can automatically sync eligible accounts, while manual entry remains available for every institution and bonus detail. Plaid handles account sync and the official E*TRADE API can add read-only open orders and inputs for estimated history; neither is required.
+ChipDue is a privacy-first financial workspace for tracking bank and brokerage accounts, signup bonuses, investment performance, credit-card payments, and the deadlines that connect them. Optional financial-data connections can automatically sync eligible accounts, while manual entry remains available for every institution and bonus detail. Plaid handles account sync and can provide inputs for estimated brokerage history; the official E*TRADE API can add read-only open orders and alternate reconstruction inputs. Neither is required.
 
 Choose one of two deployment modes:
 
@@ -16,7 +16,8 @@ Choose one of two deployment modes:
 - Automatically refresh eligible bank and brokerage balances through an installed financial-data provider.
 - See each brokerage account's value over time and separate net contributions from investment return, with every saved balance or successful sync extending its private history.
 - See each connected brokerage position, share count, current institution price, value, and holding cost basis while keeping simple account-level performance.
-- Load current E*TRADE open orders and build clearly labeled estimated daily portfolio history from positions, activity, and public market closes without enabling trade placement, changes, or cancellation.
+- Build clearly labeled estimated daily history for Plaid-connected brokerage accounts—including Chase Self-Directed—from current holdings, up to 24 months of investment activity, and public market closes.
+- Load current E*TRADE open orders and use E*TRADE positions and activity as alternate reconstruction inputs without enabling trade placement, changes, or cancellation.
 - Track statement balance, minimum due, current balance, due date, statement date, and autopay status.
 - Automatically identify supported linked cards from provider metadata, populate their reward type, base earning rate, and bonus categories, and show estimated points, miles, or cash back beside eligible transactions. Manual overrides remain available for unmatched cards.
 - Create isolated cloud accounts with Google sign-in without storing an email, profile, Google token, or refresh token.
@@ -59,7 +60,7 @@ Cards, accounts, bonuses, and transactions
    Plaid sync adapter        E*TRADE read-only adapter
 ```
 
-Cards and accounts record whether they are `manual` or `connected` and, for connected records, which provider supplied them. User-facing sync APIs live under `/api/connections`; the older `/api/plaid` endpoints remain as compatibility aliases. The separate E*TRADE adapter supplements a Plaid-synced E*TRADE brokerage account with live open orders and reconstruction inputs by matching the account's last four characters. Plaid remains the source of current displayed balances and holdings.
+Cards and accounts record whether they are `manual` or `connected` and, for connected records, which provider supplied them. User-facing sync APIs live under `/api/connections`; the older `/api/plaid` endpoints remain as compatibility aliases. Plaid holdings and investment activity can reconstruct estimated history for its connected brokerage accounts. The separate E*TRADE adapter supplements a Plaid-synced E*TRADE brokerage account with live open orders and alternate reconstruction inputs by matching the account's last four characters. Plaid remains the source of current displayed balances and holdings.
 
 The deployed database retains its older Plaid-named columns for compatibility with encrypted records and cryptographic identifiers. Those names are isolated in the storage bridge until a coordinated database migration can safely rename them. Plaid and E*TRADE remain optional: an installation without provider credentials continues to work in manual mode at no provider cost.
 
@@ -71,7 +72,7 @@ Cloud encryption protects against a database-only disclosure. It is not zero-kno
 - npm
 - Git
 - Optional account sync: a Plaid account
-- Optional open orders and estimated history: an E*TRADE developer account with a live individual key
+- Optional E*TRADE open orders and E*TRADE-sourced estimates: an E*TRADE developer account with a live individual key
 - Optional cloud hosting: personal Vercel and Neon accounts
 - Optional Google sign-in: a Google Cloud project and Web OAuth client
 

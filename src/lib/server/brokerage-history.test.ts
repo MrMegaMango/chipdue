@@ -40,7 +40,7 @@ describe('brokerage history reconstruction', () => {
 			0,
 			[
 				{
-					date: '2026-08-28',
+					date: '2026-08-29',
 					amount: -100,
 					transactionType: 'Bought',
 					symbol: 'SYN',

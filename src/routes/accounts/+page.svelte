@@ -215,7 +215,8 @@
 				.filter((accountId): accountId is string => Boolean(accountId));
 			await Promise.all([
 				loadAccountActivities(accountResponse.accounts),
-				loadBrokerageOrders(accountResponse.accounts)
+				loadBrokerageOrders(accountResponse.accounts),
+				loadPlaidEstimatedHistories(accountResponse.accounts)
 			]);
 		} catch (error) {
 			pageError = readableError(error, 'Your accounts could not be loaded.');
@@ -633,12 +634,31 @@
 		);
 	}
 
+	async function loadPlaidEstimatedHistories(
+		loadedAccounts: FinancialAccount[],
+		refreshExisting = false
+	): Promise<void> {
+		const eligibleAccounts = loadedAccounts.filter(
+			(account) =>
+				account.source === 'connected' &&
+				account.connectionProvider === 'plaid' &&
+				account.accountType === 'brokerage' &&
+				!isEtradeBrokerage(account) &&
+				account.transactionHistoryEnabled &&
+				(refreshExisting || !account.balanceHistory.some((point) => point.source === 'estimated'))
+		);
+		await Promise.all(eligibleAccounts.map((account) => buildEstimatedHistory(account, true)));
+	}
+
 	async function buildEstimatedHistory(account: FinancialAccount, silent = false): Promise<void> {
 		if (historyEstimateLoadingByAccount[account.id]) return;
 		historyEstimateLoadingByAccount = { ...historyEstimateLoadingByAccount, [account.id]: true };
 		historyEstimateErrorByAccount = { ...historyEstimateErrorByAccount, [account.id]: '' };
 		historyEstimateNoteByAccount = { ...historyEstimateNoteByAccount, [account.id]: '' };
 		try {
+			const providerName = isEtradeBrokerage(account)
+				? 'E*TRADE'
+				: financialProviderName(account.connectionProvider);
 			const response = await requestJson<BrokerageHistoryEstimateResponse>(
 				resolve('/api/accounts/[id]/estimated-history', { id: account.id }),
 				{ method: 'POST' }
@@ -647,7 +667,9 @@
 				throw new Error(
 					response.availability === 'authorization_required'
 						? 'Reconnect E*TRADE for today before building history.'
-						: 'E*TRADE history is not available for this account.'
+						: response.availability === 'activity_required'
+							? `Sync ${providerName} investment activity before building history.`
+							: `${providerName} history is not available for this account.`
 				);
 			}
 			accounts = accounts.map((item) => (item.id === account.id ? response.account! : item));
@@ -659,7 +681,7 @@
 			}
 			if (!silent) {
 				showToast(
-					`Built ${response.estimatedPointCount} estimated daily portfolio values from E*TRADE activity.`
+					`Built ${response.estimatedPointCount} estimated daily portfolio values from ${providerName} activity.`
 				);
 			}
 		} catch (error) {
@@ -674,12 +696,13 @@
 		}
 	}
 
-	async function reloadAccounts(): Promise<void> {
+	async function reloadAccounts(refreshPlaidEstimates = false): Promise<void> {
 		const response = await requestJson<{ accounts: FinancialAccount[] }>(resolve('/api/accounts'));
 		accounts = response.accounts;
 		await Promise.all([
 			loadAccountActivities(response.accounts),
-			loadBrokerageOrders(response.accounts)
+			loadBrokerageOrders(response.accounts),
+			loadPlaidEstimatedHistories(response.accounts, refreshPlaidEstimates)
 		]);
 	}
 
@@ -695,7 +718,7 @@
 					})
 				)
 			);
-			await reloadAccounts();
+			await reloadAccounts(true);
 			showToast('Connected balances, holdings, and activity are up to date.');
 		} catch (error) {
 			pageError = readableError(error, 'Connected accounts could not be synced.');
@@ -1023,13 +1046,15 @@
 													points={account.balanceHistory}
 													netContributionsCents={account.netContributionsCents}
 												/>
-												{#if isEtradeBrokerage(account) && account.source === 'connected'}
+												{#if account.source === 'connected'}
 													<div class="history-estimate-action">
 														<div>
-															<strong>E*TRADE estimated history</strong>
+															<strong>Estimated portfolio history</strong>
 															<span
-																>Uses activity and daily market closes; it is not broker-reported
-																performance.</span
+																>Uses {isEtradeBrokerage(account)
+																	? 'E*TRADE'
+																	: financialProviderName(account.connectionProvider)} activity and daily
+																market closes; it is not broker-reported performance.</span
 															>
 															{#if historyEstimateErrorByAccount[account.id]}
 																<small class="error"
@@ -1039,7 +1064,9 @@
 																<small>{historyEstimateNoteByAccount[account.id]}</small>
 															{/if}
 														</div>
-														{#if ordersByAccount[account.id]?.availability === 'available'}
+														{#if !account.transactionHistoryEnabled && !isEtradeBrokerage(account)}
+															<span class="disabled-label">Sync activity first</span>
+														{:else if !isEtradeBrokerage(account) || ordersByAccount[account.id]?.availability === 'available'}
 															<button
 																type="button"
 																disabled={historyEstimateLoadingByAccount[account.id]}
@@ -1826,6 +1853,16 @@
 		text-decoration: none;
 		background: var(--accent);
 		cursor: pointer;
+	}
+
+	.history-estimate-action .disabled-label {
+		flex: 0 0 auto;
+		padding: 0.34rem 0.48rem;
+		border: 1px solid var(--line);
+		border-radius: 7px;
+		font-size: 0.54rem;
+		font-weight: 700;
+		background: white;
 	}
 
 	.history-estimate-action button:disabled {

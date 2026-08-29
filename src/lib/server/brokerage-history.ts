@@ -1,5 +1,4 @@
 import type { AccountBalanceHistoryPoint, FinancialAccount } from '$lib/types';
-import type { EtradePosition, EtradeTransaction } from './etrade';
 import type { HistoricalCloseSeries } from './market-history';
 
 const CASH_SECURITY = /cash|money.?market/i;
@@ -10,7 +9,23 @@ export interface BrokerageHistoryEstimate {
 	unpricedSymbols: string[];
 }
 
-function transactionShareDelta(transaction: EtradeTransaction): number {
+export interface BrokeragePositionInput {
+	symbol: string;
+	securityType: string;
+	quantity: number;
+	marketValue: number;
+}
+
+export interface BrokerageTransactionInput {
+	date: string;
+	amount: number;
+	transactionType: string;
+	symbol: string | null;
+	securityType: string;
+	quantity: number;
+}
+
+function transactionShareDelta(transaction: BrokerageTransactionInput): number {
 	if (
 		!transaction.symbol ||
 		!transaction.quantity ||
@@ -23,7 +38,7 @@ function transactionShareDelta(transaction: EtradeTransaction): number {
 	return 0;
 }
 
-function isExternalCashFlow(transaction: EtradeTransaction): boolean {
+function isExternalCashFlow(transaction: BrokerageTransactionInput): boolean {
 	return /deposit|withdraw|transfer|wire|ach|contribution|distribution/.test(
 		transaction.transactionType.toLowerCase()
 	);
@@ -36,9 +51,9 @@ function cents(value: number): number {
 
 export function reconstructBrokerageHistory(
 	account: FinancialAccount,
-	positions: EtradePosition[],
+	positions: BrokeragePositionInput[],
 	cashBalance: number,
-	transactions: EtradeTransaction[],
+	transactions: BrokerageTransactionInput[],
 	series: HistoricalCloseSeries[],
 	startDate: string,
 	endDate: string
@@ -68,7 +83,7 @@ export function reconstructBrokerageHistory(
 		quantities.set(position.symbol.toUpperCase(), position.quantity);
 	}
 	const relevantTransactions = transactions
-		.filter((transaction) => transaction.date >= startDate && transaction.date <= endDate)
+		.filter((transaction) => transaction.date >= startDate)
 		.slice()
 		.sort((left, right) => right.date.localeCompare(left.date));
 	for (const transaction of relevantTransactions) {

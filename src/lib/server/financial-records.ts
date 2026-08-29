@@ -824,7 +824,7 @@ export async function listFinancialAccountTransactions(
 	status: TransactionHistoryStatus;
 	lastSyncedAt: string | null;
 }> {
-	if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+	if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10_000) {
 		throw new AppError('INVALID_REQUEST', 'The request is invalid.', 400);
 	}
 	const row = await getRow(accountId);
