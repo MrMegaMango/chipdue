@@ -6,6 +6,8 @@
 	import { financialProviderName } from '$lib/financial-data';
 	import { cashSweepAction, isCashSweepSecurity } from '$lib/investment-display';
 	import type {
+		BrokerageOrder,
+		BrokerageOrdersResponse,
 		FinancialConnection,
 		FinancialAccount,
 		FinancialAccountOwner,
@@ -81,6 +83,9 @@
 	let activityLoadingByAccount = $state<Record<string, boolean>>({});
 	let activityErrorByAccount = $state<Record<string, boolean>>({});
 	let expandedActivityAccountIds = $state<string[]>([]);
+	let ordersByAccount = $state<Record<string, BrokerageOrdersResponse>>({});
+	let ordersLoadingByAccount = $state<Record<string, boolean>>({});
+	let ordersErrorByAccount = $state<Record<string, boolean>>({});
 	let syncing = $state(false);
 	let toast = $state('');
 	let toastError = $state(false);
@@ -191,7 +196,10 @@
 			trackedBonusAccountIds = bonusResponse.bonuses
 				.map((bonus) => bonus.accountId)
 				.filter((accountId): accountId is string => Boolean(accountId));
-			await loadAccountActivities(accountResponse.accounts);
+			await Promise.all([
+				loadAccountActivities(accountResponse.accounts),
+				loadBrokerageOrders(accountResponse.accounts)
+			]);
 		} catch (error) {
 			pageError = readableError(error, 'Your accounts could not be loaded.');
 		} finally {
@@ -300,6 +308,32 @@
 			.filter(Boolean)
 			.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
 			.join(' ');
+	}
+
+	function orderActionLabel(order: BrokerageOrder): string {
+		const action = titleCase(order.action);
+		return `${action} ${formatQuantity(order.quantity)}`;
+	}
+
+	function orderPriceLabel(order: BrokerageOrder): string {
+		const limit = order.limitPriceMicros
+			? formatHoldingMoney(order.limitPriceMicros / 1_000_000, 'USD', 4)
+			: null;
+		const stop = order.stopPriceMicros
+			? formatHoldingMoney(order.stopPriceMicros / 1_000_000, 'USD', 4)
+			: null;
+		if (limit && stop) return `${stop} stop · ${limit} limit`;
+		if (limit) return `${limit} limit`;
+		if (stop) return `${stop} stop`;
+		return titleCase(order.priceType);
+	}
+
+	function orderDetailLabel(order: BrokerageOrder): string {
+		const parts = [titleCase(order.term), titleCase(order.marketSession)];
+		if (order.filledQuantity > 0) {
+			parts.unshift(`${formatQuantity(order.filledQuantity)} filled`);
+		}
+		return parts.join(' · ');
 	}
 
 	function activityDetail(transaction: FinancialAccountTransaction): string {
@@ -537,10 +571,45 @@
 		);
 	}
 
+	function isEtradeBrokerage(account: FinancialAccount): boolean {
+		return (
+			account.accountType === 'brokerage' &&
+			/(?:^|\b)e\s*\*?\s*trade(?:\b|$)/i.test(account.institution ?? '')
+		);
+	}
+
+	async function loadBrokerageOrders(loadedAccounts: FinancialAccount[]): Promise<void> {
+		const eligibleAccounts = loadedAccounts.filter(
+			(account) => account.source === 'connected' && isEtradeBrokerage(account)
+		);
+		ordersByAccount = {};
+		ordersErrorByAccount = {};
+		ordersLoadingByAccount = Object.fromEntries(
+			eligibleAccounts.map((account) => [account.id, true])
+		);
+		await Promise.all(
+			eligibleAccounts.map(async (account) => {
+				try {
+					const response = await requestJson<BrokerageOrdersResponse>(
+						resolve('/api/accounts/[id]/orders', { id: account.id })
+					);
+					ordersByAccount = { ...ordersByAccount, [account.id]: response };
+				} catch {
+					ordersErrorByAccount = { ...ordersErrorByAccount, [account.id]: true };
+				} finally {
+					ordersLoadingByAccount = { ...ordersLoadingByAccount, [account.id]: false };
+				}
+			})
+		);
+	}
+
 	async function reloadAccounts(): Promise<void> {
 		const response = await requestJson<{ accounts: FinancialAccount[] }>(resolve('/api/accounts'));
 		accounts = response.accounts;
-		await loadAccountActivities(response.accounts);
+		await Promise.all([
+			loadAccountActivities(response.accounts),
+			loadBrokerageOrders(response.accounts)
+		]);
 	}
 
 	async function syncConnectedAccounts(): Promise<void> {
@@ -674,6 +743,7 @@
 				</p>
 			</div>
 			<div class="account-toolbar-actions">
+				<a class="finance-button secondary" href={resolve('/etrade')}>E*TRADE orders</a>
 				{#if plaidConfigured}
 					<a
 						class="finance-button secondary"
@@ -1037,12 +1107,61 @@
 													>
 														<div class="account-detail-heading">
 															<h4>Open orders</h4>
-															<span>Not available</span>
+															<span>
+																{isEtradeBrokerage(account)
+																	? ordersLoadingByAccount[account.id]
+																		? 'Checking E*TRADE…'
+																		: ordersByAccount[account.id]?.availability === 'available'
+																			? `${ordersByAccount[account.id].orders.length} open`
+																			: 'E*TRADE setup needed'
+																	: 'Not available'}
+															</span>
 														</div>
-														<p>
-															Plaid does not provide open-order data. Check your brokerage before
-															placing or changing a trade.
-														</p>
+														{#if !isEtradeBrokerage(account)}
+															<p>
+																Plaid does not provide open-order data. Check your brokerage before
+																placing or changing a trade.
+															</p>
+														{:else if ordersLoadingByAccount[account.id]}
+															<p aria-busy="true">Loading open orders from E*TRADE…</p>
+														{:else if ordersErrorByAccount[account.id]}
+															<p>
+																E*TRADE orders are temporarily unavailable. Verify them at the
+																brokerage before trading.
+															</p>
+														{:else if ordersByAccount[account.id]?.availability === 'available'}
+															{#if ordersByAccount[account.id].orders.length > 0}
+																<ul class="open-order-list">
+																	{#each ordersByAccount[account.id].orders as order (order.id)}
+																		<li>
+																			<span class="open-order-security">
+																				<strong>{order.symbol}</strong>
+																				<small>{order.description ?? titleCase(order.status)}</small
+																				>
+																			</span>
+																			<span class="open-order-action">
+																				<strong>{orderActionLabel(order)}</strong>
+																				<small>{orderDetailLabel(order)}</small>
+																			</span>
+																			<strong class="open-order-price"
+																				>{orderPriceLabel(order)}</strong
+																			>
+																		</li>
+																	{/each}
+																</ul>
+															{:else}
+																<p>No open orders were reported by E*TRADE.</p>
+															{/if}
+														{:else}
+															<p>
+																{ordersByAccount[account.id]?.availability === 'account_not_found'
+																	? 'ChipDue could not match this account to E*TRADE. Make sure its last four characters are current.'
+																	: 'Connect E*TRADE for today to load open orders.'}
+																<a class="open-orders-link" href={resolve('/etrade')}
+																	>Manage E*TRADE access</a
+																>
+															</p>
+														{/if}
 													</section>
 												{/if}
 											{/if}
@@ -1497,6 +1616,62 @@
 		overflow: hidden;
 	}
 
+	.open-order-list {
+		margin: 0;
+		padding: 0;
+		border: 1px solid var(--line);
+		border-radius: 9px;
+		list-style: none;
+		overflow: hidden;
+	}
+
+	.open-order-list li {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(105px, auto) auto;
+		gap: 0.75rem;
+		align-items: center;
+		padding: 0.65rem 0.75rem;
+		font-size: 0.64rem;
+	}
+
+	.open-order-list li + li {
+		border-top: 1px solid var(--line);
+	}
+
+	.open-order-security,
+	.open-order-action {
+		display: grid;
+		gap: 0.13rem;
+		min-width: 0;
+	}
+
+	.open-order-security strong,
+	.open-order-action strong,
+	.open-order-price {
+		font-size: 0.66rem;
+	}
+
+	.open-order-security small,
+	.open-order-action small {
+		color: var(--faint);
+		font-size: 0.54rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.open-order-price {
+		text-align: right;
+		white-space: nowrap;
+	}
+
+	.open-orders-link {
+		display: inline-block;
+		margin-left: 0.25rem;
+		color: var(--accent-dark);
+		font-weight: 750;
+	}
+
 	.cash-sweep-explainer {
 		margin: 0 0 0.55rem;
 		padding: 0.65rem 0.75rem;
@@ -1720,6 +1895,20 @@
 			gap: 0.55rem;
 			padding-right: 0.6rem;
 			padding-left: 0.6rem;
+		}
+
+		.open-order-list li {
+			grid-template-columns: minmax(0, 1fr) auto;
+			gap: 0.45rem 0.75rem;
+		}
+
+		.open-order-action {
+			text-align: right;
+		}
+
+		.open-order-price {
+			grid-column: 1 / -1;
+			text-align: left;
 		}
 	}
 </style>

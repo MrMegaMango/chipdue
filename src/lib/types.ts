@@ -137,6 +137,33 @@ export interface InvestmentHolding {
 	priceAsOf: string | null;
 }
 
+export interface BrokerageOrder {
+	id: string;
+	provider: 'etrade';
+	symbol: string;
+	description: string | null;
+	action: string;
+	quantity: number;
+	filledQuantity: number;
+	status: string;
+	priceType: string;
+	limitPriceMicros: number | null;
+	stopPriceMicros: number | null;
+	term: string;
+	marketSession: string;
+	placedAt: string | null;
+}
+
+export type BrokerageOrdersAvailability =
+	'available' | 'not_configured' | 'authorization_required' | 'account_not_found';
+
+export interface BrokerageOrdersResponse {
+	availability: BrokerageOrdersAvailability;
+	provider: 'etrade';
+	orders: BrokerageOrder[];
+	refreshedAt: string | null;
+}
+
 export interface FinancialAccount {
 	id: string;
 	source: FinancialAccountSource;

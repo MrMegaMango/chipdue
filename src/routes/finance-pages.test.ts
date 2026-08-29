@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 const accountsSource = readFileSync(new URL('./accounts/+page.svelte', import.meta.url), 'utf8');
 const bonusesSource = readFileSync(new URL('./bonuses/+page.svelte', import.meta.url), 'utf8');
 const dashboardSource = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+const etradeSource = readFileSync(new URL('./etrade/+page.svelte', import.meta.url), 'utf8');
 
 describe('financial workspace navigation', () => {
 	it('makes accounts and bonuses first-class parts of the dashboard', () => {
@@ -37,6 +38,15 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain("resolve('/api/accounts/[id]/transactions'");
 		expect(accountsSource).toContain('<h4>Open orders</h4>');
 		expect(accountsSource).toContain('Plaid does not provide open-order data.');
+	});
+
+	it('adds a read-only official E*TRADE order connection', () => {
+		expect(accountsSource).toContain("resolve('/api/accounts/[id]/orders'");
+		expect(accountsSource).toContain('E*TRADE orders');
+		expect(etradeSource).toContain('Live consumer key');
+		expect(etradeSource).toContain('verification code');
+		expect(etradeSource).toContain('midnight Eastern');
+		expect(etradeSource).toContain('placing, changing, or cancelling trades');
 	});
 
 	it('explains cash sweeps without presenting them as stock sales or gains', () => {
@@ -86,7 +96,7 @@ describe('financial workspace navigation', () => {
 	});
 
 	it('keeps new financial data out of persistent browser storage', () => {
-		for (const source of [accountsSource, bonusesSource]) {
+		for (const source of [accountsSource, bonusesSource, etradeSource]) {
 			expect(source).not.toContain('localStorage');
 			expect(source).not.toContain('sessionStorage');
 			expect(source).not.toContain('indexedDB');

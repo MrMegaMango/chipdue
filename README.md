@@ -1,6 +1,6 @@
 # ChipDue
 
-ChipDue is a privacy-first financial workspace for tracking bank and brokerage accounts, signup bonuses, investment performance, credit-card payments, and the deadlines that connect them. Optional financial-data connections can automatically sync eligible accounts, while manual entry remains available for every institution and bonus detail. Plaid is the first connection adapter, not a required application dependency.
+ChipDue is a privacy-first financial workspace for tracking bank and brokerage accounts, signup bonuses, investment performance, credit-card payments, and the deadlines that connect them. Optional financial-data connections can automatically sync eligible accounts, while manual entry remains available for every institution and bonus detail. Plaid handles account sync and the official E*TRADE API can add read-only open orders; neither is required.
 
 Choose one of two deployment modes:
 
@@ -15,12 +15,13 @@ Choose one of two deployment modes:
 - Track signup bonuses from opening through requirements, qualification, payout, and safe-to-close dates.
 - Automatically refresh eligible bank and brokerage balances through an installed financial-data provider.
 - See each connected brokerage position, share count, current institution price, value, and holding cost basis while keeping simple account-level performance.
+- Load current E*TRADE open orders through E*TRADE's official read-only API without enabling trade placement, changes, or cancellation.
 - Track statement balance, minimum due, current balance, due date, statement date, and autopay status.
 - Automatically identify supported linked cards from provider metadata, populate their reward type, base earning rate, and bonus categories, and show estimated points, miles, or cash back beside eligible transactions. Manual overrides remain available for unmatched cards.
 - Create isolated cloud accounts with Google sign-in without storing an email, profile, Google token, or refresh token.
 - Let each cloud account encrypt and use its own Plaid Production credentials, so Plaid Items and plan allowances are not shared between users.
 - Connect Plaid only when you explicitly choose to; manual mode never contacts Plaid.
-- Encrypt account and bonus records, card payloads, transaction history, Plaid cursors, access tokens, Item IDs, and institution names with AES-256-GCM.
+- Encrypt account and bonus records, card payloads, transaction history, Plaid cursors, provider credentials and tokens, Item IDs, and institution names with AES-256-GCM.
 - Request Plaid Accounts, Investments, Liabilities, and up to 24 months of Transactions data—never identity or full account numbers.
 - Add due dates through Google Calendar event drafts without balances, amounts, or card numbers; keep an iCalendar download as a fallback.
 - Keep financial data out of browser persistence, logs, source code, CI, and Git history.
@@ -36,6 +37,7 @@ Private cloud mode
 Browser memory -> authenticated Vercel Function -> encrypted Neon Postgres rows
                                       |
                                       +-> Plaid, only when configured and used
+                                      +-> E*TRADE, only when configured and orders are viewed
                                       +-> Google, only during optional sign-in
 
 Git repository -> source code and synthetic tests only
@@ -50,23 +52,24 @@ Cards, accounts, bonuses, and transactions
                     |
          financial connection service
                     |
-         +----------+----------+
-         |                     |
-   Plaid adapter today    future adapters
+         +--------------+----------------+
+         |                               |
+   Plaid sync adapter        E*TRADE order adapter
 ```
 
-Cards and accounts record whether they are `manual` or `connected` and, for connected records, which provider supplied them. User-facing APIs live under `/api/connections`; the older `/api/plaid` sync endpoints remain as compatibility aliases. Adding another provider now requires an adapter rather than changes throughout the finance screens and domain model.
+Cards and accounts record whether they are `manual` or `connected` and, for connected records, which provider supplied them. User-facing sync APIs live under `/api/connections`; the older `/api/plaid` endpoints remain as compatibility aliases. The separate E*TRADE adapter supplements a Plaid-synced E*TRADE brokerage account with live open orders by matching the account's last four characters. It does not duplicate balances or holdings.
 
-The deployed database retains its older Plaid-named columns for compatibility with encrypted records and cryptographic identifiers. Those names are isolated in the storage bridge until a coordinated database migration can safely rename them. Plaid remains optional: an installation without Plaid credentials continues to work in manual mode at no provider cost.
+The deployed database retains its older Plaid-named columns for compatibility with encrypted records and cryptographic identifiers. Those names are isolated in the storage bridge until a coordinated database migration can safely rename them. Plaid and E*TRADE remain optional: an installation without provider credentials continues to work in manual mode at no provider cost.
 
-Cloud encryption protects against a database-only disclosure. It is not zero-knowledge encryption: the running Vercel Function has the key so it can sync Plaid and render your records after login. Read [PRIVACY.md](PRIVACY.md) and the [threat model](docs/THREAT_MODEL.md) before entering real data.
+Cloud encryption protects against a database-only disclosure. It is not zero-knowledge encryption: the running Vercel Function has the key so it can contact configured providers and render your records after login. Read [PRIVACY.md](PRIVACY.md) and the [threat model](docs/THREAT_MODEL.md) before entering real data.
 
 ## Requirements
 
 - Node.js 22 or newer
 - npm
 - Git
-- Optional local sync: a Plaid account
+- Optional account sync: a Plaid account
+- Optional open orders: an E*TRADE developer account with a live individual key
 - Optional cloud hosting: personal Vercel and Neon accounts
 - Optional Google sign-in: a Google Cloud project and Web OAuth client
 
@@ -157,6 +160,23 @@ Official references:
 - [Plaid Transactions](https://plaid.com/docs/transactions/)
 - [Plaid Link security flow](https://plaid.com/docs/link/)
 
+## Optional E*TRADE open orders
+
+E*TRADE is a narrow, read-only supplement to an E*TRADE brokerage account already synced through Plaid. It does not replace Plaid balances, holdings, or transactions.
+
+1. Obtain a live individual consumer key and secret from the E*TRADE Developer Platform.
+2. In ChipDue, open **E\*TRADE orders**, save the key and secret, and choose **Start authorization**.
+3. Approve access on E*TRADE's own site and paste the displayed verifier into ChipDue within five minutes.
+4. Reconnect after the access token expires at midnight Eastern. E*TRADE can also require renewal after two hours without an API request.
+
+ChipDue encrypts the key, secret, request-token secret, and access-token secret per account. It fetches only the E*TRADE account list and open orders, maps an account by its last four characters, returns allowlisted display fields, and keeps order results only in browser memory. The integration contains no endpoint or code path for placing, changing, previewing, or cancelling a trade.
+
+Official references:
+
+- [E*TRADE Developer Platform: getting started](https://developer.etrade.com/getting-started)
+- [E*TRADE authorization API](https://apisb.etrade.com/docs/api/authorization/request_token.html)
+- [E*TRADE order API](https://apisb.etrade.com/docs/api/order/api-order-v1.html)
+
 ## Where private data lives
 
 In local mode, ChipDue uses the platform application-data directory:
@@ -171,7 +191,7 @@ The same compatibility rule applies to `CARDDUE_*` environment variables, `cardd
 objects and runtime roles, host-only cookie names, calendar UID domains, and cryptographic context
 strings. Changing those identifiers in place could orphan encrypted data or invalidate live state.
 
-In cloud mode, Neon stores encrypted application rows plus non-sensitive operational metadata, account ownership references, keyed session/rate-limit identifiers, an opaque bootstrap claim state when used, keyed Google issuer-and-subject fingerprints, and encrypted per-account Plaid credentials. Vercel stores the database URL, encryption key, mode-specific authentication values, and Google client secret as sensitive Production environment variables. Keep generated recovery and temporary bootstrap bundles outside every Git checkout with owner-only permissions.
+In cloud mode, Neon stores encrypted application rows plus non-sensitive operational metadata, account ownership references, keyed session/rate-limit identifiers, an opaque bootstrap claim state when used, keyed Google issuer-and-subject fingerprints, and encrypted per-account Plaid and E*TRADE credentials. Vercel stores the database URL, encryption key, mode-specific authentication values, and Google client secret as sensitive Production environment variables. Keep generated recovery and temporary bootstrap bundles outside every Git checkout with owner-only permissions.
 
 The repository ignores common database, environment, export, log, trace, certificate, and backup formats as a second layer of protection. The privacy scanner rejects secrets, personal paths, card numbers, and likely private artifacts. Every Vercel build path uses a committed verified wrapper that refuses checkout environment files and fails if output contains a private-home directory, database, credential-like artifact, source map, private path, configured secret, compact token, or private-key material.
 
@@ -188,7 +208,7 @@ git config core.hooksPath .githooks
 npm run privacy:init
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), the [publishing checklist](docs/PUBLISHING.md), and [third-party notices](THIRD_PARTY_NOTICES.md). Never copy a live Plaid or Google response into a fixture, issue, pull request, screenshot, or log - even after attempting to redact it.
+See [CONTRIBUTING.md](CONTRIBUTING.md), the [publishing checklist](docs/PUBLISHING.md), and [third-party notices](THIRD_PARTY_NOTICES.md). Never copy a live Plaid, E*TRADE, or Google response into a fixture, issue, pull request, screenshot, or log - even after attempting to redact it.
 
 ## License
 
