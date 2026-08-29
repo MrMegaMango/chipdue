@@ -633,6 +633,7 @@ describe.sequential('Plaid transaction history', () => {
 		const [card] = await listCards();
 		expect(card).toMatchObject({
 			nickname: 'Credit Card - 2984',
+			providerProductName: 'U.S. BANK ALTITUDE GO VISA SIGNATURE',
 			rewardProgramName: 'U.S. Bank Altitude Rewards',
 			rewardType: 'points',
 			rewardBaseRate: 1,

@@ -216,6 +216,7 @@
 	type CardView = {
 		id: string;
 		nickname: string;
+		providerProductName: string | null;
 		issuer: string | null;
 		issuerLogoUrl: string | null;
 		last4: string | null;
@@ -654,7 +655,14 @@
 	}
 
 	function isGenericPlaidCardName(name: string): boolean {
-		return /^\s*(?:credit\s+card|visa|mastercard|american\s+express|card)\s*$/i.test(name);
+		return /^\s*(?:credit\s+card|visa|mastercard|american\s+express|card)(?:\s*(?:[-–—•·*]+\s*)*\d{4})?\s*$/i.test(
+			name
+		);
+	}
+
+	function specificProviderProductName(card: CardView): string | null {
+		const name = card.providerProductName?.trim();
+		return name && !isGenericPlaidCardName(name) ? name : null;
 	}
 
 	async function requestJson<T>(
@@ -3632,9 +3640,11 @@
 								? 'Identified automatically from the linked card. No setup is needed.'
 								: rewardsCard.rewardType
 									? 'Review the earning rules used for activity estimates.'
-									: isGenericPlaidCardName(rewardsCard.nickname)
-										? 'Plaid sent a generic card name. Choose the card once and ChipDue fills every rule.'
-										: 'ChipDue has the card name, but does not have a verified reward profile for it yet.'}
+									: specificProviderProductName(rewardsCard)
+										? `Plaid reported “${specificProviderProductName(rewardsCard)}”. ChipDue does not have a verified reward profile for it yet.`
+										: isGenericPlaidCardName(rewardsCard.nickname)
+											? 'Plaid sent a generic card name. Choose the card once and ChipDue fills every rule.'
+											: 'ChipDue has the card name, but does not have a verified reward profile for it yet.'}
 						</p>
 					</div>
 					<button
@@ -3737,9 +3747,11 @@
 						{:else}
 							<div class="reward-profile-missing">
 								<strong>
-									{isGenericPlaidCardName(rewardsCard.nickname)
-										? `Plaid only returned “${rewardsCard.nickname}”`
-										: `No verified profile for “${rewardsCard.nickname}” yet`}
+									{specificProviderProductName(rewardsCard)
+										? `Plaid reported “${specificProviderProductName(rewardsCard)}”`
+										: isGenericPlaidCardName(rewardsCard.nickname)
+											? `Plaid only returned “${rewardsCard.nickname}”`
+											: `No verified profile for “${rewardsCard.nickname}” yet`}
 								</strong>
 								<p>
 									Select the card once. Its program, multipliers, and categories fill automatically.

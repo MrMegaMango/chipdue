@@ -6,6 +6,7 @@ const card: Card = {
 	id: '67f7bfb3-cafb-4522-a151-38807138230a',
 	source: 'manual',
 	nickname: 'Daily, card',
+	providerProductName: null,
 	issuer: null,
 	issuerLogoUrl: null,
 	last4: '1234',

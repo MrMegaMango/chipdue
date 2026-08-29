@@ -71,6 +71,7 @@ interface NormalizedCardRewards {
 interface CardPayload {
 	tenantRef?: string;
 	nickname: string;
+	providerProductName?: string | null;
 	issuer: string | null;
 	issuerLogoBase64?: string | null;
 	last4: string | null;
@@ -426,6 +427,15 @@ function decodePayload(row: CardRow): CardPayload | null {
 		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
 	}
 	if (!payloadBelongsToCurrentTenant(payload)) return null;
+	if (
+		payload.providerProductName !== undefined &&
+		payload.providerProductName !== null &&
+		(typeof payload.providerProductName !== 'string' ||
+			payload.providerProductName.length === 0 ||
+			payload.providerProductName.length > 160)
+	) {
+		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
+	}
 	if (payload.transactionHistory !== undefined) {
 		const history = normalizeStoredTransactionHistory(payload.transactionHistory);
 		if (!history) {
@@ -450,6 +460,7 @@ function rowToCard(row: CardRow): Card | null {
 		id: row.id,
 		source: publicSourceForStoredSource(row.source),
 		nickname: payload.nickname,
+		providerProductName: payload.providerProductName ?? null,
 		issuer: payload.issuer,
 		issuerLogoUrl: payload.issuerLogoBase64
 			? `data:image/png;base64,${payload.issuerLogoBase64}`
@@ -595,7 +606,7 @@ function effectiveRewardsForPayload(payload: CardPayload): NormalizedCardRewards
 	const inferredProfile = matchAutomaticCardRewardProfile({
 		institutionName: payload.issuer,
 		accountName: payload.nickname,
-		officialName: null
+		officialName: payload.providerProductName ?? null
 	});
 	return inferredProfile ? normalizeStoredRewards(automaticStoredRewards(inferredProfile)) : stored;
 }
@@ -618,6 +629,7 @@ function snapshotPayload(
 	return {
 		...tenantPayloadFields(),
 		nickname: snapshot.nickname,
+		...(snapshot.providerProductName ? { providerProductName: snapshot.providerProductName } : {}),
 		issuer: snapshot.issuer,
 		...(snapshot.issuerLogoBase64 ? { issuerLogoBase64: snapshot.issuerLogoBase64 } : {}),
 		last4: snapshot.last4,

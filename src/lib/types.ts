@@ -24,6 +24,7 @@ export interface Card {
 	id: string;
 	source: CardSource;
 	nickname: string;
+	providerProductName: string | null;
 	issuer: string | null;
 	issuerLogoUrl: string | null;
 	last4: string | null;

@@ -737,6 +737,7 @@ export async function syncPlaidItem(
 				snapshots.push({
 					accountId: account.account_id,
 					nickname: account.name.trim().slice(0, 80) || 'Credit card',
+					providerProductName: officialName,
 					issuer: brand.name,
 					issuerLogoBase64: brand.logoBase64,
 					last4: safeLast4(account.mask),
