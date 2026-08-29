@@ -1,8 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import {
+	normalizeTransactionHistoryStatus,
+	type StoredTransactionHistoryStatus
+} from '$lib/financial-data';
 import type {
 	AccountBonus,
 	BonusRequirement,
+	FinancialDataProvider,
 	FinancialAccount,
 	FinancialAccountTransaction,
 	InvestmentHolding,
@@ -10,10 +15,19 @@ import type {
 } from '$lib/types';
 import type { StoredTransactionHistory } from './cards';
 import { cloudQuery, cloudTransaction, type CloudStatement } from './cloud-database';
-import { decryptJson, encryptJson, privateFingerprint, privateUuid } from './crypto';
+import { decryptJson, encryptJson } from './crypto';
 import { getDatabase } from './database';
 import { AppError } from './errors';
 import { getRuntimeMode } from './runtime';
+import {
+	providerAccountReference,
+	providerForStoredSource,
+	providerRecordId,
+	providerTransactionId,
+	publicSourceForStoredSource,
+	storedSourceForProvider,
+	type StoredRecordSource
+} from './provider-storage';
 import {
 	bonusStatusSchema,
 	financialAccountOwnerSchema,
@@ -28,7 +42,7 @@ import { payloadBelongsToCurrentTenant, tenantPayloadFields } from './tenant';
 
 interface PrivateRecordRow extends Record<string, unknown> {
 	id: string;
-	source: 'manual' | 'plaid';
+	source: StoredRecordSource;
 	plaid_item_id: string | null;
 	external_account_ref: string | null;
 	payload_enc: string;
@@ -37,13 +51,13 @@ interface PrivateRecordRow extends Record<string, unknown> {
 	updated_at: string;
 }
 
-interface PlaidAccountRow extends PrivateRecordRow {
+interface ConnectedAccountRow extends PrivateRecordRow {
 	source: 'plaid';
 	plaid_item_id: string;
 	external_account_ref: string;
 }
 
-export interface PlaidFinancialAccountSnapshot {
+export interface ConnectedFinancialAccountSnapshot {
 	accountId: string;
 	nickname: string;
 	institution: string | null;
@@ -73,12 +87,20 @@ const investmentHoldingSchema = z.object({
 	currency: z.string(),
 	priceAsOf: dateSchema
 });
-const transactionHistoryStatusSchema = z.enum([
-	'TRANSACTIONS_UPDATE_STATUS_UNKNOWN',
-	'NOT_READY',
-	'INITIAL_UPDATE_COMPLETE',
-	'HISTORICAL_UPDATE_COMPLETE'
-]);
+const transactionHistoryStatusSchema = z
+	.enum([
+		'unknown',
+		'preparing',
+		'current',
+		'historical_complete',
+		'TRANSACTIONS_UPDATE_STATUS_UNKNOWN',
+		'NOT_READY',
+		'INITIAL_UPDATE_COMPLETE',
+		'HISTORICAL_UPDATE_COMPLETE'
+	])
+	.transform((status) =>
+		normalizeTransactionHistoryStatus(status as StoredTransactionHistoryStatus)
+	);
 const storedTransactionSchema = z.object({
 	transactionId: z.string().min(1).max(256),
 	name: z.string().min(1).max(160),
@@ -176,7 +198,7 @@ function decodeRecord(row: PrivateRecordRow): PrivateRecordPayload | null {
 function rowToAccount(row: PrivateRecordRow, payload: AccountPayload): FinancialAccount {
 	return {
 		id: row.id,
-		source: row.source,
+		source: publicSourceForStoredSource(row.source),
 		nickname: payload.nickname,
 		institution: payload.institution,
 		accountType: payload.accountType,
@@ -192,7 +214,8 @@ function rowToAccount(row: PrivateRecordRow, payload: AccountPayload): Financial
 		transactionHistoryStatus: payload.transactionHistory?.status ?? null,
 		openedDate: payload.openedDate,
 		notes: payload.notes,
-		plaidConnectionId: row.source === 'plaid' ? row.plaid_item_id : null,
+		connectionId: row.source === 'manual' ? null : row.plaid_item_id,
+		connectionProvider: providerForStoredSource(row.source),
 		lastSyncedAt: row.last_synced_at,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at
@@ -349,7 +372,7 @@ export async function updateFinancialAccount(
 	}
 	const existing = rowToAccount(row, existingPayload);
 	if (
-		existing.source === 'plaid' &&
+		existing.source === 'connected' &&
 		(changes.institution !== undefined ||
 			changes.accountType !== undefined ||
 			changes.status !== undefined ||
@@ -358,8 +381,8 @@ export async function updateFinancialAccount(
 			changes.currentBalanceCents !== undefined)
 	) {
 		throw new AppError(
-			'PLAID_ACCOUNT_READ_ONLY',
-			'Synced account balances and bank details are updated through Plaid.',
+			'CONNECTED_ACCOUNT_READ_ONLY',
+			'Synced account balances and institution details are updated through its provider.',
 			409
 		);
 	}
@@ -390,9 +413,9 @@ export async function updateFinancialAccount(
 
 export async function deleteFinancialAccount(id: string): Promise<void> {
 	const existing = await getFinancialAccount(id);
-	if (existing.source === 'plaid') {
+	if (existing.source === 'connected') {
 		throw new AppError(
-			'PLAID_ACCOUNT_READ_ONLY',
+			'CONNECTED_ACCOUNT_READ_ONLY',
 			'Disconnect the institution to remove a synced account.',
 			409
 		);
@@ -400,8 +423,8 @@ export async function deleteFinancialAccount(id: string): Promise<void> {
 	await deleteRecord(id);
 }
 
-function plaidAccountPayload(
-	snapshot: PlaidFinancialAccountSnapshot,
+function connectedAccountPayload(
+	snapshot: ConnectedFinancialAccountSnapshot,
 	existing?: AccountPayload
 ): AccountPayload {
 	return {
@@ -425,29 +448,31 @@ function plaidAccountPayload(
 }
 
 function accountRows(rows: PrivateRecordRow[]): Array<{
-	row: PlaidAccountRow;
+	row: ConnectedAccountRow;
 	payload: AccountPayload;
 }> {
 	return rows.flatMap((row) => {
-		if (row.source !== 'plaid' || !row.plaid_item_id || !row.external_account_ref) {
+		if (row.source === 'manual' || !row.plaid_item_id || !row.external_account_ref) {
 			return [];
 		}
 		const payload = decodeRecord(row);
-		return payload?.recordType === 'account' ? [{ row: row as PlaidAccountRow, payload }] : [];
+		return payload?.recordType === 'account' ? [{ row: row as ConnectedAccountRow, payload }] : [];
 	});
 }
 
-async function replaceCloudPlaidAccounts(
-	plaidItemId: string,
-	snapshots: PlaidFinancialAccountSnapshot[],
+async function replaceCloudConnectedAccounts(
+	provider: FinancialDataProvider,
+	connectionId: string,
+	snapshots: ConnectedFinancialAccountSnapshot[],
 	syncedAt: string
 ): Promise<void> {
+	const storedSource = storedSourceForProvider(provider);
 	const existing = accountRows(
 		await cloudQuery<PrivateRecordRow>(
 			`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
 			        last_synced_at, created_at, updated_at
-			 FROM public.carddue_cards WHERE plaid_item_id = $1 AND source = 'plaid'`,
-			[plaidItemId]
+			 FROM public.carddue_cards WHERE plaid_item_id = $1 AND source = $2`,
+			[connectionId, storedSource]
 		)
 	);
 	const existingByReference = new Map(
@@ -457,40 +482,46 @@ async function replaceCloudPlaidAccounts(
 	const statements: CloudStatement[] = [];
 
 	for (const snapshot of snapshots) {
-		const reference = privateFingerprint(snapshot.accountId, 'plaid-financial-account');
+		const reference = providerAccountReference(provider, snapshot.accountId, 'account');
 		const current = existingByReference.get(reference);
-		const id = current?.row.id ?? privateUuid(snapshot.accountId, `plaid-account:${plaidItemId}`);
+		const id =
+			current?.row.id ?? providerRecordId(provider, snapshot.accountId, connectionId, 'account');
 		seenIds.add(id);
-		const encrypted = encryptJson(plaidAccountPayload(snapshot, current?.payload), `card:${id}`);
+		const encrypted = encryptJson(
+			connectedAccountPayload(snapshot, current?.payload),
+			`card:${id}`
+		);
 		statements.push({
 			text: `INSERT INTO public.carddue_cards
 			       (id, source, plaid_item_id, external_account_ref, payload_enc,
 			        last_synced_at, created_at, updated_at)
-			       VALUES ($1, 'plaid', $2, $3, $4, $5, $5, $5)
+			       VALUES ($1, $2, $3, $4, $5, $6, $6, $6)
 			       ON CONFLICT (plaid_item_id, external_account_ref) DO UPDATE SET
 			       payload_enc = EXCLUDED.payload_enc,
 			       last_synced_at = EXCLUDED.last_synced_at,
 			       updated_at = EXCLUDED.updated_at`,
-			params: [id, plaidItemId, reference, encrypted, syncedAt]
+			params: [id, storedSource, connectionId, reference, encrypted, syncedAt]
 		});
 	}
 
 	for (const { row } of existing) {
 		if (!seenIds.has(row.id)) {
 			statements.push({
-				text: `DELETE FROM public.carddue_cards WHERE id = $1 AND source = 'plaid'`,
-				params: [row.id]
+				text: `DELETE FROM public.carddue_cards WHERE id = $1 AND source = $2`,
+				params: [row.id, storedSource]
 			});
 		}
 	}
 	if (statements.length > 0) await cloudTransaction(statements);
 }
 
-function replaceLocalPlaidAccounts(
-	plaidItemId: string,
-	snapshots: PlaidFinancialAccountSnapshot[],
+function replaceLocalConnectedAccounts(
+	provider: FinancialDataProvider,
+	connectionId: string,
+	snapshots: ConnectedFinancialAccountSnapshot[],
 	syncedAt: string
 ): void {
+	const storedSource = storedSourceForProvider(provider);
 	const database = getDatabase();
 	const transaction = database.transaction(() => {
 		const existing = accountRows(
@@ -498,9 +529,9 @@ function replaceLocalPlaidAccounts(
 				.prepare(
 					`SELECT id, source, plaid_item_id, external_account_ref, payload_enc,
 					        last_synced_at, created_at, updated_at
-					 FROM cards WHERE plaid_item_id = ? AND source = 'plaid'`
+					 FROM cards WHERE plaid_item_id = ? AND source = ?`
 				)
-				.all(plaidItemId) as PrivateRecordRow[]
+				.all(connectionId, storedSource) as PrivateRecordRow[]
 		);
 		const existingByReference = new Map(
 			existing.map(({ row, payload }) => [row.external_account_ref, { row, payload }])
@@ -508,48 +539,52 @@ function replaceLocalPlaidAccounts(
 		const seenIds = new Set<string>();
 
 		for (const snapshot of snapshots) {
-			const reference = privateFingerprint(snapshot.accountId, 'plaid-financial-account');
+			const reference = providerAccountReference(provider, snapshot.accountId, 'account');
 			const current = existingByReference.get(reference);
 			const id = current?.row.id ?? randomUUID();
 			seenIds.add(id);
-			const encrypted = encryptJson(plaidAccountPayload(snapshot, current?.payload), `card:${id}`);
+			const encrypted = encryptJson(
+				connectedAccountPayload(snapshot, current?.payload),
+				`card:${id}`
+			);
 			if (current) {
 				database
 					.prepare(
 						`UPDATE cards SET payload_enc = ?, last_synced_at = ?, updated_at = ?
-						 WHERE id = ? AND source = 'plaid'`
+						 WHERE id = ? AND source = ?`
 					)
-					.run(encrypted, syncedAt, syncedAt, id);
+					.run(encrypted, syncedAt, syncedAt, id, storedSource);
 			} else {
 				database
 					.prepare(
 						`INSERT INTO cards
 						 (id, source, plaid_item_id, external_account_ref, payload_enc,
 						  last_synced_at, created_at, updated_at)
-						 VALUES (?, 'plaid', ?, ?, ?, ?, ?, ?)`
+						 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 					)
-					.run(id, plaidItemId, reference, encrypted, syncedAt, syncedAt, syncedAt);
+					.run(id, storedSource, connectionId, reference, encrypted, syncedAt, syncedAt, syncedAt);
 			}
 		}
 
 		for (const { row } of existing) {
 			if (!seenIds.has(row.id)) {
-				database.prepare(`DELETE FROM cards WHERE id = ? AND source = 'plaid'`).run(row.id);
+				database.prepare(`DELETE FROM cards WHERE id = ? AND source = ?`).run(row.id, storedSource);
 			}
 		}
 	});
 	transaction();
 }
 
-export async function replacePlaidFinancialAccounts(
-	plaidItemId: string,
-	snapshots: PlaidFinancialAccountSnapshot[],
+export async function replaceConnectedFinancialAccounts(
+	provider: FinancialDataProvider,
+	connectionId: string,
+	snapshots: ConnectedFinancialAccountSnapshot[],
 	syncedAt: string
 ): Promise<void> {
 	if (getRuntimeMode() === 'cloud') {
-		await replaceCloudPlaidAccounts(plaidItemId, snapshots, syncedAt);
+		await replaceCloudConnectedAccounts(provider, connectionId, snapshots, syncedAt);
 	} else {
-		replaceLocalPlaidAccounts(plaidItemId, snapshots, syncedAt);
+		replaceLocalConnectedAccounts(provider, connectionId, snapshots, syncedAt);
 	}
 }
 
@@ -569,7 +604,7 @@ export async function listFinancialAccountTransactions(
 	if (!row || payload?.recordType !== 'account') {
 		throw new AppError('ACCOUNT_NOT_FOUND', 'Account not found.', 404);
 	}
-	if (row.source !== 'plaid') {
+	if (row.source === 'manual') {
 		throw new AppError(
 			'TRANSACTION_HISTORY_UNAVAILABLE',
 			'Transaction history is available for linked accounts only.',
@@ -586,7 +621,11 @@ export async function listFinancialAccountTransactions(
 	}
 	const transactions = history.transactions
 		.map<FinancialAccountTransaction>((transaction) => ({
-			id: privateUuid(transaction.transactionId, `plaid-transaction:${accountId}`),
+			id: providerTransactionId(
+				providerForStoredSource(row.source)!,
+				transaction.transactionId,
+				accountId
+			),
 			name: transaction.name,
 			merchantName: transaction.merchantName,
 			amountCents: transaction.amountCents,

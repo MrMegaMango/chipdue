@@ -72,17 +72,23 @@ describe.sequential('cards API contract', () => {
 		rmSync(temporaryDirectory, { recursive: true, force: true });
 	});
 
-	it('returns cards and aggregate Plaid status without cacheable data', async () => {
+	it('returns cards and aggregate provider status without cacheable data', async () => {
 		const response = (await listCardsEndpoint({} as never)) as Response;
 		expect(response.status).toBe(200);
 		expect(response.headers.get('cache-control')).toContain('no-store');
 		expect(await response.json()).toEqual({
 			cards: [],
-			plaid: {
-				configured: false,
-				source: null,
-				environment: null,
-				connectedItems: 0,
+			connections: {
+				providers: [
+					{
+						provider: 'plaid',
+						displayName: 'Plaid',
+						configured: false,
+						connectionCount: 0,
+						lastSyncedAt: null
+					}
+				],
+				connected: 0,
 				lastSyncedAt: null
 			}
 		});

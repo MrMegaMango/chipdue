@@ -1,4 +1,6 @@
-export type CardSource = 'manual' | 'plaid';
+export type FinancialDataProvider = 'plaid';
+export type FinancialRecordSource = 'manual' | 'connected';
+export type CardSource = FinancialRecordSource;
 
 export type CardRewardType = 'points' | 'miles' | 'cash_back';
 
@@ -16,11 +18,7 @@ export type CardRewardCategoryMatch =
 	| 'home_improvement'
 	| 'utilities';
 
-export type TransactionHistoryStatus =
-	| 'TRANSACTIONS_UPDATE_STATUS_UNKNOWN'
-	| 'NOT_READY'
-	| 'INITIAL_UPDATE_COMPLETE'
-	| 'HISTORICAL_UPDATE_COMPLETE';
+export type TransactionHistoryStatus = 'unknown' | 'preparing' | 'current' | 'historical_complete';
 
 export interface Card {
 	id: string;
@@ -47,7 +45,8 @@ export interface Card {
 	rewardCalculation: 'static' | 'venmo_spend_ranked' | null;
 	transactionHistoryEnabled: boolean;
 	transactionHistoryStatus: TransactionHistoryStatus | null;
-	plaidConnectionId: string | null;
+	connectionId: string | null;
+	connectionProvider: FinancialDataProvider | null;
 	createdAt: string;
 	updatedAt: string;
 	lastSyncedAt: string | null;
@@ -114,7 +113,7 @@ export type FinancialAccountType =
 
 export type FinancialAccountOwner = 'personal' | 'business';
 export type FinancialAccountStatus = 'planned' | 'active' | 'closed';
-export type FinancialAccountSource = 'manual' | 'plaid';
+export type FinancialAccountSource = FinancialRecordSource;
 
 export interface InvestmentHolding {
 	name: string;
@@ -146,7 +145,8 @@ export interface FinancialAccount {
 	transactionHistoryStatus: TransactionHistoryStatus | null;
 	openedDate: string | null;
 	notes: string | null;
-	plaidConnectionId: string | null;
+	connectionId: string | null;
+	connectionProvider: FinancialDataProvider | null;
 	lastSyncedAt: string | null;
 	createdAt: string;
 	updatedAt: string;
@@ -183,10 +183,19 @@ export interface AccountBonus {
 	updatedAt: string;
 }
 
-export interface PlaidConnection {
+export interface FinancialConnection {
 	id: string;
+	provider: FinancialDataProvider;
 	institutionName: string | null;
 	status: 'healthy' | 'needs_update';
 	lastSyncedAt: string | null;
 	createdAt: string;
+}
+
+export interface FinancialProviderStatus {
+	provider: FinancialDataProvider;
+	displayName: string;
+	configured: boolean;
+	connectionCount: number;
+	lastSyncedAt: string | null;
 }

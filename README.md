@@ -1,6 +1,6 @@
 # ChipDue
 
-ChipDue is a privacy-first financial workspace for tracking bank and brokerage accounts, signup bonuses, investment performance, credit-card payments, and the deadlines that connect them. One Plaid connection can automatically sync eligible bank, brokerage, and credit-card accounts, while manual entry remains available for unsupported institutions and bonus details.
+ChipDue is a privacy-first financial workspace for tracking bank and brokerage accounts, signup bonuses, investment performance, credit-card payments, and the deadlines that connect them. Optional financial-data connections can automatically sync eligible accounts, while manual entry remains available for every institution and bonus detail. Plaid is the first connection adapter, not a required application dependency.
 
 Choose one of two deployment modes:
 
@@ -13,10 +13,10 @@ Choose one of two deployment modes:
 
 - Keep a private inventory of personal and business checking, savings, cash-management, and brokerage accounts.
 - Track signup bonuses from opening through requirements, qualification, payout, and safe-to-close dates.
-- Automatically refresh eligible bank and brokerage balances after a one-time Plaid connection and account-selection flow.
-- See each Plaid-synced brokerage position, share count, current institution price, value, and holding cost basis while keeping simple account-level performance.
+- Automatically refresh eligible bank and brokerage balances through an installed financial-data provider.
+- See each connected brokerage position, share count, current institution price, value, and holding cost basis while keeping simple account-level performance.
 - Track statement balance, minimum due, current balance, due date, statement date, and autopay status.
-- Automatically identify supported linked cards from Plaid’s official product name, populate their reward type, base earning rate, and bonus categories, and show estimated points, miles, or cash back beside eligible transactions. Manual overrides remain available for unmatched cards.
+- Automatically identify supported linked cards from provider metadata, populate their reward type, base earning rate, and bonus categories, and show estimated points, miles, or cash back beside eligible transactions. Manual overrides remain available for unmatched cards.
 - Create isolated cloud accounts with Google sign-in without storing an email, profile, Google token, or refresh token.
 - Let each cloud account encrypt and use its own Plaid Production credentials, so Plaid Items and plan allowances are not shared between users.
 - Connect Plaid only when you explicitly choose to; manual mode never contacts Plaid.
@@ -40,6 +40,24 @@ Browser memory -> authenticated Vercel Function -> encrypted Neon Postgres rows
 
 Git repository -> source code and synthetic tests only
 ```
+
+## Financial-data providers
+
+The application uses a provider-neutral connection boundary:
+
+```text
+Cards, accounts, bonuses, and transactions
+                    |
+         financial connection service
+                    |
+         +----------+----------+
+         |                     |
+   Plaid adapter today    future adapters
+```
+
+Cards and accounts record whether they are `manual` or `connected` and, for connected records, which provider supplied them. User-facing APIs live under `/api/connections`; the older `/api/plaid` sync endpoints remain as compatibility aliases. Adding another provider now requires an adapter rather than changes throughout the finance screens and domain model.
+
+The deployed database retains its older Plaid-named columns for compatibility with encrypted records and cryptographic identifiers. Those names are isolated in the storage bridge until a coordinated database migration can safely rename them. Plaid remains optional: an installation without Plaid credentials continues to work in manual mode at no provider cost.
 
 Cloud encryption protects against a database-only disclosure. It is not zero-knowledge encryption: the running Vercel Function has the key so it can sync Plaid and render your records after login. Read [PRIVACY.md](PRIVACY.md) and the [threat model](docs/THREAT_MODEL.md) before entering real data.
 

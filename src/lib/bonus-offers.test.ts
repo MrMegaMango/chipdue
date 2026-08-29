@@ -11,7 +11,7 @@ import {
 
 const account: FinancialAccount = {
 	id: '00000000-0000-4000-8000-000000000001',
-	source: 'plaid',
+	source: 'connected',
 	nickname: 'Business checking',
 	institution: 'Wells Fargo',
 	accountType: 'checking',
@@ -24,10 +24,11 @@ const account: FinancialAccount = {
 	costBasisCents: null,
 	holdings: [],
 	transactionHistoryEnabled: true,
-	transactionHistoryStatus: 'HISTORICAL_UPDATE_COMPLETE',
+	transactionHistoryStatus: 'historical_complete',
 	openedDate: '2026-08-27',
 	notes: null,
-	plaidConnectionId: '00000000-0000-4000-8000-000000000002',
+	connectionId: '00000000-0000-4000-8000-000000000002',
+	connectionProvider: 'plaid',
 	lastSyncedAt: '2026-08-28T12:00:00.000Z',
 	createdAt: '2026-08-27T12:00:00.000Z',
 	updatedAt: '2026-08-28T12:00:00.000Z'

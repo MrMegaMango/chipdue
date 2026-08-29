@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
+import { syncAllTenantFinancialConnections } from '$lib/server/financial-connections';
 import { apiError, apiJson } from '$lib/server/http';
-import { syncAllPlaidItems } from '$lib/server/plaid';
 import {
 	assertScheduledSyncRequest,
 	claimScheduledSync,
@@ -20,7 +20,7 @@ export const GET: RequestHandler = async ({ request, params }) => {
 			return apiJson({ ok: true, skipped: 'already-running-or-complete' });
 		}
 
-		const result = await syncAllPlaidItems();
+		const result = await syncAllTenantFinancialConnections();
 		await completeScheduledSync(window);
 		return apiJson({ ok: true, period: window.period, ...result });
 	} catch (error) {

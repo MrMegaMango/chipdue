@@ -11,23 +11,23 @@ import {
 } from 'plaid';
 import { Buffer } from 'node:buffer';
 import { matchAutomaticCardRewardProfile } from '$lib/card-reward-profiles';
-import type { PlaidConnection } from '$lib/types';
+import type { FinancialConnection } from '$lib/types';
 import type { TransactionHistoryStatus } from '$lib/types';
 import type { InvestmentHolding } from '$lib/types';
 import {
-	readPlaidTransactionState,
-	replacePlaidCards,
-	type PlaidCardSnapshot,
-	type PlaidTransactionState,
-	type StoredPlaidTransaction,
+	readConnectionTransactionState,
+	replaceConnectedCards,
+	type ConnectedCardSnapshot,
+	type ConnectionTransactionState,
+	type StoredFinancialTransaction,
 	type StoredTransactionHistory
 } from './cards';
 import { privateFingerprint } from './crypto';
 import { getInstallId } from './database';
 import { AppError } from './errors';
 import {
-	replacePlaidFinancialAccounts,
-	type PlaidFinancialAccountSnapshot
+	replaceConnectedFinancialAccounts,
+	type ConnectedFinancialAccountSnapshot
 } from './financial-records';
 import {
 	getPrivatePlaidItem,
@@ -46,6 +46,7 @@ import {
 	savePersonalPlaidConfiguration,
 	type PlaidConfiguration
 } from './plaid-config';
+import { providerAccountReference } from './provider-storage';
 import { currentTenantId, LEGACY_TENANT_ID, runAsTenant } from './tenant';
 
 const TRANSACTION_HISTORY_DAYS = 730;
@@ -243,7 +244,7 @@ export async function createPlaidUpdateToken(
 export async function exchangePlaidPublicToken(
 	publicToken: string,
 	institutionName: string | null
-): Promise<{ connection: PlaidConnection; synced: boolean }> {
+): Promise<{ connection: FinancialConnection; synced: boolean }> {
 	const client = await getPlaidClient();
 	let itemId: string;
 	let accessToken: string;
@@ -341,7 +342,7 @@ async function institutionBrand(
 	}
 }
 
-function transactionSnapshot(transaction: Transaction): StoredPlaidTransaction | null {
+function transactionSnapshot(transaction: Transaction): StoredFinancialTransaction | null {
 	const transactionId = safeText(transaction.transaction_id, 256);
 	const date = safeDate(transaction.date);
 	const amountCents = amountToCents(transaction.amount);
@@ -361,7 +362,16 @@ function transactionSnapshot(transaction: Transaction): StoredPlaidTransaction |
 }
 
 function normalizeTransactionStatus(value: TransactionsUpdateStatus): TransactionHistoryStatus {
-	return value;
+	switch (value) {
+		case 'NOT_READY':
+			return 'preparing';
+		case 'INITIAL_UPDATE_COMPLETE':
+			return 'current';
+		case 'HISTORICAL_UPDATE_COMPLETE':
+			return 'historical_complete';
+		default:
+			return 'unknown';
+	}
 }
 
 async function fetchTransactionUpdates(
@@ -413,9 +423,9 @@ async function fetchTransactionUpdates(
 }
 
 function applyTransactionUpdates(
-	state: PlaidTransactionState,
+	state: ConnectionTransactionState,
 	updates: Awaited<ReturnType<typeof fetchTransactionUpdates>>
-): PlaidTransactionState {
+): ConnectionTransactionState {
 	const byAccountReference = new Map(
 		[...state.byAccountReference].map(([reference, transactions]) => [
 			reference,
@@ -430,7 +440,7 @@ function applyTransactionUpdates(
 		for (const transactions of byAccountReference.values()) {
 			transactions.delete(snapshot.transactionId);
 		}
-		const reference = privateFingerprint(accountId, 'plaid-account');
+		const reference = providerAccountReference('plaid', accountId, 'card');
 		let transactions = byAccountReference.get(reference);
 		if (!transactions) {
 			transactions = new Map();
@@ -460,7 +470,7 @@ function applyTransactionUpdates(
 function syncedFinancialAccountType(
 	type: AccountType,
 	subtype: string | null
-): PlaidFinancialAccountSnapshot['accountType'] | null {
+): ConnectedFinancialAccountSnapshot['accountType'] | null {
 	if (type === AccountType.Investment) return 'brokerage';
 	if (type !== AccountType.Depository) return null;
 	if (subtype === 'checking') return 'checking';
@@ -567,7 +577,7 @@ export async function syncPlaidItem(
 			}
 		}
 
-		let transactionState = await readPlaidTransactionState(localItemId);
+		let transactionState = await readConnectionTransactionState('plaid', localItemId);
 		if (options.enableTransactions || transactionState.enabled) {
 			try {
 				transactionState = applyTransactionUpdates(
@@ -579,16 +589,16 @@ export async function syncPlaidItem(
 				transactionState = {
 					...transactionState,
 					enabled: true,
-					status: 'NOT_READY'
+					status: 'preparing'
 				};
 			}
 		}
-		const snapshots: PlaidCardSnapshot[] = [];
-		const accountSnapshots: PlaidFinancialAccountSnapshot[] = [];
+		const snapshots: ConnectedCardSnapshot[] = [];
+		const accountSnapshots: ConnectedFinancialAccountSnapshot[] = [];
 
 		for (const account of plaidAccounts) {
 			const liability = liabilities.get(account.account_id);
-			const transactionReference = privateFingerprint(account.account_id, 'plaid-account');
+			const transactionReference = providerAccountReference('plaid', account.account_id, 'card');
 			const transactionHistory: StoredTransactionHistory | undefined = transactionState.enabled
 				? {
 						enabled: true,
@@ -653,8 +663,8 @@ export async function syncPlaidItem(
 		}
 
 		const syncedAt = new Date().toISOString();
-		await replacePlaidFinancialAccounts(localItemId, accountSnapshots, syncedAt);
-		await replacePlaidCards(localItemId, snapshots, syncedAt);
+		await replaceConnectedFinancialAccounts('plaid', localItemId, accountSnapshots, syncedAt);
+		await replaceConnectedCards('plaid', localItemId, snapshots, syncedAt);
 		await markPlaidItemSynced(localItemId, syncedAt);
 		return {
 			syncedAt,

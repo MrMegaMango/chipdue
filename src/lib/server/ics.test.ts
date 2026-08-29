@@ -27,7 +27,8 @@ const card: Card = {
 	rewardCalculation: null,
 	transactionHistoryEnabled: false,
 	transactionHistoryStatus: null,
-	plaidConnectionId: null,
+	connectionId: null,
+	connectionProvider: null,
 	createdAt: '2027-01-01T00:00:00.000Z',
 	updatedAt: '2027-01-01T00:00:00.000Z',
 	lastSyncedAt: null

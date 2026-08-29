@@ -2,12 +2,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { listCards, replacePlaidCards, type PlaidCardSnapshot } from './cards';
+import { listCards, replaceConnectedCards, type ConnectedCardSnapshot } from './cards';
 import { resetCryptoStateForTests } from './crypto';
 import { closeDatabaseForTests } from './database';
 import { savePlaidItem } from './plaid-store';
 
-function cardSnapshot(accountId: string, currentBalanceCents: number): PlaidCardSnapshot {
+function cardSnapshot(accountId: string, currentBalanceCents: number): ConnectedCardSnapshot {
 	return {
 		accountId,
 		nickname: 'Synthetic credit card',
@@ -61,12 +61,14 @@ describe.sequential('Plaid card identity', () => {
 			'Synthetic Bank'
 		);
 
-		await replacePlaidCards(
+		await replaceConnectedCards(
+			'plaid',
 			firstItem,
 			[cardSnapshot('shared-provider-account', 41_700)],
 			'2026-08-27T12:00:00.000Z'
 		);
-		await replacePlaidCards(
+		await replaceConnectedCards(
+			'plaid',
 			secondItem,
 			[cardSnapshot('shared-provider-account', 41_795)],
 			'2026-08-28T12:00:00.000Z'
@@ -89,12 +91,14 @@ describe.sequential('Plaid card identity', () => {
 			'Synthetic Bank'
 		);
 
-		await replacePlaidCards(
+		await replaceConnectedCards(
+			'plaid',
 			firstItem,
 			[cardSnapshot('provider-account-before-relink', 41_700)],
 			'2026-08-27T12:00:00.000Z'
 		);
-		await replacePlaidCards(
+		await replaceConnectedCards(
+			'plaid',
 			secondItem,
 			[cardSnapshot('provider-account-after-relink', 41_795)],
 			'2026-08-28T12:00:00.000Z'
@@ -112,7 +116,8 @@ describe.sequential('Plaid card identity', () => {
 			'Synthetic Bank'
 		);
 
-		await replacePlaidCards(
+		await replaceConnectedCards(
+			'plaid',
 			plaidItem,
 			[cardSnapshot('provider-account-one', 41_795), cardSnapshot('provider-account-two', 41_795)],
 			'2026-08-28T12:00:00.000Z'
@@ -135,12 +140,13 @@ describe.sequential('Plaid card identity', () => {
 		const secondCard = cardSnapshot('provider-account-second-bank', 41_795);
 		secondCard.issuer = 'Second Synthetic Bank';
 
-		await replacePlaidCards(
+		await replaceConnectedCards(
+			'plaid',
 			firstItem,
 			[cardSnapshot('provider-account-first-bank', 41_795)],
 			'2026-08-28T12:00:00.000Z'
 		);
-		await replacePlaidCards(secondItem, [secondCard], '2026-08-28T12:00:00.000Z');
+		await replaceConnectedCards('plaid', secondItem, [secondCard], '2026-08-28T12:00:00.000Z');
 
 		expect(await listCards()).toHaveLength(2);
 	});

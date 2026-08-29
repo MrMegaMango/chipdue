@@ -1,30 +1,23 @@
 import type { RequestHandler } from './$types';
 import { createManualCard, listCards } from '$lib/server/cards';
+import { financialConnectionsStatus } from '$lib/server/financial-connections';
 import { apiError, apiJson, assertSameOrigin, readJson } from '$lib/server/http';
 import { createManualCardSchema } from '$lib/server/schemas';
-import { plaidConfigurationStatus } from '$lib/server/plaid';
-import { listPlaidConnections } from '$lib/server/plaid-store';
 
 export const GET: RequestHandler = async () => {
 	try {
-		const [connections, cards, configuration] = await Promise.all([
-			listPlaidConnections(),
-			listCards(),
-			plaidConfigurationStatus()
-		]);
+		const [cards, status] = await Promise.all([listCards(), financialConnectionsStatus()]);
 		const lastSyncedAt =
-			connections
+			status.connections
 				.map((connection) => connection.lastSyncedAt)
 				.filter((value): value is string => value !== null)
 				.sort()
 				.at(-1) ?? null;
 		return apiJson({
 			cards,
-			plaid: {
-				configured: configuration.configured,
-				source: configuration.source,
-				environment: configuration.environment,
-				connectedItems: connections.length,
+			connections: {
+				providers: status.providers,
+				connected: status.connections.length,
 				lastSyncedAt
 			}
 		});

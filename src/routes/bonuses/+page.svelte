@@ -268,7 +268,7 @@
 	}
 
 	async function loadAccountActivity(account: FinancialAccount): Promise<void> {
-		if (account.source !== 'plaid' || !account.transactionHistoryEnabled) return;
+		if (account.source !== 'connected' || !account.transactionHistoryEnabled) return;
 		try {
 			const activity = await requestJson<AccountActivity>(
 				resolve('/api/accounts/[id]/transactions', { id: account.id })
@@ -297,13 +297,13 @@
 
 	async function checkLinkedAccount(bonus: AccountBonus): Promise<void> {
 		const account = linkedAccount(bonus);
-		if (!account?.plaidConnectionId || syncingAccountId) return;
+		if (!account?.connectionId || syncingAccountId) return;
 		const offer = resolveBonusOffer(bonus, account);
 		syncingAccountId = account.id;
 		activityErrors = { ...activityErrors, [account.id]: '' };
 		try {
 			await requestJson(
-				resolve('/api/plaid/items/[id]/transactions/sync', { id: account.plaidConnectionId }),
+				resolve('/api/connections/[id]/transactions/sync', { id: account.connectionId }),
 				{ method: 'POST' }
 			);
 			const response = await requestJson<{ accounts: FinancialAccount[] }>(
@@ -675,14 +675,16 @@
 											<strong>{tracker.offer.accountProduct}</strong>
 										</div>
 										<span class="finance-pill good">
-											{tracker.account.source === 'plaid' ? 'Live + verified' : 'Manual + verified'}
+											{tracker.account.source === 'connected'
+												? 'Synced + verified'
+												: 'Manual + verified'}
 										</span>
 									</header>
 
 									<div class="tracker-metrics">
 										<div>
 											<span>
-												{tracker.account.source === 'plaid'
+												{tracker.account.source === 'connected'
 													? 'Current synced balance'
 													: 'Current manual balance'}
 											</span>
@@ -704,10 +706,10 @@
 													.transactionTarget}</strong
 											>
 											<small>
-												{#if tracker.account.source !== 'plaid'}
+												{#if tracker.account.source !== 'connected'}
 													Manual account — verify activity with {tracker.offer.institution}
-												{:else if tracker.account.transactionHistoryStatus === 'NOT_READY'}
-													Plaid is still preparing older activity
+												{:else if tracker.account.transactionHistoryStatus === 'preparing'}
+													The provider is still preparing older activity
 												{:else if tracker.account.transactionHistoryEnabled}
 													Posted since {formatDate(bonus.openedDate)}
 												{:else}
@@ -767,7 +769,7 @@
 										<p class="tracker-error" role="alert">{activityErrors[tracker.account.id]}</p>
 									{/if}
 									<div class="tracker-actions">
-										{#if tracker.account.plaidConnectionId}
+										{#if tracker.account.connectionId}
 											<button
 												type="button"
 												disabled={syncingAccountId !== null}
@@ -784,14 +786,14 @@
 												)}
 											</small>
 										{:else}
-											<small>Connect this account with Plaid to estimate posted activity.</small>
+											<small>Connect this account to a provider to estimate posted activity.</small>
 										{/if}
 									</div>
 									<p class="tracker-note">
 										Balances are snapshots and cannot prove new-money sources or uninterrupted
-										minimums. {tracker.account.source === 'plaid'
-											? 'Activity is a conservative estimate from posted Plaid transactions.'
-											: 'Activity remains a manual check until the account is linked through Plaid.'}
+										minimums. {tracker.account.source === 'connected'
+											? 'Activity is a conservative estimate from posted provider transactions.'
+											: 'Activity remains a manual check until the account is connected to a provider.'}
 										{tracker.offer.activityNote}
 										<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- Provider terms are an external URL. -->
 										<a href={tracker.offer.sourceUrl} target="_blank" rel="noreferrer"

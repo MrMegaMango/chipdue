@@ -193,8 +193,10 @@
 		type AutomaticCardRewardProfile
 	} from '$lib/card-reward-profiles';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
+	import { financialProviderName } from '$lib/financial-data';
 
-	type CardSource = 'manual' | 'plaid';
+	type FinancialDataProvider = 'plaid';
+	type CardSource = 'manual' | 'connected';
 	type DialogMode = 'add' | 'edit' | null;
 	type NoticeKind = 'success' | 'error';
 	type AuthMode = 'local' | 'cloud';
@@ -234,13 +236,9 @@
 		rewardProfileName: string | null;
 		rewardCalculation: 'static' | 'venmo_spend_ranked' | null;
 		transactionHistoryEnabled: boolean;
-		transactionHistoryStatus:
-			| 'TRANSACTIONS_UPDATE_STATUS_UNKNOWN'
-			| 'NOT_READY'
-			| 'INITIAL_UPDATE_COMPLETE'
-			| 'HISTORICAL_UPDATE_COMPLETE'
-			| null;
-		plaidConnectionId: string | null;
+		transactionHistoryStatus: 'unknown' | 'preparing' | 'current' | 'historical_complete' | null;
+		connectionId: string | null;
+		connectionProvider: FinancialDataProvider | null;
 		updatedAt: string;
 		lastSyncedAt?: string | null;
 	};
@@ -286,8 +284,9 @@
 		lastSyncedAt: string | null;
 	};
 
-	type PlaidConnection = {
+	type FinancialConnection = {
 		id: string;
+		provider: FinancialDataProvider;
 		institutionName: string | null;
 		status: 'healthy' | 'needs_update';
 		lastSyncedAt: string | null;
@@ -298,12 +297,15 @@
 		configured: boolean;
 		source: 'personal' | 'installation' | null;
 		environment: 'sandbox' | 'production' | null;
-		connections: PlaidConnection[];
+		connections: FinancialConnection[];
 	};
 
 	type CardsResponse = {
 		cards: CardView[];
-		plaid?: PlaidStatus;
+		connections?: {
+			connected: number;
+			lastSyncedAt: string | null;
+		};
 	};
 
 	type WorkspaceAccount = { id: string };
@@ -436,7 +438,7 @@
 		| null
 	>(null);
 	let deletingId = $state<string | null>(null);
-	let plaidConnections = $state<PlaidConnection[]>([]);
+	let plaidConnections = $state<FinancialConnection[]>([]);
 	let plaidStatusLoading = $state(true);
 	let plaidStatusError = $state('');
 	let plaidClientId = $state('');
@@ -1056,7 +1058,13 @@
 			);
 			if (!isPrivateEpochCurrent(expectedEpoch)) return false;
 			cards = Array.isArray(payload) ? payload : (payload.cards ?? []);
-			if (!Array.isArray(payload) && payload.plaid) plaid = payload.plaid;
+			if (!Array.isArray(payload) && payload.connections) {
+				plaid = {
+					...plaid,
+					connectedItems: payload.connections.connected,
+					lastSyncedAt: payload.connections.lastSyncedAt
+				};
+			}
 			void refreshRecentActivity(cards, expectedEpoch);
 			hasLoadedCards = true;
 			return true;
@@ -1076,7 +1084,7 @@
 		if (!isPrivateEpochCurrent(expectedEpoch)) return;
 		const loadVersion = ++recentActivityLoadVersion;
 		const eligibleCards = cardViews.filter(
-			(card) => card.source === 'plaid' && card.transactionHistoryEnabled
+			(card) => card.source === 'connected' && card.transactionHistoryEnabled
 		);
 		recentActivityByCard = {};
 		recentActivityErrorByCard = {};
@@ -1504,7 +1512,7 @@
 	}
 
 	async function openTransactionHistory(card: CardView): Promise<void> {
-		if (card.source !== 'plaid' || !card.transactionHistoryEnabled || busyAction) return;
+		if (card.source !== 'connected' || !card.transactionHistoryEnabled || busyAction) return;
 		const epoch = privateStateEpoch;
 		if (!isPrivateEpochCurrent(epoch)) return;
 		if (historyCard?.id !== card.id) prepareDialog();
@@ -1858,7 +1866,7 @@
 			return;
 		}
 		try {
-			const exchanged = await requestJson<{ connection: PlaidConnection }>(
+			const exchanged = await requestJson<{ connection: FinancialConnection }>(
 				resolve('/api/plaid/exchange'),
 				{
 					method: 'POST',
@@ -1868,7 +1876,7 @@
 			);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			await requestJson(
-				resolve('/api/plaid/items/[id]/transactions/sync', {
+				resolve('/api/connections/[id]/transactions/sync', {
 					id: exchanged.connection.id
 				}),
 				{ method: 'POST' },
@@ -1902,22 +1910,23 @@
 	async function enableTransactionHistory(card: CardView): Promise<void> {
 		if (
 			busyAction ||
-			card.source !== 'plaid' ||
+			card.source !== 'connected' ||
+			card.connectionProvider !== 'plaid' ||
 			card.transactionHistoryEnabled ||
-			!card.plaidConnectionId
+			!card.connectionId
 		)
 			return;
 		const epoch = privateStateEpoch;
 		if (!isPrivateEpochCurrent(epoch)) return;
 		busyAction = 'enable-history';
-		plaidItemActionId = card.plaidConnectionId;
+		plaidItemActionId = card.connectionId;
 
 		try {
 			const [, tokenPayload] = await Promise.all([
 				loadPlaidLink(epoch),
 				requestJson<{ linkToken?: string; link_token?: string }>(
 					resolve('/api/plaid/items/[id]/transactions/update', {
-						id: card.plaidConnectionId
+						id: card.connectionId
 					}),
 					{ method: 'POST' },
 					{ privateEpoch: epoch }
@@ -1967,15 +1976,15 @@
 		handler: PlaidHandler,
 		epoch: number
 	): Promise<void> {
-		if (!isPrivateEpochCurrent(epoch) || !card.plaidConnectionId) {
+		if (!isPrivateEpochCurrent(epoch) || !card.connectionId) {
 			handler.destroy();
 			if (activePlaidHandler === handler) activePlaidHandler = null;
 			return;
 		}
 		try {
 			await requestJson(
-				resolve('/api/plaid/items/[id]/transactions/sync', {
-					id: card.plaidConnectionId
+				resolve('/api/connections/[id]/transactions/sync', {
+					id: card.connectionId
 				}),
 				{ method: 'POST' },
 				{ privateEpoch: epoch }
@@ -1985,7 +1994,7 @@
 			if (!isPrivateEpochCurrent(epoch)) return;
 			showNotice(
 				refreshed
-					? 'Transaction history enabled. Plaid may keep filling older activity in the background.'
+					? 'Transaction history enabled. The provider may keep filling older activity in the background.'
 					: 'Transaction history enabled, but the dashboard could not refresh.',
 				refreshed ? 'success' : 'error'
 			);
@@ -2003,13 +2012,17 @@
 		}
 	}
 
-	async function syncPlaid(): Promise<void> {
+	async function syncConnections(): Promise<void> {
 		if (busyAction) return;
 		const epoch = privateStateEpoch;
 		if (!isPrivateEpochCurrent(epoch)) return;
 		busyAction = 'sync';
 		try {
-			await requestJson(resolve('/api/plaid/sync'), { method: 'POST' }, { privateEpoch: epoch });
+			await requestJson(
+				resolve('/api/connections/sync'),
+				{ method: 'POST' },
+				{ privateEpoch: epoch }
+			);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const [cardsRefreshed, statusRefreshed] = await Promise.all([
 				refreshCards(true, epoch),
@@ -2020,31 +2033,34 @@
 			const refreshed = cardsRefreshed && statusRefreshed;
 			showNotice(
 				refreshed
-					? 'Plaid accounts and cards are up to date.'
-					: 'Plaid synced, but the dashboard could not refresh.',
+					? 'Connected accounts and cards are up to date.'
+					: 'Connections synced, but the dashboard could not refresh.',
 				refreshed ? 'success' : 'error'
 			);
 		} catch (error) {
 			if (isPrivateEpochCurrent(epoch)) {
-				showNotice(readableError(error, 'Plaid accounts and cards could not be synced.'), 'error');
+				showNotice(
+					readableError(error, 'Connected accounts and cards could not be synced.'),
+					'error'
+				);
 			}
 		} finally {
 			if (isPrivateEpochCurrent(epoch)) busyAction = null;
 		}
 	}
 
-	function connectionLabel(connection: PlaidConnection): string {
+	function connectionLabel(connection: FinancialConnection): string {
 		return connection.institutionName?.trim() || 'Connected institution';
 	}
 
-	function connectionLogoUrl(connection: PlaidConnection): string | null {
+	function connectionLogoUrl(connection: FinancialConnection): string | null {
 		return (
-			cards.find((card) => card.plaidConnectionId === connection.id)?.issuerLogoUrl ??
+			cards.find((card) => card.connectionId === connection.id)?.issuerLogoUrl ??
 			fallbackInstitutionLogoUrl(connection.institutionName)
 		);
 	}
 
-	async function disconnectPlaid(connection: PlaidConnection): Promise<void> {
+	async function disconnectConnection(connection: FinancialConnection): Promise<void> {
 		if (busyAction) return;
 		const epoch = privateStateEpoch;
 		if (!isPrivateEpochCurrent(epoch)) return;
@@ -2058,7 +2074,7 @@
 		plaidItemActionId = connection.id;
 		try {
 			await requestJson(
-				resolve('/api/plaid/items/[id]', { id: connection.id }),
+				resolve('/api/connections/[id]', { id: connection.id }),
 				{ method: 'DELETE' },
 				{ privateEpoch: epoch }
 			);
@@ -2091,7 +2107,7 @@
 		}
 	}
 
-	async function updatePlaid(connection: PlaidConnection): Promise<void> {
+	async function updatePlaid(connection: FinancialConnection): Promise<void> {
 		if (busyAction) return;
 		const epoch = privateStateEpoch;
 		if (!isPrivateEpochCurrent(epoch)) return;
@@ -2147,7 +2163,7 @@
 	}
 
 	async function finishPlaidUpdate(
-		connection: PlaidConnection,
+		connection: FinancialConnection,
 		handler: PlaidHandler,
 		epoch: number
 	): Promise<void> {
@@ -2159,7 +2175,7 @@
 		const label = connectionLabel(connection);
 		try {
 			await requestJson(
-				resolve('/api/plaid/items/[id]/sync', { id: connection.id }),
+				resolve('/api/connections/[id]/sync', { id: connection.id }),
 				{ method: 'POST' },
 				{ privateEpoch: epoch }
 			);
@@ -2630,14 +2646,14 @@
 						<button
 							class="button button-quiet"
 							type="button"
-							onclick={syncPlaid}
+							onclick={syncConnections}
 							disabled={busyAction !== null}
 							aria-busy={busyAction === 'sync'}
 						>
 							<svg class:spinning={busyAction === 'sync'} aria-hidden="true" viewBox="0 0 20 20">
 								<path d="M16 7a6.5 6.5 0 1 0 .2 5.5M16 3v4h-4"></path>
 							</svg>
-							{busyAction === 'sync' ? 'Syncing…' : 'Sync Plaid'}
+							{busyAction === 'sync' ? 'Syncing…' : 'Sync connections'}
 						</button>
 					{/if}
 				</div>
@@ -2690,8 +2706,10 @@
 										<h3>{card.nickname}</h3>
 										<p>{cardSubtitle(card)}</p>
 									</div>
-									<span class:plaid-source={card.source === 'plaid'} class="source-pill">
-										{card.source === 'plaid' ? 'Plaid' : 'Manual'}
+									<span class:plaid-source={card.source === 'connected'} class="source-pill">
+										{card.source === 'connected'
+											? financialProviderName(card.connectionProvider)
+											: 'Manual'}
 									</span>
 								</header>
 
@@ -2780,7 +2798,7 @@
 									</section>
 								{/if}
 
-								{#if card.source === 'plaid' && card.transactionHistoryEnabled}
+								{#if card.source === 'connected' && card.transactionHistoryEnabled}
 									<section
 										class="card-activity-preview"
 										aria-label={`Recent activity for ${card.nickname}`}
@@ -2855,10 +2873,10 @@
 									<span>
 										<span class="mini-dot"></span>
 										{ageLabel(
-											card.source === 'plaid'
+											card.source === 'connected'
 												? (card.lastSyncedAt ?? card.updatedAt)
 												: card.updatedAt,
-											card.source === 'plaid' ? 'Synced' : 'Updated'
+											card.source === 'connected' ? 'Synced' : 'Updated'
 										)}
 									</span>
 									<div class="card-actions">
@@ -2882,18 +2900,17 @@
 											>
 												{deletingId === card.id ? 'Deleting…' : 'Delete'}
 											</button>
-										{:else if !card.transactionHistoryEnabled}
+										{:else if card.connectionProvider === 'plaid' && !card.transactionHistoryEnabled}
 											<button
 												class="history-button"
 												type="button"
 												onclick={() => enableTransactionHistory(card)}
 												disabled={busyAction !== null}
 												aria-busy={busyAction === 'enable-history' &&
-													plaidItemActionId === card.plaidConnectionId}
+													plaidItemActionId === card.connectionId}
 												aria-describedby="plaid-consent-copy"
 											>
-												{busyAction === 'enable-history' &&
-												plaidItemActionId === card.plaidConnectionId
+												{busyAction === 'enable-history' && plaidItemActionId === card.connectionId
 													? 'Opening…'
 													: 'Enable activity'}
 											</button>
@@ -3211,7 +3228,7 @@
 												<button
 													class="disconnect-connection"
 													type="button"
-													onclick={() => disconnectPlaid(connection)}
+													onclick={() => disconnectConnection(connection)}
 													disabled={busyAction !== null}
 													aria-busy={busyAction === 'disconnect' &&
 														plaidItemActionId === connection.id}
@@ -3699,7 +3716,7 @@
 							<header>
 								<div>
 									<h3 id="reward-categories-title">Bonus categories</h3>
-									<p>Map bonuses to Plaid categories to estimate each transaction’s rewards.</p>
+									<p>Map bonuses to provider categories to estimate each transaction’s rewards.</p>
 								</div>
 								<button
 									type="button"
@@ -3804,7 +3821,9 @@
 						<p class="section-kicker">Card activity</p>
 						<h2 id="history-dialog-title">{historyCard.nickname}</h2>
 						<p id="history-dialog-description">
-							{cardSubtitle(historyCard)} · Up to 24 months from Plaid
+							{cardSubtitle(historyCard)} · History supplied by {financialProviderName(
+								historyCard.connectionProvider
+							)}
 						</p>
 					</div>
 					<button
@@ -3822,7 +3841,7 @@
 					<div class="history-sync-note">
 						<span class="mini-dot"></span>
 						<span>{ageLabel(historyLastSyncedAt, 'Synced')}</span>
-						{#if historyStatus === 'NOT_READY' || historyStatus === 'INITIAL_UPDATE_COMPLETE'}
+						{#if historyStatus === 'preparing' || historyStatus === 'current'}
 							<span>· Older activity is still loading</span>
 						{/if}
 					</div>
@@ -3874,9 +3893,9 @@
 						<div class="history-empty">
 							<h3>No activity yet</h3>
 							<p>
-								{historyStatus === 'HISTORICAL_UPDATE_COMPLETE'
-									? 'Plaid did not return transactions for this card.'
-									: 'Plaid is preparing this card’s transaction history. Sync again shortly.'}
+								{historyStatus === 'historical_complete'
+									? 'The provider did not return transactions for this card.'
+									: 'The provider is preparing this card’s transaction history. Sync again shortly.'}
 							</p>
 						</div>
 					{/if}

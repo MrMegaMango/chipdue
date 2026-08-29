@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { PlaidConnection } from '$lib/types';
+import type { FinancialConnection } from '$lib/types';
 import { cloudQuery } from './cloud-database';
 import { decryptSecret, encryptSecret, privateUuid } from './crypto';
 import { getDatabase } from './database';
@@ -56,9 +56,10 @@ function decodeItem(row: PlaidItemRow): PrivatePlaidItem {
 	};
 }
 
-function publicRowToConnection(row: PublicPlaidItemRow): PlaidConnection {
+function publicRowToConnection(row: PublicPlaidItemRow): FinancialConnection {
 	return {
 		id: row.id,
+		provider: 'plaid',
 		institutionName: row.institution_name_enc
 			? decryptSecret(row.institution_name_enc, `plaid-institution:${row.id}`)
 			: null,
@@ -68,7 +69,7 @@ function publicRowToConnection(row: PublicPlaidItemRow): PlaidConnection {
 	};
 }
 
-export async function listPlaidConnections(): Promise<PlaidConnection[]> {
+export async function listPlaidConnections(): Promise<FinancialConnection[]> {
 	const rows =
 		getRuntimeMode() === 'cloud'
 			? await cloudQuery<PublicPlaidItemRow>(
@@ -223,7 +224,7 @@ export async function removeLocalPlaidItem(id: string): Promise<void> {
 	}
 }
 
-export async function publicPlaidConnection(id: string): Promise<PlaidConnection> {
+export async function publicPlaidConnection(id: string): Promise<FinancialConnection> {
 	const row =
 		getRuntimeMode() === 'cloud'
 			? (
@@ -246,7 +247,7 @@ export async function publicPlaidConnection(id: string): Promise<PlaidConnection
 }
 
 export async function listPlaidConnectionTenants(): Promise<
-	Array<{ tenantId: string; connection: PlaidConnection }>
+	Array<{ tenantId: string; connection: FinancialConnection }>
 > {
 	const rows =
 		getRuntimeMode() === 'cloud'

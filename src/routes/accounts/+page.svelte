@@ -3,19 +3,24 @@
 	import { onMount } from 'svelte';
 	import { getCompatibleBonusOffers } from '$lib/bonus-offers';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
+	import { financialProviderName } from '$lib/financial-data';
 	import type {
+		FinancialConnection,
 		FinancialAccount,
 		FinancialAccountOwner,
 		FinancialAccountStatus,
 		FinancialAccountType,
-		InvestmentHolding,
-		PlaidConnection
+		FinancialProviderStatus,
+		InvestmentHolding
 	} from '$lib/types';
 	import '$lib/finance-pages.css';
 
 	type RuntimeMode = 'local' | 'cloud';
 	type SessionResponse = { mode: RuntimeMode; authenticated: boolean };
-	type PlaidStatusResponse = { configured: boolean; connections: PlaidConnection[] };
+	type ConnectionsStatusResponse = {
+		providers: FinancialProviderStatus[];
+		connections: FinancialConnection[];
+	};
 	type AccountForm = {
 		nickname: string;
 		institution: string;
@@ -61,7 +66,7 @@
 	let showHidden = $state(false);
 	let loggingOut = $state(false);
 	let plaidConfigured = $state(false);
-	let plaidConnections = $state<PlaidConnection[]>([]);
+	let connections = $state<FinancialConnection[]>([]);
 	let trackedBonusAccountIds = $state<string[]>([]);
 	let syncing = $state(false);
 	let toast = $state('');
@@ -73,7 +78,7 @@
 	const hiddenAccounts = $derived(accounts.filter((account) => account.hidden));
 	const activeAccounts = $derived(visibleAccounts.filter((account) => account.status === 'active'));
 	const syncedAccountCount = $derived(
-		activeAccounts.filter((account) => account.source === 'plaid').length
+		activeAccounts.filter((account) => account.source === 'connected').length
 	);
 	const accountGroups = $derived([
 		{
@@ -160,14 +165,16 @@
 				window.location.assign(resolve('/'));
 				return;
 			}
-			const [accountResponse, plaidResponse, bonusResponse] = await Promise.all([
+			const [accountResponse, connectionsResponse, bonusResponse] = await Promise.all([
 				requestJson<{ accounts: FinancialAccount[] }>(resolve('/api/accounts')),
-				requestJson<PlaidStatusResponse>(resolve('/api/plaid/status')),
+				requestJson<ConnectionsStatusResponse>(resolve('/api/connections')),
 				requestJson<{ bonuses: Array<{ accountId: string | null }> }>(resolve('/api/bonuses'))
 			]);
 			accounts = accountResponse.accounts;
-			plaidConfigured = plaidResponse.configured;
-			plaidConnections = plaidResponse.connections;
+			plaidConfigured =
+				connectionsResponse.providers.find((status) => status.provider === 'plaid')?.configured ??
+				false;
+			connections = connectionsResponse.connections;
 			trackedBonusAccountIds = bonusResponse.bonuses
 				.map((bonus) => bonus.accountId)
 				.filter((accountId): accountId is string => Boolean(accountId));
@@ -333,7 +340,7 @@
 			notes: form.notes.trim() || null
 		};
 		const payload =
-			editingAccount?.source === 'plaid'
+			editingAccount?.source === 'connected'
 				? annotations
 				: {
 						...annotations,
@@ -387,23 +394,23 @@
 		accounts = response.accounts;
 	}
 
-	async function syncPlaidAccounts(): Promise<void> {
-		if (syncing || plaidConnections.length === 0) return;
+	async function syncConnectedAccounts(): Promise<void> {
+		if (syncing || connections.length === 0) return;
 		syncing = true;
 		pageError = '';
 		try {
-			await requestJson(resolve('/api/plaid/sync'), { method: 'POST' });
+			await requestJson(resolve('/api/connections/sync'), { method: 'POST' });
 			await reloadAccounts();
-			showToast('Plaid balances and holdings are up to date.');
+			showToast('Connected balances and holdings are up to date.');
 		} catch (error) {
-			pageError = readableError(error, 'Plaid accounts could not be synced.');
+			pageError = readableError(error, 'Connected accounts could not be synced.');
 		} finally {
 			syncing = false;
 		}
 	}
 
 	async function deleteAccount(account: FinancialAccount): Promise<void> {
-		if (account.source === 'plaid') return;
+		if (account.source === 'connected') return;
 		if (
 			!window.confirm(`Delete “${account.nickname}”? Linked bonuses will remain in your tracker.`)
 		) {
@@ -508,23 +515,23 @@
 				<h1 id="accounts-title">Accounts</h1>
 				<p>
 					Connect once to keep checking, savings, cash-management, and brokerage balances current.
-					Use manual accounts only when Plaid cannot cover an institution.
+					Use manual accounts only when a connected provider cannot cover an institution.
 				</p>
 			</div>
 			<div class="account-toolbar-actions">
 				{#if plaidConfigured}
 					<a
 						class="finance-button secondary"
-						href={plaidConnections.length > 0 ? resolve('/#plaid-connections') : resolve('/')}
+						href={connections.length > 0 ? resolve('/#plaid-connections') : resolve('/')}
 					>
-						{plaidConnections.length > 0 ? 'Manage Plaid' : 'Connect Plaid'}
+						{connections.length > 0 ? 'Manage connections' : 'Connect a provider'}
 					</a>
 				{/if}
-				{#if plaidConnections.length > 0}
+				{#if connections.length > 0}
 					<button
 						class="finance-button secondary"
 						type="button"
-						onclick={syncPlaidAccounts}
+						onclick={syncConnectedAccounts}
 						disabled={syncing}
 					>
 						{syncing ? 'Syncing…' : 'Sync accounts'}
@@ -546,7 +553,7 @@
 				>
 			</article>
 			<article>
-				<span>Plaid-synced</span>
+				<span>Provider-synced</span>
 				<strong>{loading ? '—' : syncedAccountCount}</strong>
 			</article>
 			<article>
@@ -573,12 +580,12 @@
 			<div class="finance-empty">
 				<h2>Connect your financial picture</h2>
 				<p>
-					Plaid can pull eligible bank and brokerage balances into this account map. You can still
-					add an unsupported account once and maintain it manually.
+					Connected providers can pull eligible bank and brokerage balances into this account map.
+					You can still add an unsupported account and maintain it manually.
 				</p>
 				<div class="empty-account-actions">
 					{#if plaidConfigured}
-						<a class="finance-button" href={resolve('/')}>Connect with Plaid</a>
+						<a class="finance-button" href={resolve('/')}>Connect a provider</a>
 					{/if}
 					<button class="finance-button secondary" type="button" onclick={openAdd}
 						>Add manually</button
@@ -639,10 +646,12 @@
 												</div>
 												<div class="account-pills">
 													<span
-														class:plaid={account.source === 'plaid'}
+														class:connected={account.source === 'connected'}
 														class="finance-pill source"
 													>
-														{account.source === 'plaid' ? 'Plaid' : 'Manual'}
+														{account.source === 'connected'
+															? financialProviderName(account.connectionProvider)
+															: 'Manual'}
 													</span>
 													<span
 														class:good={account.status === 'active'}
@@ -658,7 +667,9 @@
 											</header>
 											<div class="finance-card-value">
 												<span
-													>{account.source === 'plaid' ? 'Synced balance' : 'Current balance'}</span
+													>{account.source === 'connected'
+														? 'Synced balance'
+														: 'Current balance'}</span
 												>
 												<strong>{formatMoney(account.currentBalanceCents)}</strong>
 											</div>
@@ -678,7 +689,7 @@
 												<div>
 													<dt>Data source</dt>
 													<dd>
-														{account.source === 'plaid'
+														{account.source === 'connected'
 															? formatSyncTime(account.lastSyncedAt)
 															: 'Manual entry'}
 													</dd>
@@ -709,7 +720,7 @@
 													<a href={bonusSetupHref(account)}>Choose your offer</a>
 												</section>
 											{/if}
-											{#if account.accountType === 'brokerage' && account.source === 'plaid'}
+											{#if account.accountType === 'brokerage' && account.source === 'connected'}
 												<section class="holding-list" aria-label={`${account.nickname} holdings`}>
 													<div class="holding-list-heading">
 														<h4>Holdings</h4>
@@ -762,8 +773,8 @@
 														</div>
 													{:else}
 														<p class="holding-empty">
-															No holdings are available from Plaid yet. Sync again after Investments
-															data is ready.
+															No holdings are available from the provider yet. Sync again after
+															investment data is ready.
 														</p>
 													{/if}
 												</section>
@@ -772,13 +783,13 @@
 												<span
 													>{account.hidden
 														? 'Excluded from totals'
-														: account.source === 'plaid'
+														: account.source === 'connected'
 															? 'Automatic balance'
 															: 'Manual balance'}</span
 												>
 												<div>
 													<button type="button" onclick={() => openEdit(account)}>
-														{account.source === 'plaid' ? 'Details' : 'Edit'}
+														{account.source === 'connected' ? 'Details' : 'Edit'}
 													</button>
 													<button
 														type="button"
@@ -826,15 +837,15 @@
 			<header class="finance-dialog-header">
 				<div>
 					<h2 id="account-dialog-title">
-						{dialogAccount?.source === 'plaid'
+						{dialogAccount?.source === 'connected'
 							? 'Account details'
 							: editingId
 								? 'Edit account'
 								: 'Add account'}
 					</h2>
 					<p>
-						{dialogAccount?.source === 'plaid'
-							? 'Plaid keeps the balance and bank details current. Add the personal details you want ChipDue to remember.'
+						{dialogAccount?.source === 'connected'
+							? 'Your provider keeps the balance and institution details current. Add the personal details you want ChipDue to remember.'
 							: 'Only the last four characters are accepted—never enter a full account number.'}
 					</p>
 				</div>
@@ -853,7 +864,7 @@
 							id="account-institution"
 							bind:value={form.institution}
 							maxlength="80"
-							disabled={dialogAccount?.source === 'plaid'}
+							disabled={dialogAccount?.source === 'connected'}
 						/>
 					</div>
 					<div class="finance-field">
@@ -861,7 +872,7 @@
 						<select
 							id="account-type"
 							bind:value={form.accountType}
-							disabled={dialogAccount?.source === 'plaid'}
+							disabled={dialogAccount?.source === 'connected'}
 						>
 							<option value="checking">Checking</option>
 							<option value="savings">Savings</option>
@@ -885,13 +896,13 @@
 							step="0.01"
 							bind:value={form.currentBalance}
 							placeholder="0.00"
-							disabled={dialogAccount?.source === 'plaid'}
+							disabled={dialogAccount?.source === 'connected'}
 						/>
 					</div>
 					{#if form.accountType === 'brokerage'}
 						<div class="finance-field">
 							<label for="account-cost-basis">
-								{dialogAccount?.source === 'plaid'
+								{dialogAccount?.source === 'connected'
 									? 'Cost basis fallback'
 									: 'Cost basis / contributions'}
 							</label>
@@ -918,7 +929,7 @@
 							maxlength="4"
 							pattern={'[A-Za-z0-9]{4}'}
 							placeholder="1234"
-							disabled={dialogAccount?.source === 'plaid'}
+							disabled={dialogAccount?.source === 'connected'}
 						/>
 					</div>
 					<div class="finance-field">
@@ -926,7 +937,7 @@
 						<select
 							id="account-status"
 							bind:value={form.status}
-							disabled={dialogAccount?.source === 'plaid'}
+							disabled={dialogAccount?.source === 'connected'}
 						>
 							<option value="planned">Planned</option>
 							<option value="active">Active</option>
@@ -945,7 +956,7 @@
 					<button class="finance-button" type="submit" disabled={busy}>
 						{busy
 							? 'Saving…'
-							: dialogAccount?.source === 'plaid'
+							: dialogAccount?.source === 'connected'
 								? 'Save details'
 								: editingId
 									? 'Save changes'
@@ -1213,7 +1224,7 @@
 		background: var(--paper-soft);
 	}
 
-	.finance-pill.source.plaid {
+	.finance-pill.source.connected {
 		color: var(--accent-dark);
 		background: var(--accent-soft);
 	}

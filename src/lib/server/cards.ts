@@ -4,22 +4,35 @@ import {
 	type AutomaticCardRewardProfile,
 	type CardRewardCalculation
 } from '$lib/card-reward-profiles';
+import {
+	normalizeTransactionHistoryStatus,
+	type StoredTransactionHistoryStatus
+} from '$lib/financial-data';
 import type {
 	Card,
 	CardRewardCategory,
 	CardRewardCategoryMatch,
 	CardRewardType,
-	CardSource,
 	CardTransaction,
 	CardTransactionRewardEstimate,
+	FinancialDataProvider,
 	TransactionHistoryStatus
 } from '$lib/types';
 import { cloudQuery, cloudTransaction, type CloudStatement } from './cloud-database';
-import { decryptJson, encryptJson, privateFingerprint, privateUuid } from './crypto';
+import { decryptJson, encryptJson, privateUuid } from './crypto';
 import { getDatabase } from './database';
 import { AppError } from './errors';
 import { getRuntimeMode } from './runtime';
 import type { CreateManualCardData, UpdateCardRewardsData, UpdateManualCardData } from './schemas';
+import {
+	providerAccountReference,
+	providerForStoredSource,
+	providerRecordId,
+	providerTransactionId,
+	publicSourceForStoredSource,
+	storedSourceForProvider,
+	type StoredRecordSource
+} from './provider-storage';
 import { payloadBelongsToCurrentTenant, tenantPayloadFields } from './tenant';
 
 interface StoredCardRewardCategory {
@@ -70,7 +83,7 @@ interface CardPayload {
 	transactionHistory?: StoredTransactionHistory;
 }
 
-export interface StoredPlaidTransaction {
+export interface StoredFinancialTransaction {
 	transactionId: string;
 	name: string;
 	merchantName: string | null;
@@ -88,12 +101,12 @@ export interface StoredTransactionHistory {
 	accountReference?: string;
 	cursor: string | null;
 	status: TransactionHistoryStatus;
-	transactions: StoredPlaidTransaction[];
+	transactions: StoredFinancialTransaction[];
 }
 
 interface CardRow extends Record<string, unknown> {
 	id: string;
-	source: CardSource;
+	source: StoredRecordSource;
 	plaid_item_id: string | null;
 	external_account_ref: string | null;
 	payload_enc: string;
@@ -102,23 +115,27 @@ interface CardRow extends Record<string, unknown> {
 	updated_at: string;
 }
 
-interface PlaidCardRow extends CardRow {
+interface ConnectedCardRow extends CardRow {
 	external_account_ref: string;
 }
 
-export interface PlaidCardSnapshot extends CardPayload {
+export interface ConnectedCardSnapshot extends CardPayload {
 	accountId: string;
 	automaticRewardProfile?: AutomaticCardRewardProfile | null;
 }
 
-export interface PlaidTransactionState {
+export interface ConnectionTransactionState {
 	enabled: boolean;
 	cursor: string | null;
 	status: TransactionHistoryStatus;
-	byAccountReference: Map<string, StoredPlaidTransaction[]>;
+	byAccountReference: Map<string, StoredFinancialTransaction[]>;
 }
 
-const TRANSACTION_HISTORY_STATUSES = new Set<TransactionHistoryStatus>([
+const TRANSACTION_HISTORY_STATUSES = new Set<StoredTransactionHistoryStatus>([
+	'unknown',
+	'preparing',
+	'current',
+	'historical_complete',
 	'TRANSACTIONS_UPDATE_STATUS_UNKNOWN',
 	'NOT_READY',
 	'INITIAL_UPDATE_COMPLETE',
@@ -152,9 +169,9 @@ function isRewardRate(value: unknown): value is number {
 	return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= 100;
 }
 
-function isStoredPlaidTransaction(value: unknown): value is StoredPlaidTransaction {
+function isStoredFinancialTransaction(value: unknown): value is StoredFinancialTransaction {
 	if (!value || typeof value !== 'object') return false;
-	const transaction = value as Partial<StoredPlaidTransaction>;
+	const transaction = value as Partial<StoredFinancialTransaction>;
 	return (
 		typeof transaction.transactionId === 'string' &&
 		transaction.transactionId.length > 0 &&
@@ -184,10 +201,12 @@ function isStoredPlaidTransaction(value: unknown): value is StoredPlaidTransacti
 	);
 }
 
-function isStoredTransactionHistory(value: unknown): value is StoredTransactionHistory {
-	if (!value || typeof value !== 'object') return false;
-	const history = value as Partial<StoredTransactionHistory>;
-	return (
+function normalizeStoredTransactionHistory(value: unknown): StoredTransactionHistory | null {
+	if (!value || typeof value !== 'object') return null;
+	const history = value as Partial<StoredTransactionHistory> & {
+		status?: StoredTransactionHistoryStatus;
+	};
+	const valid =
 		history.enabled === true &&
 		(history.accountReference === undefined ||
 			(typeof history.accountReference === 'string' &&
@@ -195,11 +214,18 @@ function isStoredTransactionHistory(value: unknown): value is StoredTransactionH
 		(history.cursor === null ||
 			(typeof history.cursor === 'string' && history.cursor.length <= 256)) &&
 		typeof history.status === 'string' &&
-		TRANSACTION_HISTORY_STATUSES.has(history.status as TransactionHistoryStatus) &&
+		TRANSACTION_HISTORY_STATUSES.has(history.status as StoredTransactionHistoryStatus) &&
 		Array.isArray(history.transactions) &&
 		history.transactions.length <= MAX_STORED_TRANSACTIONS &&
-		history.transactions.every(isStoredPlaidTransaction)
-	);
+		history.transactions.every(isStoredFinancialTransaction);
+	if (!valid) return null;
+	return {
+		enabled: true,
+		...(history.accountReference ? { accountReference: history.accountReference } : {}),
+		cursor: history.cursor ?? null,
+		status: normalizeTransactionHistoryStatus(history.status!),
+		transactions: history.transactions as StoredFinancialTransaction[]
+	};
 }
 
 function transactionHistoryFromRow(row: CardRow): StoredTransactionHistory | undefined {
@@ -209,10 +235,11 @@ function transactionHistoryFromRow(row: CardRow): StoredTransactionHistory | und
 		const record = value as { recordType?: unknown; transactionHistory?: unknown };
 		if (record.recordType !== 'account' || record.transactionHistory === undefined)
 			return undefined;
-		if (!isStoredTransactionHistory(record.transactionHistory)) {
+		const history = normalizeStoredTransactionHistory(record.transactionHistory);
+		if (!history) {
 			throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
 		}
-		return record.transactionHistory;
+		return history;
 	}
 	return decodePayload(row)?.transactionHistory;
 }
@@ -351,11 +378,12 @@ function decodePayload(row: CardRow): CardPayload | null {
 		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
 	}
 	if (!payloadBelongsToCurrentTenant(payload)) return null;
-	if (
-		payload.transactionHistory !== undefined &&
-		!isStoredTransactionHistory(payload.transactionHistory)
-	) {
-		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
+	if (payload.transactionHistory !== undefined) {
+		const history = normalizeStoredTransactionHistory(payload.transactionHistory);
+		if (!history) {
+			throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
+		}
+		payload.transactionHistory = history;
 	}
 	if (!isStoredIssuerLogo(payload.issuerLogoBase64)) {
 		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
@@ -372,7 +400,7 @@ function rowToCard(row: CardRow): Card | null {
 	const rewards = normalizeStoredRewards(payload.rewards);
 	return {
 		id: row.id,
-		source: row.source,
+		source: publicSourceForStoredSource(row.source),
 		nickname: payload.nickname,
 		issuer: payload.issuer,
 		issuerLogoUrl: payload.issuerLogoBase64
@@ -397,7 +425,8 @@ function rowToCard(row: CardRow): Card | null {
 		rewardCalculation: rewards.calculation,
 		transactionHistoryEnabled: payload.transactionHistory?.enabled === true,
 		transactionHistoryStatus: payload.transactionHistory?.status ?? null,
-		plaidConnectionId: row.source === 'plaid' ? row.plaid_item_id : null,
+		connectionId: row.source === 'manual' ? null : row.plaid_item_id,
+		connectionProvider: providerForStoredSource(row.source),
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 		lastSyncedAt: row.last_synced_at
@@ -431,7 +460,7 @@ function preferMoreRecentCandidate(left: CardCandidate, right: CardCandidate): C
 	return preferMoreRecentCard(left.card, right.card) === left.card ? left : right;
 }
 
-function plaidDisplayIdentity(card: Card): string | null {
+function connectedDisplayIdentity(card: Card): string | null {
 	const issuer = card.issuer?.trim().toLocaleLowerCase();
 	const nickname = card.nickname.trim().toLocaleLowerCase();
 	if (!issuer || !nickname || !card.last4) return null;
@@ -440,37 +469,37 @@ function plaidDisplayIdentity(card: Card): string | null {
 
 function uniqueCards(rows: CardRow[]): Card[] {
 	const cards: Card[] = [];
-	const plaidCardsByAccount = new Map<string, CardCandidate>();
+	const connectedCardsByAccount = new Map<string, CardCandidate>();
 
 	for (const row of rows) {
 		const card = rowToCard(row);
 		if (!card) continue;
-		if (row.source !== 'plaid' || !row.external_account_ref) {
+		if (row.source === 'manual' || !row.external_account_ref) {
 			cards.push(card);
 			continue;
 		}
 
-		const existing = plaidCardsByAccount.get(row.external_account_ref);
-		plaidCardsByAccount.set(
+		const existing = connectedCardsByAccount.get(row.external_account_ref);
+		connectedCardsByAccount.set(
 			row.external_account_ref,
 			existing ? preferMoreRecentCandidate(existing, { row, card }) : { row, card }
 		);
 	}
 
-	const unmatchedPlaidCards: Card[] = [];
+	const unmatchedConnectedCards: Card[] = [];
 	const cardsByDisplayIdentity = new Map<string, Map<string, CardCandidate[]>>();
-	for (const candidate of plaidCardsByAccount.values()) {
-		const displayIdentity = plaidDisplayIdentity(candidate.card);
-		const plaidItemId = candidate.row.plaid_item_id;
-		if (!displayIdentity || !plaidItemId) {
-			unmatchedPlaidCards.push(candidate.card);
+	for (const candidate of connectedCardsByAccount.values()) {
+		const displayIdentity = connectedDisplayIdentity(candidate.card);
+		const connectionId = candidate.row.plaid_item_id;
+		if (!displayIdentity || !connectionId) {
+			unmatchedConnectedCards.push(candidate.card);
 			continue;
 		}
 
 		const byConnection = cardsByDisplayIdentity.get(displayIdentity) ?? new Map();
-		const connectionCards = byConnection.get(plaidItemId) ?? [];
+		const connectionCards = byConnection.get(connectionId) ?? [];
 		connectionCards.push(candidate);
-		byConnection.set(plaidItemId, connectionCards);
+		byConnection.set(connectionId, connectionCards);
 		cardsByDisplayIdentity.set(displayIdentity, byConnection);
 	}
 
@@ -490,7 +519,7 @@ function uniqueCards(rows: CardRow[]): Card[] {
 		cards.push(...(preferredConnection ?? []).map(({ card }) => card));
 	}
 
-	return [...cards, ...unmatchedPlaidCards];
+	return [...cards, ...unmatchedConnectedCards];
 }
 
 function automaticStoredRewards(profile: AutomaticCardRewardProfile): StoredCardRewards {
@@ -522,7 +551,10 @@ function rewardsForSnapshot(
 	return existing;
 }
 
-function snapshotPayload(snapshot: PlaidCardSnapshot, rewards?: StoredCardRewards): CardPayload {
+function snapshotPayload(
+	snapshot: ConnectedCardSnapshot,
+	rewards?: StoredCardRewards
+): CardPayload {
 	const resolvedRewards = rewardsForSnapshot(snapshot.automaticRewardProfile, rewards);
 	return {
 		...tenantPayloadFields(),
@@ -619,7 +651,7 @@ export async function updateManualCard(id: string, changes: UpdateManualCardData
 	const existing = await getCard(id);
 	if (existing.source !== 'manual') {
 		throw new AppError(
-			'PLAID_CARD_READ_ONLY',
+			'CONNECTED_CARD_READ_ONLY',
 			'Synced cards must be changed at their institution.',
 			409
 		);
@@ -779,7 +811,7 @@ export async function deleteManualCard(id: string): Promise<void> {
 	const existing = await getCard(id);
 	if (existing.source !== 'manual') {
 		throw new AppError(
-			'PLAID_CARD_READ_ONLY',
+			'CONNECTED_CARD_READ_ONLY',
 			'Disconnect the institution to remove synced cards.',
 			409
 		);
@@ -791,16 +823,18 @@ export async function deleteManualCard(id: string): Promise<void> {
 	}
 }
 
-async function replaceCloudPlaidCards(
-	plaidItemId: string,
-	snapshots: PlaidCardSnapshot[],
+async function replaceCloudConnectedCards(
+	provider: FinancialDataProvider,
+	connectionId: string,
+	snapshots: ConnectedCardSnapshot[],
 	syncedAt: string
 ): Promise<void> {
+	const storedSource = storedSourceForProvider(provider);
 	const existingRows = await cloudQuery<CardRow>(
 		`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
 		        last_synced_at, created_at, updated_at
-		 FROM public.carddue_cards WHERE plaid_item_id = $1 AND source = 'plaid'`,
-		[plaidItemId]
+		 FROM public.carddue_cards WHERE plaid_item_id = $1 AND source = $2`,
+		[connectionId, storedSource]
 	);
 	const existingCards = existingRows.flatMap((row) => {
 		const payload = decodePayload(row);
@@ -816,21 +850,22 @@ async function replaceCloudPlaidCards(
 	);
 	const references = new Set<string>();
 	const statements: CloudStatement[] = snapshots.map((snapshot) => {
-		const reference = privateFingerprint(snapshot.accountId, 'plaid-account');
-		const id = privateUuid(snapshot.accountId, `plaid-card:${plaidItemId}`);
+		const reference = providerAccountReference(provider, snapshot.accountId, 'card');
+		const id = providerRecordId(provider, snapshot.accountId, connectionId, 'card');
 		references.add(reference);
 		return {
 			text: `INSERT INTO public.carddue_cards
 			       (id, source, plaid_item_id, external_account_ref, payload_enc,
 			        last_synced_at, created_at, updated_at)
-			       VALUES ($1, 'plaid', $2, $3, $4, $5, $5, $5)
+			       VALUES ($1, $2, $3, $4, $5, $6, $6, $6)
 			       ON CONFLICT (plaid_item_id, external_account_ref) DO UPDATE SET
 			       payload_enc = EXCLUDED.payload_enc,
 			       last_synced_at = EXCLUDED.last_synced_at,
 			       updated_at = EXCLUDED.updated_at`,
 			params: [
 				id,
-				plaidItemId,
+				storedSource,
+				connectionId,
 				reference,
 				encryptJson(snapshotPayload(snapshot, rewardsByReference.get(reference)), `card:${id}`),
 				syncedAt
@@ -840,28 +875,30 @@ async function replaceCloudPlaidCards(
 	for (const { row } of existingCards) {
 		if (row.external_account_ref && !references.has(row.external_account_ref)) {
 			statements.push({
-				text: `DELETE FROM public.carddue_cards WHERE id = $1 AND source = 'plaid'`,
-				params: [row.id]
+				text: `DELETE FROM public.carddue_cards WHERE id = $1 AND source = $2`,
+				params: [row.id, storedSource]
 			});
 		}
 	}
 	if (statements.length > 0) await cloudTransaction(statements);
 }
 
-function replaceLocalPlaidCards(
-	plaidItemId: string,
-	snapshots: PlaidCardSnapshot[],
+function replaceLocalConnectedCards(
+	provider: FinancialDataProvider,
+	connectionId: string,
+	snapshots: ConnectedCardSnapshot[],
 	syncedAt: string
 ): void {
+	const storedSource = storedSourceForProvider(provider);
 	const database = getDatabase();
 	const transaction = database.transaction(() => {
 		const existingRows = database
 			.prepare(
 				`SELECT id, source, plaid_item_id, external_account_ref, payload_enc,
 				        last_synced_at, created_at, updated_at
-				 FROM cards WHERE plaid_item_id = ? AND source = 'plaid'`
+				 FROM cards WHERE plaid_item_id = ? AND source = ?`
 			)
-			.all(plaidItemId) as PlaidCardRow[];
+			.all(connectionId, storedSource) as ConnectedCardRow[];
 		const existingCards = existingRows.flatMap((row) => {
 			const payload = decodePayload(row);
 			return payload ? [{ row, payload }] : [];
@@ -872,7 +909,7 @@ function replaceLocalPlaidCards(
 		const seenReferences = new Set<string>();
 
 		for (const snapshot of snapshots) {
-			const reference = privateFingerprint(snapshot.accountId, 'plaid-account');
+			const reference = providerAccountReference(provider, snapshot.accountId, 'card');
 			seenReferences.add(reference);
 			const current = existingByReference.get(reference);
 			const id = current?.row.id ?? randomUUID();
@@ -891,52 +928,55 @@ function replaceLocalPlaidCards(
 						`INSERT INTO cards
 						 (id, source, plaid_item_id, external_account_ref, payload_enc,
 						  last_synced_at, created_at, updated_at)
-						 VALUES (?, 'plaid', ?, ?, ?, ?, ?, ?)`
+						 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 					)
-					.run(id, plaidItemId, reference, encrypted, syncedAt, syncedAt, syncedAt);
+					.run(id, storedSource, connectionId, reference, encrypted, syncedAt, syncedAt, syncedAt);
 			}
 		}
 
 		for (const { row } of existingCards) {
 			if (!seenReferences.has(row.external_account_ref)) {
-				database.prepare(`DELETE FROM cards WHERE id = ? AND source = 'plaid'`).run(row.id);
+				database.prepare(`DELETE FROM cards WHERE id = ? AND source = ?`).run(row.id, storedSource);
 			}
 		}
 	});
 	transaction();
 }
 
-export async function replacePlaidCards(
-	plaidItemId: string,
-	snapshots: PlaidCardSnapshot[],
+export async function replaceConnectedCards(
+	provider: FinancialDataProvider,
+	connectionId: string,
+	snapshots: ConnectedCardSnapshot[],
 	syncedAt: string
 ): Promise<void> {
 	if (getRuntimeMode() === 'cloud') {
-		await replaceCloudPlaidCards(plaidItemId, snapshots, syncedAt);
+		await replaceCloudConnectedCards(provider, connectionId, snapshots, syncedAt);
 	} else {
-		replaceLocalPlaidCards(plaidItemId, snapshots, syncedAt);
+		replaceLocalConnectedCards(provider, connectionId, snapshots, syncedAt);
 	}
 }
 
-export async function readPlaidTransactionState(
-	plaidItemId: string
-): Promise<PlaidTransactionState> {
+export async function readConnectionTransactionState(
+	provider: FinancialDataProvider,
+	connectionId: string
+): Promise<ConnectionTransactionState> {
+	const storedSource = storedSourceForProvider(provider);
 	const rows =
 		getRuntimeMode() === 'cloud'
 			? await cloudQuery<CardRow>(
 					`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
 					        last_synced_at, created_at, updated_at
 					 FROM public.carddue_cards
-					 WHERE plaid_item_id = $1 AND source = 'plaid'`,
-					[plaidItemId]
+					 WHERE plaid_item_id = $1 AND source = $2`,
+					[connectionId, storedSource]
 				)
 			: (getDatabase()
 					.prepare(
 						`SELECT id, source, plaid_item_id, external_account_ref, payload_enc,
 						        last_synced_at, created_at, updated_at
-						 FROM cards WHERE plaid_item_id = ? AND source = 'plaid'`
+						 FROM cards WHERE plaid_item_id = ? AND source = ?`
 					)
-					.all(plaidItemId) as CardRow[]);
+					.all(connectionId, storedSource) as CardRow[]);
 	const enabledRows = rows
 		.map((row) => ({ row, history: transactionHistoryFromRow(row) }))
 		.filter(
@@ -947,7 +987,7 @@ export async function readPlaidTransactionState(
 		return {
 			enabled: false,
 			cursor: null,
-			status: 'TRANSACTIONS_UPDATE_STATUS_UNKNOWN',
+			status: 'unknown',
 			byAccountReference: new Map()
 		};
 	}
@@ -972,7 +1012,7 @@ export async function readPlaidTransactionState(
 }
 
 function transactionMatchesRewardCategory(
-	transaction: StoredPlaidTransaction,
+	transaction: StoredFinancialTransaction,
 	matchCategory: CardRewardCategoryMatch
 ): boolean {
 	const primary = transaction.categoryPrimary?.toUpperCase() ?? '';
@@ -1020,7 +1060,7 @@ interface RankedRewardRate {
 }
 
 function venmoEligibleCategory(
-	transaction: StoredPlaidTransaction
+	transaction: StoredFinancialTransaction
 ): { key: string; label: string } | null {
 	if (transactionMatchesRewardCategory(transaction, 'transit')) {
 		return { key: 'transportation', label: 'Transportation' };
@@ -1061,7 +1101,7 @@ function rewardPeriodKey(transactionDate: string, statementDate: string | null):
 }
 
 function venmoRankedRewardRates(
-	transactions: StoredPlaidTransaction[],
+	transactions: StoredFinancialTransaction[],
 	statementDate: string | null
 ): Map<string, RankedRewardRate> {
 	const totalsByMonth = new Map<string, Map<string, { amountCents: number; label: string }>>();
@@ -1112,7 +1152,7 @@ function venmoRankedRewardRates(
 }
 
 function transactionRewardEstimate(
-	transaction: StoredPlaidTransaction,
+	transaction: StoredFinancialTransaction,
 	rewards: NormalizedCardRewards,
 	rankedRate?: RankedRewardRate
 ): CardTransactionRewardEstimate | null {
@@ -1180,10 +1220,10 @@ export async function listCardTransactions(
 	if (!row) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
 	const payload = decodePayload(row);
 	if (!payload) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
-	if (row.source !== 'plaid') {
+	if (row.source === 'manual') {
 		throw new AppError(
 			'TRANSACTION_HISTORY_UNAVAILABLE',
-			'Transaction history is available for Plaid cards only.',
+			'Transaction history is available for connected cards only.',
 			409
 		);
 	}
@@ -1202,7 +1242,11 @@ export async function listCardTransactions(
 			: new Map<string, RankedRewardRate>();
 	const transactions = history.transactions
 		.map<CardTransaction>((transaction) => ({
-			id: privateUuid(transaction.transactionId, `plaid-transaction:${cardId}`),
+			id: providerTransactionId(
+				providerForStoredSource(row.source)!,
+				transaction.transactionId,
+				cardId
+			),
 			name: transaction.name,
 			merchantName: transaction.merchantName,
 			amountCents: transaction.amountCents,

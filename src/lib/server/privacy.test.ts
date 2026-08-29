@@ -16,12 +16,12 @@ import {
 	createManualCard,
 	listCards,
 	listCardTransactions,
-	replacePlaidCards,
+	replaceConnectedCards,
 	updateCardRewards
 } from './cards';
 import { closeDatabaseForTests, getDatabase } from './database';
 import { decryptSecret, encryptSecret, resetCryptoStateForTests } from './crypto';
-import { listFinancialAccounts, replacePlaidFinancialAccounts } from './financial-records';
+import { listFinancialAccounts, replaceConnectedFinancialAccounts } from './financial-records';
 import { ensurePrivateDataDirectory, getDataPaths } from './paths';
 import { savePlaidItem } from './plaid-store';
 import { createManualCardSchema, updateCardRewardsSchema } from './schemas';
@@ -113,7 +113,8 @@ describe.sequential('private local persistence', () => {
 			'private-access-token-alpha',
 			'Synthetic Bank'
 		);
-		await replacePlaidCards(
+		await replaceConnectedCards(
+			'plaid',
 			plaidItemId,
 			[
 				{
@@ -132,7 +133,7 @@ describe.sequential('private local persistence', () => {
 					transactionHistory: {
 						enabled: true,
 						cursor,
-						status: 'HISTORICAL_UPDATE_COMPLETE',
+						status: 'historical_complete',
 						transactions: [
 							{
 								transactionId: providerTransactionId,
@@ -170,7 +171,7 @@ describe.sequential('private local persistence', () => {
 		}
 	});
 
-	it('encrypts Plaid bank and brokerage account details at rest', async () => {
+	it('encrypts connected bank and brokerage account details at rest', async () => {
 		const accountName = 'Private brokerage account cfa50c23';
 		const institutionName = 'Private brokerage institution 3ac12810';
 		const plaidItemId = await savePlaidItem(
@@ -178,7 +179,8 @@ describe.sequential('private local persistence', () => {
 			'private-access-token-brokerage',
 			institutionName
 		);
-		await replacePlaidFinancialAccounts(
+		await replaceConnectedFinancialAccounts(
+			'plaid',
 			plaidItemId,
 			[
 				{
@@ -198,7 +200,7 @@ describe.sequential('private local persistence', () => {
 
 		const [account] = await listFinancialAccounts();
 		expect(account).toMatchObject({
-			source: 'plaid',
+			source: 'connected',
 			nickname: accountName,
 			institution: institutionName,
 			currentBalanceCents: 1_234_500

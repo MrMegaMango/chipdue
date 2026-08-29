@@ -406,13 +406,14 @@ describe.sequential('Plaid transaction history', () => {
 		expect(accounts).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
-					source: 'plaid',
+					source: 'connected',
 					accountType: 'checking',
 					currentBalanceCents: 125_000,
-					plaidConnectionId: itemId
+					connectionId: itemId,
+					connectionProvider: 'plaid'
 				}),
 				expect.objectContaining({
-					source: 'plaid',
+					source: 'connected',
 					accountType: 'brokerage',
 					currentBalanceCents: 840_000,
 					costBasisCents: 700_000,
@@ -447,7 +448,7 @@ describe.sequential('Plaid transaction history', () => {
 		});
 		await expect(
 			updateFinancialAccount(checking!.id, { currentBalanceCents: 999_999 })
-		).rejects.toMatchObject({ code: 'PLAID_ACCOUNT_READ_ONLY', status: 409 });
+		).rejects.toMatchObject({ code: 'CONNECTED_ACCOUNT_READ_ONLY', status: 409 });
 
 		plaidMocks.accountsGet.mockResolvedValueOnce(mixedAccountsResponse(1_575, 8_900));
 		plaidMocks.investmentsHoldingsGet.mockResolvedValueOnce({
@@ -911,7 +912,7 @@ describe.sequential('Plaid transaction history', () => {
 		const [checking] = await listFinancialAccounts();
 		expect(checking).toMatchObject({
 			transactionHistoryEnabled: true,
-			transactionHistoryStatus: 'HISTORICAL_UPDATE_COMPLETE'
+			transactionHistoryStatus: 'historical_complete'
 		});
 		expect((await listFinancialAccountTransactions(checking.id)).transactions).toMatchObject([
 			{ name: 'Synthetic purchase', amountCents: 1_234 }
@@ -967,7 +968,7 @@ describe.sequential('Plaid transaction history', () => {
 		const [card] = await listCards();
 		expect(card).toMatchObject({
 			transactionHistoryEnabled: true,
-			transactionHistoryStatus: 'NOT_READY'
+			transactionHistoryStatus: 'preparing'
 		});
 		expect((await listCardTransactions(card.id)).transactions).toEqual([]);
 	});
