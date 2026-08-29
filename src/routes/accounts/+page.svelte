@@ -3,6 +3,7 @@
 	import { onMount } from 'svelte';
 	import { getCompatibleBonusOffers } from '$lib/bonus-offers';
 	import BalanceHistoryChart from '$lib/components/BalanceHistoryChart.svelte';
+	import SyncedTime from '$lib/components/SyncedTime.svelte';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
 	import { financialProviderName } from '$lib/financial-data';
 	import { cashSweepAction, isCashSweepSecurity } from '$lib/investment-display';
@@ -519,14 +520,6 @@
 		return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(
 			new Date(`${value}T12:00:00`)
 		);
-	}
-
-	function formatSyncTime(value: string | null): string {
-		if (!value) return 'Waiting for first sync';
-		const parsed = new Date(value);
-		return Number.isFinite(parsed.getTime())
-			? `Synced ${dateTime.format(parsed)}`
-			: 'Sync time unavailable';
 	}
 
 	function typeLabel(type: FinancialAccountType): string {
@@ -1341,9 +1334,12 @@
 															</div>
 															<div class="account-pills">
 																{#if account.source === 'connected'}
-																	<span class="account-sync-time"
-																		>{formatSyncTime(account.lastSyncedAt)}</span
-																	>
+																	<span class="account-sync-time">
+																		<SyncedTime
+																			value={account.lastSyncedAt}
+																			fallback="Waiting for first sync"
+																		/>
+																	</span>
 																{:else}
 																	<span class="finance-pill source">Manual</span>
 																{/if}

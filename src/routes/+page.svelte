@@ -198,6 +198,7 @@
 		type AutomaticCardRewardProfile
 	} from '$lib/card-reward-profiles';
 	import NetWorthChart from '$lib/components/NetWorthChart.svelte';
+	import SyncedTime from '$lib/components/SyncedTime.svelte';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
 	import { financialProviderName } from '$lib/financial-data';
 	import { clearPrivateApiCache, reusePrivateApiGet } from '$lib/private-api-cache';
@@ -1382,23 +1383,6 @@
 		if (days === 1) return { label: 'Due tomorrow', tone: 'warn' };
 		if (days <= 7) return { label: `Due in ${days} days`, tone: 'warn' };
 		return { label: `Due in ${days} days`, tone: 'good' };
-	}
-
-	function ageLabel(
-		value: string | null | undefined,
-		action: 'Updated' | 'Synced' = 'Updated'
-	): string {
-		if (!value) return action === 'Synced' ? 'Never synced' : 'Update time unavailable';
-		const timestamp = new Date(value).getTime();
-		if (!Number.isFinite(timestamp)) return `${action} time unavailable`;
-		const elapsed = Math.max(0, nowTick - timestamp);
-		const minutes = Math.floor(elapsed / 60_000);
-		if (minutes < 1) return `${action} just now`;
-		if (minutes < 60) return `${action} ${minutes}m ago`;
-		const hours = Math.floor(minutes / 60);
-		if (hours < 24) return `${action} ${hours}h ago`;
-		const days = Math.floor(hours / 24);
-		return `${action} ${days}d ago`;
 	}
 
 	function cardSubtitle(card: CardView): string {
@@ -2619,6 +2603,12 @@
 							<p class="toolbar-description">
 								Your money, deadlines, and active offers at a glance.
 							</p>
+							{#if plaid.connectedItems > 0}
+								<p class="workspace-sync-time">
+									<span class="mini-dot"></span>
+									<SyncedTime value={plaid.lastSyncedAt} fallback="Waiting for first sync" />
+								</p>
+							{/if}
 						{:else if currentSection === 'cards'}
 							<p class="section-kicker">Credit cards</p>
 							<h1 id="page-title">Cards</h1>
@@ -3134,12 +3124,12 @@
 								<footer class="card-footer">
 									<span>
 										<span class="mini-dot"></span>
-										{ageLabel(
-											card.source === 'connected'
+										<SyncedTime
+											value={card.source === 'connected'
 												? (card.lastSyncedAt ?? card.updatedAt)
-												: card.updatedAt,
-											card.source === 'connected' ? 'Synced' : 'Updated'
-										)}
+												: card.updatedAt}
+											action={card.source === 'connected' ? 'Synced' : 'Updated'}
+										/>
 									</span>
 									<div class="card-actions">
 										<button
@@ -3312,11 +3302,16 @@
 							<li>
 								<span class="connection-mark" class:connected={plaid.connectedItems > 0}></span>
 								<span>
-									{plaid.connectedItems > 0
-										? `${plaid.connectedItems} connected ${plaid.connectedItems === 1 ? 'institution' : 'institutions'} · ${ageLabel(plaid.lastSyncedAt, 'Synced')}`
-										: plaid.configured
-											? 'Plaid is ready but not connected'
-											: 'Plaid is not configured'}
+									{#if plaid.connectedItems > 0}
+										{plaid.connectedItems} connected {plaid.connectedItems === 1
+											? 'institution'
+											: 'institutions'} ·
+										<SyncedTime value={plaid.lastSyncedAt} fallback="Never synced" />
+									{:else if plaid.configured}
+										Plaid is ready but not connected
+									{:else}
+										Plaid is not configured
+									{/if}
 								</span>
 							</li>
 						</ul>
@@ -3504,7 +3499,7 @@
 													<strong>{connectionLabel(connection)}</strong>
 													<small class:attention={connection.status === 'needs_update'}>
 														{connection.status === 'needs_update' ? 'Needs attention' : 'Connected'} ·
-														{ageLabel(connection.lastSyncedAt, 'Synced')}
+														<SyncedTime value={connection.lastSyncedAt} fallback="Never synced" />
 													</small>
 												</span>
 											</div>
@@ -4172,7 +4167,7 @@
 				<div class="history-body">
 					<div class="history-sync-note">
 						<span class="mini-dot"></span>
-						<span>{ageLabel(historyLastSyncedAt, 'Synced')}</span>
+						<SyncedTime value={historyLastSyncedAt} fallback="Never synced" />
 						{#if historyStatus === 'preparing' || historyStatus === 'current'}
 							<span>· Older activity is still loading</span>
 						{/if}
@@ -4826,6 +4821,21 @@
 		color: var(--muted);
 		font-size: 0.78rem;
 		line-height: 1.5;
+	}
+
+	.workspace-sync-time {
+		display: flex;
+		gap: 0.4rem;
+		align-items: center;
+		margin: 0.35rem 0 0;
+		color: var(--faint);
+		font-size: 0.68rem;
+		font-weight: 620;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.workspace-sync-time .mini-dot {
+		background: var(--positive);
 	}
 
 	.dashboard-actions {

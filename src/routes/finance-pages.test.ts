@@ -21,6 +21,10 @@ const headerSource = readFileSync(
 	new URL('../lib/components/WorkspaceHeader.svelte', import.meta.url),
 	'utf8'
 );
+const syncedTimeSource = readFileSync(
+	new URL('../lib/components/SyncedTime.svelte', import.meta.url),
+	'utf8'
+);
 const cardsRouteSource = readFileSync(new URL('./cards/+page.svelte', import.meta.url), 'utf8');
 const settingsRouteSource = readFileSync(
 	new URL('./settings/+page.svelte', import.meta.url),
@@ -44,6 +48,16 @@ describe('financial workspace navigation', () => {
 		expect(dashboardSource).toContain("page.route.id === '/cards'");
 		expect(dashboardSource).toContain("page.route.id === '/settings'");
 		expect(dashboardSource).toContain("{:else if currentSection === 'cards'}");
+	});
+
+	it('shows live relative sync times throughout the workspace with exact hover timestamps', () => {
+		expect(syncedTimeSource).toContain('relativeTimestampLabel(value, $currentTime');
+		expect(syncedTimeSource).toContain('title={exactLabel ?? undefined}');
+		expect(syncedTimeSource).toContain('aria-label={exactLabel ?? relativeLabel}');
+		expect(dashboardSource).toContain('<SyncedTime');
+		expect(dashboardSource).toContain('class="workspace-sync-time"');
+		expect(accountsSource).toContain('value={account.lastSyncedAt}');
+		expect(bonusesSource).toContain('fallback="Not checked yet"');
 	});
 
 	it('keeps connection management in settings while exposing direct connection actions', () => {
@@ -181,11 +195,11 @@ describe('financial workspace navigation', () => {
 	it('replaces connected account pills with low-emphasis sync freshness', () => {
 		expect(accountsSource).not.toContain('<dt>Data source</dt>');
 		expect(accountsSource).toContain('class="account-sync-time"');
-		expect(accountsSource).toContain('{formatSyncTime(account.lastSyncedAt)}</span');
+		expect(accountsSource).toContain('value={account.lastSyncedAt}');
+		expect(accountsSource).toContain('fallback="Waiting for first sync"');
 		expect(accountsSource).toContain("account.source === 'manual' || account.status !== 'active'");
 		expect(accountsSource).toContain('<span class="finance-pill source">Manual</span>');
 		expect(accountsSource).not.toContain("class:connected={account.source === 'connected'}");
-		expect(accountsSource).not.toContain('<small>{formatSyncTime(account.lastSyncedAt)}</small>');
 		expect(accountsSource).toContain('.account-sync-time {');
 	});
 

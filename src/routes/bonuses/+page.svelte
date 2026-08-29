@@ -11,6 +11,7 @@
 		resolveBonusOffer,
 		type BonusTracker
 	} from '$lib/bonus-offers';
+	import SyncedTime from '$lib/components/SyncedTime.svelte';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
 	import { clearPrivateApiCache, reusePrivateApiGet } from '$lib/private-api-cache';
 	import type {
@@ -206,16 +207,6 @@
 
 	function formatDate(value: string | null): string {
 		return value ? fullDate.format(new Date(`${value}T12:00:00`)) : 'Not entered';
-	}
-
-	function formatSyncTime(value: string | null): string {
-		if (!value) return 'Not checked yet';
-		return new Intl.DateTimeFormat('en-US', {
-			month: 'short',
-			day: 'numeric',
-			hour: 'numeric',
-			minute: '2-digit'
-		}).format(new Date(value));
 	}
 
 	function daysUntil(value: string | null): number {
@@ -798,10 +789,11 @@
 													: `Check ${tracker.offer.institution} now`}
 											</button>
 											<small>
-												Last checked {formatSyncTime(
-													activityByAccount[tracker.account.id]?.lastSyncedAt ??
-														tracker.account.lastSyncedAt
-												)}
+												<SyncedTime
+													value={activityByAccount[tracker.account.id]?.lastSyncedAt ??
+														tracker.account.lastSyncedAt}
+													fallback="Not checked yet"
+												/>
 											</small>
 										{:else}
 											<small>Connect this account to a provider to estimate posted activity.</small>
