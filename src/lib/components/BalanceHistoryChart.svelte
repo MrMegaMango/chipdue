@@ -7,6 +7,7 @@
 		y: number;
 		contributionsY: number | null;
 	};
+	type ReturnArea = { path: string; kind: 'gain' | 'loss' };
 
 	let {
 		accountId,
@@ -90,22 +91,38 @@
 	function chartFor(history: AccountBalanceHistoryPoint[]): {
 		points: ChartPoint[];
 		linePath: string;
-		contributionsPath: string;
-		areaPath: string;
+		contributionLinePaths: string[];
+		contributionAreaPaths: string[];
+		returnAreas: ReturnArea[];
+		portfolioAreaPath: string;
 		ticks: Array<{ value: number; y: number }>;
 	} {
 		if (history.length === 0) {
-			return { points: [], linePath: '', contributionsPath: '', areaPath: '', ticks: [] };
+			return {
+				points: [],
+				linePath: '',
+				contributionLinePaths: [],
+				contributionAreaPaths: [],
+				returnAreas: [],
+				portfolioAreaPath: '',
+				ticks: []
+			};
 		}
+		const hasContributions = history.some((point) => point.netContributionsCents !== null);
 		const values = history.flatMap((point) => [
 			point.balanceCents,
 			...(point.netContributionsCents === null ? [] : [point.netContributionsCents])
 		]);
+		if (hasContributions) values.push(0);
 		const rawMin = Math.min(...values);
 		const rawMax = Math.max(...values);
 		const valueRange = rawMax - rawMin;
-		const padding = Math.max(valueRange * 0.14, Math.max(Math.abs(rawMax), 1) * 0.025, 100);
-		const min = rawMin - padding;
+		const padding = Math.max(
+			valueRange * (hasContributions ? 0.06 : 0.14),
+			Math.max(Math.abs(rawMax), 1) * 0.025,
+			100
+		);
+		const min = hasContributions && rawMin >= 0 ? 0 : rawMin - padding;
 		const max = rawMax + padding;
 		const firstTime = new Date(history[0].recordedAt).getTime();
 		const lastTime = new Date(history.at(-1)!.recordedAt).getTime();
@@ -130,26 +147,120 @@
 		const linePath = scaled
 			.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`)
 			.join(' ');
-		const contributionPoints = scaled.filter(
-			(point): point is ChartPoint & { contributionsY: number } => point.contributionsY !== null
-		);
-		const contributionsPath = contributionPoints
-			.map((point, index) =>
-				index === 0
-					? `M ${point.x} ${point.contributionsY}`
-					: `H ${point.x} V ${point.contributionsY}`
-			)
-			.join(' ');
 		const floor = HEIGHT - PLOT_BOTTOM;
-		const areaPath =
-			scaled.length > 1
+		const zeroY = PLOT_TOP + ((max - 0) / (max - min)) * plotHeight;
+		const contributionGroups: Array<Array<ChartPoint & { contributionsY: number }>> = [];
+		for (let index = 0; index < scaled.length; index += 1) {
+			const point = scaled[index];
+			if (point.contributionsY === null) continue;
+			const previousPoint = scaled[index - 1];
+			if (!previousPoint || previousPoint.contributionsY === null) contributionGroups.push([]);
+			contributionGroups.at(-1)!.push(point as ChartPoint & { contributionsY: number });
+		}
+		const contributionLinePaths = contributionGroups.flatMap((group) => {
+			if (group.length === 1) {
+				return history.length === 1
+					? [
+							`M ${PLOT_LEFT} ${group[0].contributionsY} L ${WIDTH - PLOT_RIGHT} ${group[0].contributionsY}`
+						]
+					: [];
+			}
+			return [
+				group
+					.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.contributionsY}`)
+					.join(' ')
+			];
+		});
+		const contributionAreaPaths = contributionGroups.flatMap((group) => {
+			if (group.length === 1) {
+				return history.length === 1
+					? [
+							`M ${PLOT_LEFT} ${zeroY} L ${PLOT_LEFT} ${group[0].contributionsY} L ${WIDTH - PLOT_RIGHT} ${group[0].contributionsY} L ${WIDTH - PLOT_RIGHT} ${zeroY} Z`
+						]
+					: [];
+			}
+			return [
+				`M ${group[0].x} ${zeroY} L ${group
+					.map((point) => `${point.x} ${point.contributionsY}`)
+					.join(' L ')} L ${group.at(-1)!.x} ${zeroY} Z`
+			];
+		});
+		const returnAreas = contributionGroups.flatMap((group) =>
+			returnAreasFor(group, history.length)
+		);
+		const portfolioAreaPath =
+			!hasContributions && scaled.length > 1
 				? `${linePath} L ${scaled.at(-1)!.x} ${floor} L ${scaled[0].x} ${floor} Z`
 				: '';
 		const ticks = [max, (max + min) / 2, min].map((value) => ({
 			value,
 			y: PLOT_TOP + ((max - value) / (max - min)) * plotHeight
 		}));
-		return { points: scaled, linePath, contributionsPath, areaPath, ticks };
+		return {
+			points: scaled,
+			linePath,
+			contributionLinePaths,
+			contributionAreaPaths,
+			returnAreas,
+			portfolioAreaPath,
+			ticks
+		};
+	}
+
+	function returnAreasFor(
+		group: Array<ChartPoint & { contributionsY: number }>,
+		historyLength: number
+	): ReturnArea[] {
+		if (group.length === 1) {
+			if (historyLength !== 1) return [];
+			const point = group[0];
+			return [
+				{
+					kind: point.balanceCents >= point.netContributionsCents! ? 'gain' : 'loss',
+					path: `M ${PLOT_LEFT} ${point.y} L ${WIDTH - PLOT_RIGHT} ${point.y} L ${WIDTH - PLOT_RIGHT} ${point.contributionsY} L ${PLOT_LEFT} ${point.contributionsY} Z`
+				}
+			];
+		}
+
+		const areas: ReturnArea[] = [];
+		for (let index = 1; index < group.length; index += 1) {
+			const left = group[index - 1];
+			const right = group[index];
+			const leftReturn = left.balanceCents - left.netContributionsCents!;
+			const rightReturn = right.balanceCents - right.netContributionsCents!;
+			if (
+				leftReturn === 0 ||
+				rightReturn === 0 ||
+				Math.sign(leftReturn) === Math.sign(rightReturn)
+			) {
+				areas.push(returnPolygon(left, right, leftReturn + rightReturn >= 0 ? 'gain' : 'loss'));
+				continue;
+			}
+
+			const crossingRatio = Math.abs(leftReturn) / (Math.abs(leftReturn) + Math.abs(rightReturn));
+			const crossingX = left.x + (right.x - left.x) * crossingRatio;
+			const crossingY = left.y + (right.y - left.y) * crossingRatio;
+			const crossing = {
+				...left,
+				x: crossingX,
+				y: crossingY,
+				contributionsY: crossingY
+			};
+			areas.push(returnPolygon(left, crossing, leftReturn >= 0 ? 'gain' : 'loss'));
+			areas.push(returnPolygon(crossing, right, rightReturn >= 0 ? 'gain' : 'loss'));
+		}
+		return areas;
+	}
+
+	function returnPolygon(
+		left: ChartPoint & { contributionsY: number },
+		right: ChartPoint & { contributionsY: number },
+		kind: ReturnArea['kind']
+	): ReturnArea {
+		return {
+			kind,
+			path: `M ${left.x} ${left.y} L ${right.x} ${right.y} L ${right.x} ${right.contributionsY} L ${left.x} ${left.contributionsY} Z`
+		};
 	}
 
 	function formatMoney(balanceCents: number): string {
@@ -241,6 +352,7 @@
 			<div class="chart-legend" aria-label="Chart legend">
 				<span><i class="portfolio"></i>Portfolio value</span>
 				<span><i class="contributions"></i>Net contributions</span>
+				<span><i class="returns"></i>Investment return</span>
 			</div>
 			<div class="range-controls" aria-label="Balance history range">
 				{#each ranges as range (range.id)}
@@ -279,9 +391,19 @@
 						{formatCompactMoney(tick.value)}
 					</text>
 				{/each}
-				{#if chart.areaPath}
-					<path d={chart.areaPath} fill={`url(#${gradientId})`} />
+				{#if chart.portfolioAreaPath}
+					<path d={chart.portfolioAreaPath} fill={`url(#${gradientId})`} />
 				{/if}
+				{#each chart.contributionAreaPaths as path (path)}
+					<path d={path} class="contributions-area" />
+				{/each}
+				{#each chart.returnAreas as area, index (`${area.kind}-${index}`)}
+					<path
+						d={area.path}
+						class:return-gain={area.kind === 'gain'}
+						class:return-loss={area.kind === 'loss'}
+					/>
+				{/each}
 				{#if chart.points.length === 1}
 					<line
 						x1={PLOT_LEFT}
@@ -293,9 +415,9 @@
 				{:else}
 					<path d={chart.linePath} class="value-line" />
 				{/if}
-				{#if chart.contributionsPath}
-					<path d={chart.contributionsPath} class="contributions-line" />
-				{/if}
+				{#each chart.contributionLinePaths as path (path)}
+					<path d={path} class="contributions-line" />
+				{/each}
 				{#each chart.points as point, index (point.recordedAt)}
 					{#if index === chart.points.length - 1 || index === hoveredIndex}
 						<circle
@@ -467,6 +589,7 @@
 
 	.chart-legend {
 		display: flex;
+		flex-wrap: wrap;
 		gap: 0.72rem;
 		align-items: center;
 		color: var(--faint);
@@ -488,8 +611,20 @@
 	}
 
 	.chart-legend i.contributions {
-		border-color: var(--amber);
-		border-top-style: dashed;
+		width: 13px;
+		height: 8px;
+		border: 1px solid var(--amber);
+		border-radius: 2px;
+		background: color-mix(in srgb, var(--amber) 26%, transparent);
+	}
+
+	.chart-legend i.returns {
+		width: 13px;
+		height: 8px;
+		border: 0;
+		border-radius: 2px;
+		background: linear-gradient(90deg, var(--positive) 0 50%, var(--red) 50% 100%);
+		opacity: 0.62;
 	}
 
 	.range-controls {
@@ -545,9 +680,10 @@
 
 	.starting-line {
 		stroke: var(--accent);
-		stroke-width: 2;
-		stroke-dasharray: 5 5;
-		opacity: 0.62;
+		stroke-width: 3;
+		stroke-linecap: round;
+		opacity: 0.86;
+		vector-effect: non-scaling-stroke;
 	}
 
 	.value-line {
@@ -566,11 +702,25 @@
 		vector-effect: non-scaling-stroke;
 	}
 
+	.contributions-area {
+		fill: var(--amber);
+		fill-opacity: 0.2;
+	}
+
+	.return-gain {
+		fill: var(--positive);
+		fill-opacity: 0.25;
+	}
+
+	.return-loss {
+		fill: var(--red);
+		fill-opacity: 0.23;
+	}
+
 	.contributions-line {
 		fill: none;
 		stroke: var(--amber);
-		stroke-width: 2.5;
-		stroke-dasharray: 6 4;
+		stroke-width: 2;
 		stroke-linecap: round;
 		stroke-linejoin: round;
 		vector-effect: non-scaling-stroke;
@@ -651,14 +801,18 @@
 
 	.visually-hidden {
 		position: absolute;
+		display: block;
 		width: 1px;
+		max-width: 1px;
 		height: 1px;
 		padding: 0;
 		margin: -1px;
 		overflow: hidden;
 		clip: rect(0, 0, 0, 0);
+		clip-path: inset(50%);
 		white-space: nowrap;
 		border: 0;
+		contain: strict;
 	}
 
 	@media (max-width: 640px) {

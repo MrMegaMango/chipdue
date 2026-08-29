@@ -2,6 +2,10 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const accountsSource = readFileSync(new URL('./accounts/+page.svelte', import.meta.url), 'utf8');
+const balanceHistoryChartSource = readFileSync(
+	new URL('../lib/components/BalanceHistoryChart.svelte', import.meta.url),
+	'utf8'
+);
 const bonusesSource = readFileSync(new URL('./bonuses/+page.svelte', import.meta.url), 'utf8');
 const dashboardSource = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
 const etradeSource = readFileSync(new URL('./etrade/+page.svelte', import.meta.url), 'utf8');
@@ -24,6 +28,14 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain('BalanceHistoryChart');
 		expect(accountsSource).toContain('points={account.balanceHistory}');
 		expect(accountsSource).toContain('netContributionsCents={account.netContributionsCents}');
+	});
+
+	it('stacks brokerage contributions beneath gain and loss returns', () => {
+		expect(balanceHistoryChartSource).toContain('class="contributions-area"');
+		expect(balanceHistoryChartSource).toContain("class:return-gain={area.kind === 'gain'}");
+		expect(balanceHistoryChartSource).toContain("class:return-loss={area.kind === 'loss'}");
+		expect(balanceHistoryChartSource).toContain('Portfolio value');
+		expect(balanceHistoryChartSource).toContain('Investment return');
 	});
 
 	it('shows institution branding on account cards', () => {
