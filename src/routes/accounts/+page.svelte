@@ -1296,10 +1296,7 @@
 												: undefined}
 										>
 											{#if ownershipGroup.title}
-												<div
-													class:business={ownershipGroup.id === 'business'}
-													class="account-ownership-heading"
-												>
+												<div class="account-ownership-heading">
 													<h4 id={`${accountGroup.id}-${ownershipGroup.id}-account-list-title`}>
 														{ownershipGroup.title}
 													</h4>
@@ -2070,31 +2067,20 @@
 	.account-ownership-heading {
 		display: flex;
 		gap: 0.75rem;
-		align-items: center;
+		align-items: baseline;
 		justify-content: space-between;
-		margin-bottom: 0.65rem;
-		padding: 0.5rem 0.65rem;
-		border-left: 3px solid var(--accent);
-		border-radius: 6px;
-		background: var(--accent-soft);
-	}
-
-	.account-ownership-heading.business {
-		border-left-color: var(--amber);
-		background: var(--amber-soft);
+		margin-bottom: 0.8rem;
+		padding-bottom: 0.45rem;
+		border-bottom: 1px solid var(--line);
 	}
 
 	.account-ownership-heading h4 {
 		margin: 0;
-		color: var(--accent-dark);
-		font-size: 0.7rem;
-		font-weight: 800;
-		letter-spacing: 0.04em;
+		color: var(--ink);
+		font-size: 0.68rem;
+		font-weight: 750;
+		letter-spacing: 0.06em;
 		text-transform: uppercase;
-	}
-
-	.account-ownership-heading.business h4 {
-		color: var(--amber);
 	}
 
 	.account-ownership-heading span {
