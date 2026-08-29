@@ -297,6 +297,9 @@
 		configured: boolean;
 		source: 'personal' | 'installation' | null;
 		environment: 'sandbox' | 'production' | null;
+	};
+
+	type FinancialConnectionsResponse = {
 		connections: FinancialConnection[];
 	};
 
@@ -438,7 +441,7 @@
 		| null
 	>(null);
 	let deletingId = $state<string | null>(null);
-	let plaidConnections = $state<FinancialConnection[]>([]);
+	let financialConnections = $state<FinancialConnection[]>([]);
 	let plaidStatusLoading = $state(true);
 	let plaidStatusError = $state('');
 	let plaidClientId = $state('');
@@ -979,7 +982,7 @@
 		workspaceBonuses = [];
 		hasLoadedWorkspace = false;
 		plaid = { ...emptyPlaid };
-		plaidConnections = [];
+		financialConnections = [];
 		loading = true;
 		loadError = '';
 		plaidStatusLoading = true;
@@ -1141,15 +1144,22 @@
 		plaidStatusError = '';
 
 		try {
-			const payload = await requestJson<PlaidStatusResponse>(
-				resolve('/api/plaid/status'),
-				{},
-				{ privateEpoch: expectedEpoch }
-			);
+			const [payload, connectionPayload] = await Promise.all([
+				requestJson<PlaidStatusResponse>(
+					resolve('/api/plaid/status'),
+					{},
+					{ privateEpoch: expectedEpoch }
+				),
+				requestJson<FinancialConnectionsResponse>(
+					resolve('/api/connections'),
+					{},
+					{ privateEpoch: expectedEpoch }
+				)
+			]);
 			if (!isPrivateEpochCurrent(expectedEpoch)) return false;
-			plaidConnections = payload.connections ?? [];
+			financialConnections = connectionPayload.connections ?? [];
 			const lastSyncedAt =
-				plaidConnections
+				financialConnections
 					.map((connection) => connection.lastSyncedAt)
 					.filter((value): value is string => value !== null)
 					.toSorted()
@@ -1158,7 +1168,7 @@
 				configured: payload.configured,
 				source: payload.source,
 				environment: payload.environment,
-				connectedItems: plaidConnections.length,
+				connectedItems: financialConnections.length,
 				lastSyncedAt
 			};
 			return true;
@@ -2074,8 +2084,9 @@
 		const epoch = privateStateEpoch;
 		if (!isPrivateEpochCurrent(epoch)) return;
 		const label = connectionLabel(connection);
+		const providerName = financialProviderName(connection.provider);
 		const confirmed = window.confirm(
-			`Disconnect “${label}”?\n\nChipDue will ask Plaid to revoke access, then erase this connection and its locally synced accounts, cards, and activity. This cannot be undone.`
+			`Disconnect “${label}”?\n\nChipDue will ask ${providerName} to revoke access, then erase this connection and its locally synced accounts, cards, and activity. This cannot be undone.`
 		);
 		if (!confirmed) return;
 
@@ -2103,10 +2114,7 @@
 			);
 		} catch (error) {
 			if (isPrivateEpochCurrent(epoch)) {
-				showNotice(
-					readableError(error, 'The Plaid connection could not be disconnected.'),
-					'error'
-				);
+				showNotice(readableError(error, 'The connection could not be disconnected.'), 'error');
 			}
 		} finally {
 			if (isPrivateEpochCurrent(epoch)) {
@@ -3053,7 +3061,7 @@
 								<span class="connection-mark" class:connected={plaid.connectedItems > 0}></span>
 								<span>
 									{plaid.connectedItems > 0
-										? `${plaid.connectedItems} Plaid ${plaid.connectedItems === 1 ? 'connection' : 'connections'} · ${ageLabel(plaid.lastSyncedAt, 'Synced')}`
+										? `${plaid.connectedItems} connected ${plaid.connectedItems === 1 ? 'institution' : 'institutions'} · ${ageLabel(plaid.lastSyncedAt, 'Synced')}`
 										: plaid.configured
 											? 'Plaid is ready but not connected'
 											: 'Plaid is not configured'}
@@ -3171,7 +3179,7 @@
 						{#if plaidStatusLoading}
 							<div
 								class="connections-loading"
-								aria-label="Loading Plaid connections"
+								aria-label="Loading financial connections"
 								aria-busy="true"
 							>
 								<span></span><span></span>
@@ -3185,14 +3193,14 @@
 									disabled={busyAction !== null}>Retry</button
 								>
 							</div>
-						{:else if plaidConnections.length > 0}
+						{:else if financialConnections.length > 0}
 							<section class="connection-manager" aria-labelledby="connections-heading">
 								<div class="connection-heading">
 									<h3 id="connections-heading">Connected institutions</h3>
 									<span>Manage shared accounts or revoke access</span>
 								</div>
 								<ul class="connection-list">
-									{#each plaidConnections as connection (connection.id)}
+									{#each financialConnections as connection (connection.id)}
 										{@const institutionLogoUrl = connectionLogoUrl(connection)}
 										<li>
 											<div class="connection-details">
@@ -3220,20 +3228,23 @@
 												</span>
 											</div>
 											<div class="connection-actions">
-												<button
-													class="update-connection"
-													type="button"
-													onclick={() => updatePlaid(connection)}
-													disabled={busyAction !== null}
-													aria-busy={busyAction === 'update' && plaidItemActionId === connection.id}
-													aria-describedby="plaid-consent-copy"
-												>
-													{busyAction === 'update' && plaidItemActionId === connection.id
-														? 'Opening…'
-														: connection.status === 'needs_update'
-															? 'Repair & manage'
-															: 'Manage accounts'}
-												</button>
+												{#if connection.provider === 'plaid'}
+													<button
+														class="update-connection"
+														type="button"
+														onclick={() => updatePlaid(connection)}
+														disabled={busyAction !== null}
+														aria-busy={busyAction === 'update' &&
+															plaidItemActionId === connection.id}
+														aria-describedby="plaid-consent-copy"
+													>
+														{busyAction === 'update' && plaidItemActionId === connection.id
+															? 'Opening…'
+															: connection.status === 'needs_update'
+																? 'Repair & manage'
+																: 'Manage accounts'}
+													</button>
+												{/if}
 												<button
 													class="disconnect-connection"
 													type="button"
