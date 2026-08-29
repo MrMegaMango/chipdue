@@ -369,9 +369,22 @@ function preferMoreRecentCard(left: Card, right: Card): Card {
 	return left.id.localeCompare(right.id) > 0 ? left : right;
 }
 
+type CardCandidate = { row: CardRow; card: Card };
+
+function preferMoreRecentCandidate(left: CardCandidate, right: CardCandidate): CardCandidate {
+	return preferMoreRecentCard(left.card, right.card) === left.card ? left : right;
+}
+
+function plaidDisplayIdentity(card: Card): string | null {
+	const issuer = card.issuer?.trim().toLocaleLowerCase();
+	const nickname = card.nickname.trim().toLocaleLowerCase();
+	if (!issuer || !nickname || !card.last4) return null;
+	return [issuer, nickname, card.last4, card.currency].join('\u0000');
+}
+
 function uniqueCards(rows: CardRow[]): Card[] {
 	const cards: Card[] = [];
-	const plaidCardsByAccount = new Map<string, Card>();
+	const plaidCardsByAccount = new Map<string, CardCandidate>();
 
 	for (const row of rows) {
 		const card = rowToCard(row);
@@ -384,11 +397,44 @@ function uniqueCards(rows: CardRow[]): Card[] {
 		const existing = plaidCardsByAccount.get(row.external_account_ref);
 		plaidCardsByAccount.set(
 			row.external_account_ref,
-			existing ? preferMoreRecentCard(existing, card) : card
+			existing ? preferMoreRecentCandidate(existing, { row, card }) : { row, card }
 		);
 	}
 
-	return [...cards, ...plaidCardsByAccount.values()];
+	const unmatchedPlaidCards: Card[] = [];
+	const cardsByDisplayIdentity = new Map<string, Map<string, CardCandidate[]>>();
+	for (const candidate of plaidCardsByAccount.values()) {
+		const displayIdentity = plaidDisplayIdentity(candidate.card);
+		const plaidItemId = candidate.row.plaid_item_id;
+		if (!displayIdentity || !plaidItemId) {
+			unmatchedPlaidCards.push(candidate.card);
+			continue;
+		}
+
+		const byConnection = cardsByDisplayIdentity.get(displayIdentity) ?? new Map();
+		const connectionCards = byConnection.get(plaidItemId) ?? [];
+		connectionCards.push(candidate);
+		byConnection.set(plaidItemId, connectionCards);
+		cardsByDisplayIdentity.set(displayIdentity, byConnection);
+	}
+
+	for (const byConnection of cardsByDisplayIdentity.values()) {
+		let preferredConnection: CardCandidate[] | undefined;
+		let preferredCard: CardCandidate | undefined;
+		for (const connectionCards of byConnection.values()) {
+			const mostRecentCard = connectionCards.reduce(preferMoreRecentCandidate);
+			if (
+				!preferredCard ||
+				preferMoreRecentCandidate(preferredCard, mostRecentCard) === mostRecentCard
+			) {
+				preferredCard = mostRecentCard;
+				preferredConnection = connectionCards;
+			}
+		}
+		cards.push(...(preferredConnection ?? []).map(({ card }) => card));
+	}
+
+	return [...cards, ...unmatchedPlaidCards];
 }
 
 function snapshotPayload(snapshot: PlaidCardSnapshot, rewards?: StoredCardRewards): CardPayload {

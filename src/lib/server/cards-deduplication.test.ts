@@ -77,6 +77,34 @@ describe.sequential('Plaid card identity', () => {
 		]);
 	});
 
+	it('recognizes a relinked account when the provider changes its account ID', async () => {
+		const firstItem = await savePlaidItem(
+			'provider-item-before-relink',
+			'access-token-before-relink',
+			'Synthetic Bank'
+		);
+		const secondItem = await savePlaidItem(
+			'provider-item-after-relink',
+			'access-token-after-relink',
+			'Synthetic Bank'
+		);
+
+		await replacePlaidCards(
+			firstItem,
+			[cardSnapshot('provider-account-before-relink', 41_700)],
+			'2026-08-27T12:00:00.000Z'
+		);
+		await replacePlaidCards(
+			secondItem,
+			[cardSnapshot('provider-account-after-relink', 41_795)],
+			'2026-08-28T12:00:00.000Z'
+		);
+
+		expect(await listCards()).toMatchObject([
+			{ nickname: 'Synthetic credit card', currentBalanceCents: 41_795 }
+		]);
+	});
+
 	it('keeps separate accounts even when their visible card details match', async () => {
 		const plaidItem = await savePlaidItem(
 			'provider-item-distinct',
@@ -89,6 +117,30 @@ describe.sequential('Plaid card identity', () => {
 			[cardSnapshot('provider-account-one', 41_795), cardSnapshot('provider-account-two', 41_795)],
 			'2026-08-28T12:00:00.000Z'
 		);
+
+		expect(await listCards()).toHaveLength(2);
+	});
+
+	it('keeps lookalike cards from different issuers separate', async () => {
+		const firstItem = await savePlaidItem(
+			'provider-item-first-bank',
+			'access-token-first-bank',
+			'First Synthetic Bank'
+		);
+		const secondItem = await savePlaidItem(
+			'provider-item-second-bank',
+			'access-token-second-bank',
+			'Second Synthetic Bank'
+		);
+		const secondCard = cardSnapshot('provider-account-second-bank', 41_795);
+		secondCard.issuer = 'Second Synthetic Bank';
+
+		await replacePlaidCards(
+			firstItem,
+			[cardSnapshot('provider-account-first-bank', 41_795)],
+			'2026-08-28T12:00:00.000Z'
+		);
+		await replacePlaidCards(secondItem, [secondCard], '2026-08-28T12:00:00.000Z');
 
 		expect(await listCards()).toHaveLength(2);
 	});
