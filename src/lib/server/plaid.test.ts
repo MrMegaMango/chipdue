@@ -8,6 +8,7 @@ const plaidMocks = vi.hoisted(() => ({
 	accountsGet: vi.fn(),
 	liabilitiesGet: vi.fn(),
 	investmentsHoldingsGet: vi.fn(),
+	investmentsTransactionsGet: vi.fn(),
 	transactionsSync: vi.fn(),
 	itemGet: vi.fn(),
 	institutionsGet: vi.fn(),
@@ -33,6 +34,10 @@ vi.mock('plaid', async (importOriginal) => {
 
 			investmentsHoldingsGet(request: unknown) {
 				return plaidMocks.investmentsHoldingsGet(request);
+			}
+
+			investmentsTransactionsGet(request: unknown) {
+				return plaidMocks.investmentsTransactionsGet(request);
 			}
 
 			transactionsSync(request: unknown) {
@@ -206,6 +211,9 @@ describe.sequential('Plaid transaction history', () => {
 			data: { accounts: liabilityResponse().data.accounts }
 		});
 		plaidMocks.investmentsHoldingsGet.mockResolvedValue({ data: { holdings: [] } });
+		plaidMocks.investmentsTransactionsGet.mockResolvedValue({
+			data: { investment_transactions: [], securities: [], total_investment_transactions: 0 }
+		});
 		plaidMocks.itemGet.mockRejectedValue(new Error('Institution metadata unavailable'));
 	});
 
@@ -1043,6 +1051,124 @@ describe.sequential('Plaid transaction history', () => {
 			name: 'Synthetic purchase',
 			amountCents: 2_150
 		});
+	});
+
+	it('imports encrypted brokerage trades from Plaid investment activity', async () => {
+		const itemId = await savePlaidItem(
+			'provider-item-investment-history',
+			'test-access-value',
+			'Synthetic Brokerage'
+		);
+		plaidMocks.accountsGet.mockResolvedValue({
+			data: {
+				accounts: [
+					{
+						account_id: 'account-brokerage',
+						name: 'Taxable brokerage',
+						mask: '5656',
+						type: 'investment',
+						subtype: 'brokerage',
+						balances: {
+							current: 8_400,
+							iso_currency_code: 'USD',
+							unofficial_currency_code: null
+						}
+					}
+				]
+			}
+		});
+		plaidMocks.investmentsTransactionsGet.mockResolvedValueOnce({
+			data: {
+				investment_transactions: [
+					{
+						investment_transaction_id: 'investment-transaction-buy',
+						account_id: 'account-brokerage',
+						security_id: 'security-equity',
+						date: '2026-08-27',
+						transaction_datetime: '2026-08-27T17:45:00Z',
+						name: 'Buy Example Equity',
+						quantity: 2,
+						amount: 361.25,
+						price: 180,
+						fees: 1.25,
+						type: 'buy',
+						subtype: 'buy',
+						iso_currency_code: 'USD',
+						unofficial_currency_code: null
+					},
+					{
+						investment_transaction_id: 'investment-transaction-dividend',
+						account_id: 'account-brokerage',
+						security_id: 'security-equity',
+						date: '2026-08-26',
+						transaction_datetime: null,
+						name: 'Example Equity dividend',
+						quantity: 0,
+						amount: -12.5,
+						price: 0,
+						fees: null,
+						type: 'cash',
+						subtype: 'dividend',
+						iso_currency_code: 'USD',
+						unofficial_currency_code: null
+					}
+				],
+				securities: [
+					{
+						security_id: 'security-equity',
+						name: 'Example Equity',
+						ticker_symbol: 'EXMPL'
+					}
+				],
+				total_investment_transactions: 2
+			}
+		});
+
+		const sync = await syncPlaidItem(itemId);
+		expect(sync).toMatchObject({ count: 0, accountCount: 1, transactionCount: 2 });
+		expect(plaidMocks.investmentsTransactionsGet).toHaveBeenCalledWith(
+			expect.objectContaining({
+				access_token: 'test-access-value',
+				options: {
+					account_ids: ['account-brokerage'],
+					count: 500,
+					offset: 0,
+					async_update: true
+				}
+			})
+		);
+		const [brokerage] = await listFinancialAccounts();
+		expect(brokerage).toMatchObject({
+			accountType: 'brokerage',
+			transactionHistoryEnabled: true,
+			transactionHistoryStatus: 'historical_complete'
+		});
+		const activity = await listFinancialAccountTransactions(brokerage.id);
+		expect(activity.transactions).toMatchObject([
+			{
+				name: 'Buy Example Equity',
+				amountCents: 36_125,
+				investmentDetails: {
+					type: 'buy',
+					subtype: 'buy',
+					securityName: 'Example Equity',
+					tickerSymbol: 'EXMPL',
+					quantity: 2,
+					priceMicros: 180_000_000,
+					feesCents: 125
+				}
+			},
+			{
+				name: 'Example Equity dividend',
+				amountCents: -1_250,
+				investmentDetails: expect.objectContaining({ subtype: 'dividend', quantity: 0 })
+			}
+		]);
+		const encryptedRows = JSON.stringify(
+			getDatabase().prepare('SELECT payload_enc FROM cards').all()
+		);
+		expect(encryptedRows).not.toContain('Buy Example Equity');
+		expect(encryptedRows).not.toContain('EXMPL');
 	});
 
 	it('keeps the cards available while Plaid prepares the first transaction sync', async () => {

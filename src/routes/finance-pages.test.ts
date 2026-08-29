@@ -30,6 +30,15 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain('{#each accountGroups as accountGroup');
 	});
 
+	it('shows provider activity and explains the open-order limitation', () => {
+		expect(accountsSource).toContain("'Recent activity'");
+		expect(accountsSource).toContain("'Investment activity'");
+		expect(accountsSource).toContain('investmentDetails');
+		expect(accountsSource).toContain("resolve('/api/accounts/[id]/transactions'");
+		expect(accountsSource).toContain('<h4>Open orders</h4>');
+		expect(accountsSource).toContain('Plaid does not provide open-order data.');
+	});
+
 	it('lets people hide stale accounts and restore them later', () => {
 		expect(accountsSource).toContain('Show hidden (');
 		expect(accountsSource).toContain('Excluded from your account map and summary totals.');

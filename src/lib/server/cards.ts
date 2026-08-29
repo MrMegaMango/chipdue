@@ -97,6 +97,15 @@ export interface StoredFinancialTransaction {
 	pending: boolean;
 	categoryPrimary: string | null;
 	categoryDetailed: string | null;
+	investmentDetails?: {
+		type: string;
+		subtype: string;
+		securityName: string | null;
+		tickerSymbol: string | null;
+		quantity: number;
+		priceMicros: number;
+		feesCents: number | null;
+	};
 }
 
 export interface StoredTransactionHistory {
@@ -175,7 +184,30 @@ function isRewardRate(value: unknown): value is number {
 function isStoredFinancialTransaction(value: unknown): value is StoredFinancialTransaction {
 	if (!value || typeof value !== 'object') return false;
 	const transaction = value as Partial<StoredFinancialTransaction>;
+	const investment = transaction.investmentDetails;
+	const validInvestmentDetails =
+		investment === undefined ||
+		(typeof investment === 'object' &&
+			typeof investment.type === 'string' &&
+			investment.type.length > 0 &&
+			investment.type.length <= 40 &&
+			typeof investment.subtype === 'string' &&
+			investment.subtype.length > 0 &&
+			investment.subtype.length <= 80 &&
+			(investment.securityName === null ||
+				(typeof investment.securityName === 'string' && investment.securityName.length <= 160)) &&
+			(investment.tickerSymbol === null ||
+				(typeof investment.tickerSymbol === 'string' && investment.tickerSymbol.length <= 32)) &&
+			typeof investment.quantity === 'number' &&
+			Number.isFinite(investment.quantity) &&
+			Math.abs(investment.quantity) <= 1_000_000_000_000 &&
+			Number.isSafeInteger(investment.priceMicros) &&
+			Math.abs(investment.priceMicros) <= 100_000_000_000_000 &&
+			(investment.feesCents === null ||
+				(Number.isSafeInteger(investment.feesCents) &&
+					Math.abs(investment.feesCents) <= 100_000_000_000)));
 	return (
+		validInvestmentDetails &&
 		typeof transaction.transactionId === 'string' &&
 		transaction.transactionId.length > 0 &&
 		transaction.transactionId.length <= 256 &&
@@ -235,9 +267,15 @@ function transactionHistoryFromRow(row: CardRow): StoredTransactionHistory | und
 	const value = decryptJson<unknown>(row.payload_enc, `card:${row.id}`);
 	if (value && typeof value === 'object' && !payloadBelongsToCurrentTenant(value)) return undefined;
 	if (value && typeof value === 'object' && 'recordType' in value) {
-		const record = value as { recordType?: unknown; transactionHistory?: unknown };
+		const record = value as {
+			recordType?: unknown;
+			accountType?: unknown;
+			transactionHistory?: unknown;
+		};
 		if (record.recordType !== 'account' || record.transactionHistory === undefined)
 			return undefined;
+		// Plaid investment activity has no cursor relationship to Transactions Sync.
+		if (record.accountType === 'brokerage') return undefined;
 		const history = normalizeStoredTransactionHistory(record.transactionHistory);
 		if (!history) {
 			throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);

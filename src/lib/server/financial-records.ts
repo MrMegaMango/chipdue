@@ -114,7 +114,18 @@ const storedTransactionSchema = z.object({
 		.nullable(),
 	pending: z.boolean(),
 	categoryPrimary: z.string().max(80).nullable(),
-	categoryDetailed: z.string().max(120).nullable()
+	categoryDetailed: z.string().max(120).nullable(),
+	investmentDetails: z
+		.object({
+			type: z.string().min(1).max(40),
+			subtype: z.string().min(1).max(80),
+			securityName: z.string().max(160).nullable(),
+			tickerSymbol: z.string().max(32).nullable(),
+			quantity: z.number().finite().min(-1_000_000_000_000).max(1_000_000_000_000),
+			priceMicros: z.number().int().min(-100_000_000_000_000).max(100_000_000_000_000),
+			feesCents: z.number().int().min(-100_000_000_000).max(100_000_000_000).nullable()
+		})
+		.optional()
 });
 const storedTransactionHistorySchema = z.object({
 	enabled: z.literal(true),
@@ -634,7 +645,8 @@ export async function listFinancialAccountTransactions(
 			authorizedDate: transaction.authorizedDate,
 			pending: transaction.pending,
 			categoryPrimary: transaction.categoryPrimary,
-			categoryDetailed: transaction.categoryDetailed
+			categoryDetailed: transaction.categoryDetailed,
+			...(transaction.investmentDetails ? { investmentDetails: transaction.investmentDetails } : {})
 		}))
 		.sort(
 			(left, right) => right.date.localeCompare(left.date) || left.name.localeCompare(right.name)

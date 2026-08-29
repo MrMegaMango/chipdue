@@ -161,7 +161,19 @@ export interface FinancialAccount {
 	updatedAt: string;
 }
 
-export type FinancialAccountTransaction = Omit<CardTransaction, 'rewardEstimate'>;
+export interface InvestmentTransactionDetails {
+	type: string;
+	subtype: string;
+	securityName: string | null;
+	tickerSymbol: string | null;
+	quantity: number;
+	priceMicros: number;
+	feesCents: number | null;
+}
+
+export type FinancialAccountTransaction = Omit<CardTransaction, 'rewardEstimate'> & {
+	investmentDetails?: InvestmentTransactionDetails;
+};
 
 export type BonusStatus =
 	'planned' | 'active' | 'qualified' | 'pending' | 'paid' | 'closed' | 'abandoned';

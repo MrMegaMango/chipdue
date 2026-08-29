@@ -9,6 +9,7 @@
 		FinancialAccount,
 		FinancialAccountOwner,
 		FinancialAccountStatus,
+		FinancialAccountTransaction,
 		FinancialAccountType,
 		FinancialProviderStatus,
 		InvestmentHolding
@@ -20,6 +21,11 @@
 	type ConnectionsStatusResponse = {
 		providers: FinancialProviderStatus[];
 		connections: FinancialConnection[];
+	};
+	type AccountActivityResponse = {
+		transactions: FinancialAccountTransaction[];
+		status: FinancialAccount['transactionHistoryStatus'];
+		lastSyncedAt: string | null;
 	};
 	type AccountForm = {
 		nickname: string;
@@ -51,6 +57,8 @@
 		minute: '2-digit'
 	});
 	const quantity = new Intl.NumberFormat('en-US', { maximumFractionDigits: 6 });
+	const RECENT_ACTIVITY_LIMIT = 100;
+	const COLLAPSED_ACTIVITY_COUNT = 5;
 
 	let mode = $state<RuntimeMode | null>(null);
 	let accounts = $state<FinancialAccount[]>([]);
@@ -68,6 +76,10 @@
 	let plaidConfigured = $state(false);
 	let connections = $state<FinancialConnection[]>([]);
 	let trackedBonusAccountIds = $state<string[]>([]);
+	let activityByAccount = $state<Record<string, AccountActivityResponse>>({});
+	let activityLoadingByAccount = $state<Record<string, boolean>>({});
+	let activityErrorByAccount = $state<Record<string, boolean>>({});
+	let expandedActivityAccountIds = $state<string[]>([]);
 	let syncing = $state(false);
 	let toast = $state('');
 	let toastError = $state(false);
@@ -178,6 +190,7 @@
 			trackedBonusAccountIds = bonusResponse.bonuses
 				.map((bonus) => bonus.accountId)
 				.filter((accountId): accountId is string => Boolean(accountId));
+			await loadAccountActivities(accountResponse.accounts);
 		} catch (error) {
 			pageError = readableError(error, 'Your accounts could not be loaded.');
 		} finally {
@@ -239,8 +252,81 @@
 		return quantity.format(value);
 	}
 
+	function formatAccountTransactionAmount(transaction: FinancialAccountTransaction): string {
+		const amount = formatHoldingMoney(
+			Math.abs(transaction.amountCents) / 100,
+			transaction.currency
+		);
+		return transaction.amountCents < 0 ? `+${amount}` : `−${amount}`;
+	}
+
+	function activityTitle(transaction: FinancialAccountTransaction): string {
+		return (
+			transaction.investmentDetails?.tickerSymbol ??
+			transaction.investmentDetails?.securityName ??
+			transaction.merchantName ??
+			transaction.name
+		);
+	}
+
+	function titleCase(value: string): string {
+		return value
+			.toLowerCase()
+			.split(/[_: ]+/)
+			.filter(Boolean)
+			.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+			.join(' ');
+	}
+
+	function activityDetail(transaction: FinancialAccountTransaction): string {
+		const investment = transaction.investmentDetails;
+		if (investment) {
+			const parts = [titleCase(investment.subtype || investment.type)];
+			if (investment.quantity !== 0) {
+				parts.push(
+					`${formatQuantity(Math.abs(investment.quantity))} shares @ ${formatHoldingMoney(
+						investment.priceMicros / 1_000_000,
+						transaction.currency,
+						Math.abs(investment.priceMicros) < 1_000_000 ? 4 : 2
+					)}`
+				);
+			}
+			if (investment.feesCents) {
+				parts.push(`${formatHoldingMoney(investment.feesCents / 100, transaction.currency)} fees`);
+			}
+			return parts.join(' · ');
+		}
+		if (transaction.merchantName && transaction.merchantName !== transaction.name) {
+			return transaction.name;
+		}
+		return transaction.categoryDetailed
+			? titleCase(transaction.categoryDetailed)
+			: transaction.pending
+				? 'Pending'
+				: 'Posted';
+	}
+
+	function visibleAccountTransactions(accountId: string): FinancialAccountTransaction[] {
+		const transactions = activityByAccount[accountId]?.transactions ?? [];
+		return expandedActivityAccountIds.includes(accountId)
+			? transactions
+			: transactions.slice(0, COLLAPSED_ACTIVITY_COUNT);
+	}
+
+	function toggleAccountActivity(accountId: string): void {
+		expandedActivityAccountIds = expandedActivityAccountIds.includes(accountId)
+			? expandedActivityAccountIds.filter((id) => id !== accountId)
+			: [...expandedActivityAccountIds, accountId];
+	}
+
 	function formatDate(value: string | null): string {
 		return value ? fullDate.format(new Date(`${value}T12:00:00`)) : 'Not entered';
+	}
+
+	function formatShortDate(value: string): string {
+		return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(
+			new Date(`${value}T12:00:00`)
+		);
 	}
 
 	function formatSyncTime(value: string | null): string {
@@ -389,9 +475,36 @@
 		}
 	}
 
+	async function loadAccountActivities(loadedAccounts: FinancialAccount[]): Promise<void> {
+		const eligibleAccounts = loadedAccounts.filter(
+			(account) => account.source === 'connected' && account.transactionHistoryEnabled
+		);
+		activityByAccount = {};
+		activityErrorByAccount = {};
+		activityLoadingByAccount = Object.fromEntries(
+			eligibleAccounts.map((account) => [account.id, true])
+		);
+		await Promise.all(
+			eligibleAccounts.map(async (account) => {
+				try {
+					const endpoint = `${resolve('/api/accounts/[id]/transactions', {
+						id: account.id
+					})}?limit=${RECENT_ACTIVITY_LIMIT}`;
+					const activity = await requestJson<AccountActivityResponse>(endpoint);
+					activityByAccount = { ...activityByAccount, [account.id]: activity };
+				} catch {
+					activityErrorByAccount = { ...activityErrorByAccount, [account.id]: true };
+				} finally {
+					activityLoadingByAccount = { ...activityLoadingByAccount, [account.id]: false };
+				}
+			})
+		);
+	}
+
 	async function reloadAccounts(): Promise<void> {
 		const response = await requestJson<{ accounts: FinancialAccount[] }>(resolve('/api/accounts'));
 		accounts = response.accounts;
+		await loadAccountActivities(response.accounts);
 	}
 
 	async function syncConnectedAccounts(): Promise<void> {
@@ -399,9 +512,15 @@
 		syncing = true;
 		pageError = '';
 		try {
-			await requestJson(resolve('/api/connections/sync'), { method: 'POST' });
+			await Promise.all(
+				connections.map((connection) =>
+					requestJson(resolve('/api/connections/[id]/transactions/sync', { id: connection.id }), {
+						method: 'POST'
+					})
+				)
+			);
 			await reloadAccounts();
-			showToast('Connected balances and holdings are up to date.');
+			showToast('Connected balances, holdings, and activity are up to date.');
 		} catch (error) {
 			pageError = readableError(error, 'Connected accounts could not be synced.');
 		} finally {
@@ -630,8 +749,8 @@
 									{#each accountGroup.accounts as account (account.id)}
 										{@const bonusOffers = availableBonusOffers(account)}
 										<article
-											class:brokerage-with-holdings={account.accountType === 'brokerage' &&
-												account.holdings.length > 0}
+											class:brokerage-detail={account.accountType === 'brokerage' &&
+												account.source === 'connected'}
 											class:hidden-account={account.hidden}
 											class="finance-card"
 										>
@@ -778,6 +897,98 @@
 														</p>
 													{/if}
 												</section>
+											{/if}
+											{#if account.source === 'connected'}
+												<section
+													class="account-activity"
+													aria-label={`${account.accountType === 'brokerage' ? 'Investment' : 'Recent'} activity for ${account.nickname}`}
+												>
+													<div class="account-detail-heading">
+														<h4>
+															{account.accountType === 'brokerage'
+																? 'Investment activity'
+																: 'Recent activity'}
+														</h4>
+														{#if activityByAccount[account.id]?.transactions.length}
+															<span>
+																{activityByAccount[account.id].transactions
+																	.length}{activityByAccount[account.id].transactions.length ===
+																RECENT_ACTIVITY_LIMIT
+																	? '+'
+																	: ''}
+																loaded
+															</span>
+														{/if}
+													</div>
+													{#if !account.transactionHistoryEnabled}
+														<p class="account-activity-message">
+															Sync accounts to load activity from {financialProviderName(
+																account.connectionProvider
+															)}.
+														</p>
+													{:else if activityLoadingByAccount[account.id]}
+														<p class="account-activity-message" aria-busy="true">
+															Loading activity…
+														</p>
+													{:else if activityErrorByAccount[account.id]}
+														<p class="account-activity-message">
+															Activity is unavailable right now.
+														</p>
+													{:else if activityByAccount[account.id]?.transactions.length}
+														<ul class="account-activity-list">
+															{#each visibleAccountTransactions(account.id) as transaction (transaction.id)}
+																<li>
+																	<div class="account-activity-date">
+																		<strong>{formatShortDate(transaction.date)}</strong>
+																		<span>{transaction.pending ? 'Pending' : 'Posted'}</span>
+																	</div>
+																	<div class="account-activity-description">
+																		<strong>{activityTitle(transaction)}</strong>
+																		<span>{activityDetail(transaction)}</span>
+																	</div>
+																	<strong
+																		class:credit={transaction.amountCents < 0}
+																		class="account-activity-amount"
+																	>
+																		{formatAccountTransactionAmount(transaction)}
+																	</strong>
+																</li>
+															{/each}
+														</ul>
+														{#if activityByAccount[account.id].transactions.length > COLLAPSED_ACTIVITY_COUNT}
+															<button
+																class="account-activity-toggle"
+																type="button"
+																onclick={() => toggleAccountActivity(account.id)}
+															>
+																{expandedActivityAccountIds.includes(account.id)
+																	? 'Show less'
+																	: `Show all ${activityByAccount[account.id].transactions.length}`}
+															</button>
+														{/if}
+													{:else}
+														<p class="account-activity-message">
+															{activityByAccount[account.id]?.status === 'preparing'
+																? 'The provider is still preparing older activity.'
+																: `No ${account.accountType === 'brokerage' ? 'investment activity' : 'transactions'} returned by ${financialProviderName(account.connectionProvider)}.`}
+														</p>
+													{/if}
+												</section>
+												{#if account.accountType === 'brokerage'}
+													<section
+														class="open-orders"
+														aria-label={`Open orders for ${account.nickname}`}
+													>
+														<div class="account-detail-heading">
+															<h4>Open orders</h4>
+															<span>Not available</span>
+														</div>
+														<p>
+															Plaid does not provide open-order data. Check your brokerage before
+															placing or changing a trade.
+														</p>
+													</section>
+												{/if}
 											{/if}
 											<footer>
 												<span
@@ -1060,7 +1271,7 @@
 		letter-spacing: -0.025em;
 	}
 
-	.finance-card.brokerage-with-holdings {
+	.finance-card.brokerage-detail {
 		grid-column: span 2;
 	}
 
@@ -1197,6 +1408,110 @@
 		background: var(--paper-soft);
 	}
 
+	.account-activity,
+	.open-orders {
+		margin-top: 1rem;
+		padding-top: 0.9rem;
+		border-top: 1px solid var(--line);
+	}
+
+	.account-detail-heading {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		margin-bottom: 0.55rem;
+	}
+
+	.account-detail-heading h4 {
+		margin: 0;
+		font-size: 0.72rem;
+	}
+
+	.account-detail-heading span {
+		color: var(--faint);
+		font-size: 0.58rem;
+	}
+
+	.account-activity-list {
+		margin: 0;
+		padding: 0;
+		border: 1px solid var(--line);
+		border-radius: 9px;
+		list-style: none;
+		overflow: hidden;
+	}
+
+	.account-activity-list li {
+		display: grid;
+		grid-template-columns: 70px minmax(0, 1fr) auto;
+		gap: 0.75rem;
+		align-items: center;
+		padding: 0.65rem 0.75rem;
+		font-size: 0.64rem;
+	}
+
+	.account-activity-list li + li {
+		border-top: 1px solid var(--line);
+	}
+
+	.account-activity-date,
+	.account-activity-description {
+		display: grid;
+		gap: 0.13rem;
+		min-width: 0;
+	}
+
+	.account-activity-date strong,
+	.account-activity-description strong {
+		font-size: 0.66rem;
+	}
+
+	.account-activity-date span,
+	.account-activity-description span {
+		color: var(--faint);
+		font-size: 0.54rem;
+	}
+
+	.account-activity-description strong,
+	.account-activity-description span {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.account-activity-amount {
+		font-size: 0.67rem;
+		white-space: nowrap;
+	}
+
+	.account-activity-amount.credit {
+		color: var(--positive);
+	}
+
+	.account-activity-toggle {
+		margin-top: 0.55rem;
+		padding: 0;
+		border: 0;
+		color: var(--accent-dark);
+		font: inherit;
+		font-size: 0.6rem;
+		font-weight: 750;
+		background: transparent;
+		cursor: pointer;
+	}
+
+	.account-activity-message,
+	.open-orders p {
+		margin: 0;
+		padding: 0.7rem 0.75rem;
+		border: 1px dashed var(--line-strong);
+		border-radius: 9px;
+		color: var(--faint);
+		font-size: 0.58rem;
+		line-height: 1.45;
+		background: var(--paper-soft);
+	}
+
 	.account-toolbar-actions,
 	.empty-account-actions,
 	.account-pills,
@@ -1276,7 +1591,7 @@
 	}
 
 	@media (max-width: 620px) {
-		.finance-card.brokerage-with-holdings {
+		.finance-card.brokerage-detail {
 			grid-column: auto;
 		}
 
@@ -1331,6 +1646,13 @@
 
 		.holding-row > span:nth-child(4) {
 			text-align: right;
+		}
+
+		.account-activity-list li {
+			grid-template-columns: 58px minmax(0, 1fr) auto;
+			gap: 0.55rem;
+			padding-right: 0.6rem;
+			padding-left: 0.6rem;
 		}
 	}
 </style>

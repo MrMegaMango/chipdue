@@ -5,6 +5,8 @@ import {
 	PlaidApi,
 	PlaidEnvironments,
 	Products,
+	type InvestmentTransaction,
+	type Security,
 	type LinkTokenCreateRequest,
 	type Transaction,
 	type TransactionsUpdateStatus
@@ -55,6 +57,7 @@ const MAX_TRANSACTION_SYNC_RESTARTS = 3;
 const MAX_STORED_TRANSACTIONS_PER_CARD = 10_000;
 const MAX_INSTITUTION_LOGO_BYTES = 256_000;
 const MAX_STORED_HOLDINGS_PER_ACCOUNT = 1_000;
+const MAX_STORED_INVESTMENT_TRANSACTIONS_PER_ACCOUNT = 10_000;
 let cachedClient: { signature: string; client: PlaidApi } | undefined;
 
 export async function plaidConfigurationStatus(): Promise<{
@@ -361,6 +364,114 @@ function transactionSnapshot(transaction: Transaction): StoredFinancialTransacti
 	};
 }
 
+function investmentTransactionSnapshot(
+	transaction: InvestmentTransaction,
+	security: Security | undefined
+): StoredFinancialTransaction | null {
+	const transactionId = safeText(transaction.investment_transaction_id, 256);
+	const date = safeDate(transaction.date);
+	const amountCents = amountToCents(transaction.amount);
+	const quantity = safeQuantity(transaction.quantity);
+	const priceMicros = priceToMicros(transaction.price);
+	const type = safeText(transaction.type, 40);
+	const subtype = safeText(transaction.subtype, 80);
+	if (
+		!transactionId ||
+		!date ||
+		amountCents === null ||
+		quantity === null ||
+		priceMicros === null ||
+		!type ||
+		!subtype
+	) {
+		return null;
+	}
+	const securityName = safeText(security?.name, 160);
+	const tickerSymbol = safeText(security?.ticker_symbol, 32);
+	return {
+		transactionId,
+		name: safeText(transaction.name, 160) ?? `${type} investment`,
+		merchantName: tickerSymbol ?? securityName,
+		amountCents,
+		currency: safeCurrency(transaction.iso_currency_code ?? transaction.unofficial_currency_code),
+		date,
+		authorizedDate: safeDate(transaction.transaction_datetime?.slice(0, 10) ?? null),
+		pending: subtype === 'pending credit' || subtype === 'pending debit',
+		categoryPrimary: 'INVESTMENT',
+		categoryDetailed: `${type}: ${subtype}`.slice(0, 120),
+		investmentDetails: {
+			type,
+			subtype,
+			securityName,
+			tickerSymbol,
+			quantity,
+			priceMicros,
+			feesCents: amountToCents(transaction.fees)
+		}
+	};
+}
+
+async function fetchInvestmentTransactionHistory(
+	client: PlaidApi,
+	accessToken: string,
+	accountIds: string[]
+): Promise<Map<string, StoredTransactionHistory>> {
+	const end = new Date();
+	const start = new Date(end);
+	start.setUTCDate(start.getUTCDate() - TRANSACTION_HISTORY_DAYS);
+	const endDate = end.toISOString().slice(0, 10);
+	const startDate = start.toISOString().slice(0, 10);
+	const transactions: InvestmentTransaction[] = [];
+	const securities = new Map<string, Security>();
+
+	for (let offset = 0; offset < MAX_STORED_INVESTMENT_TRANSACTIONS_PER_ACCOUNT; offset += 500) {
+		const response = await client.investmentsTransactionsGet({
+			access_token: accessToken,
+			start_date: startDate,
+			end_date: endDate,
+			options: { account_ids: accountIds, count: 500, offset, async_update: true }
+		});
+		transactions.push(...response.data.investment_transactions);
+		for (const security of response.data.securities ?? []) {
+			securities.set(security.security_id, security);
+		}
+		if (transactions.length >= response.data.total_investment_transactions) break;
+	}
+
+	const byAccountId = new Map<string, StoredFinancialTransaction[]>();
+	for (const transaction of transactions) {
+		const accountId = safeText(transaction.account_id, 256);
+		const snapshot = investmentTransactionSnapshot(
+			transaction,
+			transaction.security_id ? securities.get(transaction.security_id) : undefined
+		);
+		if (!accountId || !snapshot) continue;
+		const accountTransactions = byAccountId.get(accountId) ?? [];
+		if (accountTransactions.length < MAX_STORED_INVESTMENT_TRANSACTIONS_PER_ACCOUNT) {
+			accountTransactions.push(snapshot);
+			byAccountId.set(accountId, accountTransactions);
+		}
+	}
+
+	return new Map(
+		accountIds.map((accountId) => {
+			const reference = providerAccountReference('plaid', accountId, 'account');
+			return [
+				accountId,
+				{
+					enabled: true,
+					accountReference: reference,
+					cursor: null,
+					status: 'historical_complete',
+					transactions: (byAccountId.get(accountId) ?? []).sort((left, right) =>
+						right.date.localeCompare(left.date)
+					)
+				}
+			] as const;
+		})
+	);
+}
+
 function normalizeTransactionStatus(value: TransactionsUpdateStatus): TransactionHistoryStatus {
 	switch (value) {
 		case 'NOT_READY':
@@ -524,8 +635,12 @@ export async function syncPlaidItem(
 
 		const investmentCostBasis = new Map<string, number>();
 		const investmentHoldings = new Map<string, InvestmentHolding[]>();
+		let investmentTransactionHistory = new Map<string, StoredTransactionHistory>();
 		let investmentHoldingsAvailable = false;
-		if (plaidAccounts.some((account) => account.type === AccountType.Investment)) {
+		const investmentAccountIds = plaidAccounts
+			.filter((account) => account.type === AccountType.Investment)
+			.map((account) => account.account_id);
+		if (investmentAccountIds.length > 0) {
 			try {
 				const response = await client.investmentsHoldingsGet({
 					access_token: item.accessToken
@@ -572,6 +687,15 @@ export async function syncPlaidItem(
 						investmentCostBasis.set(accountId, total.cents);
 					}
 				}
+			} catch (error) {
+				if (!optionalProductCanBeSkipped(error)) throw error;
+			}
+			try {
+				investmentTransactionHistory = await fetchInvestmentTransactionHistory(
+					client,
+					item.accessToken,
+					investmentAccountIds
+				);
 			} catch (error) {
 				if (!optionalProductCanBeSkipped(error)) throw error;
 			}
@@ -658,7 +782,13 @@ export async function syncPlaidItem(
 								(left, right) => (right.valueCents ?? 0) - (left.valueCents ?? 0)
 							)
 						: null,
-				...(transactionHistory ? { transactionHistory } : {})
+				...(accountType === 'brokerage'
+					? investmentTransactionHistory.has(account.account_id)
+						? { transactionHistory: investmentTransactionHistory.get(account.account_id)! }
+						: {}
+					: transactionHistory
+						? { transactionHistory }
+						: {})
 			});
 		}
 
@@ -670,10 +800,15 @@ export async function syncPlaidItem(
 			syncedAt,
 			count: snapshots.length,
 			accountCount: accountSnapshots.length,
-			transactionCount: [...transactionState.byAccountReference.values()].reduce(
-				(total, transactions) => total + transactions.length,
-				0
-			)
+			transactionCount:
+				[...transactionState.byAccountReference.values()].reduce(
+					(total, transactions) => total + transactions.length,
+					0
+				) +
+				[...investmentTransactionHistory.values()].reduce(
+					(total, history) => total + history.transactions.length,
+					0
+				)
 		};
 	} catch (error) {
 		if (error instanceof AppError) throw error;
