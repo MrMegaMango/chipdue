@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+	applyCardRewardProfileSchema,
 	createBonusSchema,
 	createFinancialAccountSchema,
 	createManualCardSchema,
@@ -48,6 +49,20 @@ describe('card request validation', () => {
 			updateCardRewardsSchema.safeParse({ rewardCategories: [{ name: '', multiplier: 3 }] }).success
 		).toBe(false);
 		expect(updateCardRewardsSchema.safeParse({}).success).toBe(false);
+	});
+
+	it('accepts only a bounded reward profile identifier', () => {
+		expect(
+			applyCardRewardProfileSchema.safeParse({ profileId: 'chase-sapphire-preferred' }).success
+		).toBe(true);
+		expect(applyCardRewardProfileSchema.safeParse({ profileId: '' }).success).toBe(false);
+		expect(applyCardRewardProfileSchema.safeParse({ profileId: '../private' }).success).toBe(false);
+		expect(
+			applyCardRewardProfileSchema.safeParse({
+				profileId: 'chase-sapphire-preferred',
+				unexpected: true
+			}).success
+		).toBe(false);
 	});
 });
 

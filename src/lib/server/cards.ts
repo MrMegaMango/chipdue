@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type { AutomaticCardRewardProfile, CardRewardCalculation } from '$lib/card-reward-profiles';
+import {
+	automaticCardRewardProfileById,
+	type AutomaticCardRewardProfile,
+	type CardRewardCalculation
+} from '$lib/card-reward-profiles';
 import type {
 	Card,
 	CardRewardCategory,
@@ -712,6 +716,42 @@ export async function updateCardRewards(id: string, changes: UpdateCardRewardsDa
 						matchCategory: category.matchCategory
 					}))
 	};
+	const encrypted = encryptJson(payload, `card:${id}`);
+	const now = new Date().toISOString();
+
+	if (getRuntimeMode() === 'cloud') {
+		const rows = await cloudQuery<CardRow>(
+			`UPDATE public.carddue_cards SET payload_enc = $1, updated_at = $2
+			 WHERE id = $3
+			 RETURNING id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
+			           last_synced_at, created_at, updated_at`,
+			[encrypted, now, id]
+		);
+		const card = rows[0] ? rowToCard(rows[0]) : null;
+		if (!card) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
+		return card;
+	}
+
+	const result = getDatabase()
+		.prepare(`UPDATE cards SET payload_enc = ?, updated_at = ? WHERE id = ?`)
+		.run(encrypted, now, id);
+	if (result.changes !== 1) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
+	return getCard(id);
+}
+
+export async function applyAutomaticCardRewardProfile(
+	id: string,
+	profileId: string
+): Promise<Card> {
+	const profile = automaticCardRewardProfileById(profileId);
+	if (!profile) throw new AppError('INVALID_REQUEST', 'The reward profile is invalid.', 400);
+
+	const row = await findCardRow(id);
+	const payload = row ? decodePayload(row) : null;
+	if (!row || !payload) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
+
+	payload.tenantRef = tenantPayloadFields().tenantRef;
+	payload.rewards = automaticStoredRewards(profile);
 	const encrypted = encryptJson(payload, `card:${id}`);
 	const now = new Date().toISOString();
 

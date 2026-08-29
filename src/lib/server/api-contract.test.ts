@@ -7,6 +7,7 @@ import {
 	POST as createCardEndpoint
 } from '../../routes/api/cards/+server';
 import { PATCH as updateCardRewardsEndpoint } from '../../routes/api/cards/[id]/rewards/+server';
+import { PUT as applyCardRewardProfileEndpoint } from '../../routes/api/cards/[id]/rewards/profile/+server';
 import { closeDatabaseForTests } from './database';
 import { resetCryptoStateForTests } from './crypto';
 
@@ -32,6 +33,14 @@ async function createCard(request: Request): Promise<Response> {
 
 async function updateCardRewards(id: string, request: Request): Promise<Response> {
 	return (await updateCardRewardsEndpoint({
+		params: { id },
+		request,
+		url: new URL(request.url)
+	} as never)) as Response;
+}
+
+async function applyCardRewardProfile(id: string, request: Request): Promise<Response> {
+	return (await applyCardRewardProfileEndpoint({
 		params: { id },
 		request,
 		url: new URL(request.url)
@@ -149,6 +158,52 @@ describe.sequential('cards API contract', () => {
 			matchCategory: 'online_shopping'
 		});
 		expect(payload.card.rewardCategories[0].id).toMatch(/^[0-9a-f]{8}-[0-9a-f-]{27}$/i);
+	});
+
+	it('populates every reward rule from a one-time card selection', async () => {
+		const createResponse = await createCard(
+			new Request('http://localhost/api/cards', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json', origin: 'http://localhost' },
+				body: JSON.stringify({ nickname: 'CREDIT CARD', issuer: 'Chase' })
+			})
+		);
+		const created = await createResponse.json();
+		const response = await applyCardRewardProfile(
+			created.card.id,
+			new Request(`http://localhost/api/cards/${created.card.id}/rewards/profile`, {
+				method: 'PUT',
+				headers: { 'content-type': 'application/json', origin: 'http://localhost' },
+				body: JSON.stringify({ profileId: 'chase-sapphire-preferred' })
+			})
+		);
+
+		expect(response.status).toBe(200);
+		const payload = await response.json();
+		expect(payload.card).toMatchObject({
+			rewardProgramName: 'Chase Ultimate Rewards',
+			rewardType: 'points',
+			rewardBaseRate: 1,
+			rewardSource: 'automatic',
+			rewardProfileName: 'Chase Sapphire Preferred',
+			rewardCalculation: 'static'
+		});
+		expect(payload.card.rewardCategories).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ name: 'Dining', multiplier: 3, matchCategory: 'dining' }),
+				expect.objectContaining({ name: 'Other travel', multiplier: 2, matchCategory: 'travel' })
+			])
+		);
+
+		const invalidResponse = await applyCardRewardProfile(
+			created.card.id,
+			new Request(`http://localhost/api/cards/${created.card.id}/rewards/profile`, {
+				method: 'PUT',
+				headers: { 'content-type': 'application/json', origin: 'http://localhost' },
+				body: JSON.stringify({ profileId: 'unknown-card' })
+			})
+		);
+		expect(invalidResponse.status).toBe(400);
 	});
 
 	it('rejects non-JSON and cross-origin mutations without reflecting input', async () => {

@@ -132,6 +132,17 @@ export const updateCardRewardsSchema = z
 	.strict()
 	.refine((value) => Object.keys(value).length > 0, 'At least one field is required');
 
+export const applyCardRewardProfileSchema = z
+	.object({
+		profileId: z
+			.string()
+			.trim()
+			.min(1)
+			.max(80)
+			.regex(/^[a-z0-9-]+$/)
+	})
+	.strict();
+
 export const createFinancialAccountSchema = z
 	.object({
 		nickname: labelSchema,
@@ -215,6 +226,7 @@ export const exchangeTokenSchema = z
 export type CreateManualCardData = z.infer<typeof createManualCardSchema>;
 export type UpdateManualCardData = z.infer<typeof updateManualCardSchema>;
 export type UpdateCardRewardsData = z.infer<typeof updateCardRewardsSchema>;
+export type ApplyCardRewardProfileData = z.infer<typeof applyCardRewardProfileSchema>;
 export type CreateFinancialAccountData = z.infer<typeof createFinancialAccountSchema>;
 export type UpdateFinancialAccountData = z.infer<typeof updateFinancialAccountSchema>;
 export type CreateBonusData = z.infer<typeof createBonusSchema>;

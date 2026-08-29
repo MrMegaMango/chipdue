@@ -161,6 +161,10 @@
 	import { asset, resolve } from '$app/paths';
 	import { replaceState } from '$app/navigation';
 	import { onMount, tick } from 'svelte';
+	import {
+		AUTOMATIC_CARD_REWARD_PROFILES,
+		type AutomaticCardRewardProfile
+	} from '$lib/card-reward-profiles';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
 
 	type CardSource = 'manual' | 'plaid';
@@ -394,6 +398,7 @@
 	let busyAction = $state<
 		| 'save'
 		| 'save-rewards'
+		| 'apply-reward-profile'
 		| 'delete'
 		| 'connect'
 		| 'sync'
@@ -423,6 +428,7 @@
 	let rewardsForm = $state<RewardsForm>(blankRewardsForm());
 	let rewardsError = $state('');
 	let rewardsEditing = $state(false);
+	let rewardProfileSelection = $state('');
 	let rewardsFirstField = $state<HTMLInputElement>();
 	let rewardsCloseButton = $state<HTMLButtonElement>();
 	let recentActivityByCard = $state<Record<string, CardTransaction[]>>({});
@@ -550,6 +556,31 @@
 			baseRate: 1,
 			categories: []
 		};
+	}
+
+	function rewardsFormFromCard(card: CardView): RewardsForm {
+		return {
+			programName: card.rewardProgramName ?? '',
+			rewardValue: centsToInput(card.rewardValueCents),
+			rewardType: card.rewardType ?? 'points',
+			baseRate: card.rewardBaseRate ?? 1,
+			categories: card.rewardCategories.map((category) => ({
+				...category,
+				multiplier: category.multiplier ?? '',
+				matchCategory: category.matchCategory ?? ''
+			}))
+		};
+	}
+
+	function selectableRewardProfiles(card: CardView): AutomaticCardRewardProfile[] {
+		const identity = `${card.issuer ?? ''} ${card.nickname}`;
+		if (/\b(chase|jpmorgan)\b/i.test(identity)) {
+			return AUTOMATIC_CARD_REWARD_PROFILES.filter((profile) => profile.issuer === 'Chase');
+		}
+		if (/\bvenmo\b/i.test(identity)) {
+			return AUTOMATIC_CARD_REWARD_PROFILES.filter((profile) => profile.issuer === 'Venmo');
+		}
+		return AUTOMATIC_CARD_REWARD_PROFILES;
 	}
 
 	async function requestJson<T>(
@@ -930,6 +961,7 @@
 		rewardsForm = blankRewardsForm();
 		rewardsError = '';
 		rewardsEditing = false;
+		rewardProfileSelection = '';
 		rewardsFirstField = undefined;
 		rewardsCloseButton = undefined;
 		recentActivityByCard = {};
@@ -1258,19 +1290,10 @@
 		if (busyAction) return;
 		prepareDialog();
 		rewardsCard = card;
-		rewardsForm = {
-			programName: card.rewardProgramName ?? '',
-			rewardValue: centsToInput(card.rewardValueCents),
-			rewardType: card.rewardType ?? 'points',
-			baseRate: card.rewardBaseRate ?? 1,
-			categories: card.rewardCategories.map((category) => ({
-				...category,
-				multiplier: category.multiplier ?? '',
-				matchCategory: category.matchCategory ?? ''
-			}))
-		};
+		rewardsForm = rewardsFormFromCard(card);
 		rewardsError = '';
 		rewardsEditing = false;
+		rewardProfileSelection = '';
 		await tick();
 		rewardsCloseButton?.focus();
 	}
@@ -1279,6 +1302,38 @@
 		rewardsEditing = true;
 		await tick();
 		rewardsFirstField?.focus();
+	}
+
+	async function applySelectedRewardProfile(): Promise<void> {
+		const card = rewardsCard;
+		const profileId = rewardProfileSelection;
+		const epoch = privateStateEpoch;
+		if (!card || !profileId || busyAction || !isPrivateEpochCurrent(epoch)) return;
+
+		busyAction = 'apply-reward-profile';
+		rewardsError = '';
+		try {
+			const payload = await requestJson<{ card: CardView }>(
+				resolve('/api/cards/[id]/rewards/profile', { id: card.id }),
+				{
+					method: 'PUT',
+					body: JSON.stringify({ profileId })
+				},
+				{ privateEpoch: epoch }
+			);
+			if (!isPrivateEpochCurrent(epoch)) return;
+			cards = cards.map((entry) => (entry.id === payload.card.id ? payload.card : entry));
+			rewardsCard = payload.card;
+			rewardsForm = rewardsFormFromCard(payload.card);
+			rewardProfileSelection = '';
+			void refreshRecentActivity(cards, epoch);
+			showNotice(`${payload.card.rewardProfileName ?? 'Card'} rewards populated.`);
+		} catch (error) {
+			if (!isPrivateEpochCurrent(epoch)) return;
+			rewardsError = readableError(error, 'The reward profile could not be applied.');
+		} finally {
+			if (isPrivateEpochCurrent(epoch)) busyAction = null;
+		}
 	}
 
 	function addRewardCategory(): void {
@@ -1325,6 +1380,7 @@
 		rewardsForm = blankRewardsForm();
 		rewardsError = '';
 		rewardsEditing = false;
+		rewardProfileSelection = '';
 		document.body.style.overflow = previousBodyOverflow;
 		previouslyFocused = undefined;
 		void tick().then(() => focusTarget?.focus());
@@ -1372,6 +1428,7 @@
 			rewardsCard = null;
 			rewardsForm = blankRewardsForm();
 			rewardsEditing = false;
+			rewardProfileSelection = '';
 			document.body.style.overflow = previousBodyOverflow;
 			previouslyFocused = undefined;
 			const refreshed = await refreshCards(true, epoch);
@@ -3336,7 +3393,7 @@
 								? 'Identified automatically from the linked card. No setup is needed.'
 								: rewardsCard.rewardType
 									? 'Review the earning rules used for activity estimates.'
-									: 'ChipDue will identify the reward program from the linked account when possible.'}
+									: 'Plaid sent a generic card name. Choose the card once and ChipDue fills every rule.'}
 						</p>
 					</div>
 					<button
@@ -3344,7 +3401,7 @@
 						class="icon-button"
 						type="button"
 						onclick={closeRewardsDialog}
-						disabled={busyAction === 'save-rewards'}
+						disabled={busyAction === 'save-rewards' || busyAction === 'apply-reward-profile'}
 						aria-label="Close card rewards"
 					>
 						<svg aria-hidden="true" viewBox="0 0 20 20"><path d="m5 5 10 10M15 5 5 15"></path></svg>
@@ -3415,18 +3472,47 @@
 							{/if}
 						{:else}
 							<div class="reward-profile-missing">
-								<strong>Reward profile not identified yet</strong>
-								<p>Sync the linked account so ChipDue can use the card’s official product name.</p>
+								<strong>Plaid only returned “{rewardsCard.nickname}”</strong>
+								<p>
+									Select the card once. Its program, multipliers, and categories fill automatically.
+								</p>
+								<div class="reward-profile-picker">
+									<label for="reward-profile-selection">Which card is this?</label>
+									<select
+										id="reward-profile-selection"
+										bind:value={rewardProfileSelection}
+										disabled={busyAction === 'apply-reward-profile'}
+									>
+										<option value="">Select your card</option>
+										{#each selectableRewardProfiles(rewardsCard) as profile (profile.id)}
+											<option value={profile.id}>{profile.cardName}</option>
+										{/each}
+									</select>
+									<button
+										class="button button-primary"
+										type="button"
+										onclick={applySelectedRewardProfile}
+										disabled={!rewardProfileSelection || busyAction === 'apply-reward-profile'}
+										aria-busy={busyAction === 'apply-reward-profile'}
+									>
+										{busyAction === 'apply-reward-profile' ? 'Filling…' : 'Fill reward details'}
+									</button>
+								</div>
 							</div>
+						{/if}
+						{#if rewardsError}
+							<p class="form-error" role="alert">{rewardsError}</p>
 						{/if}
 
 						<footer class="dialog-actions reward-detail-actions">
 							<button class="button button-quiet" type="button" onclick={closeRewardsDialog}
 								>Close</button
 							>
-							<button class="button button-secondary" type="button" onclick={editRewardsManually}
-								>Edit manually</button
-							>
+							{#if rewardsCard.rewardType}
+								<button class="button button-secondary" type="button" onclick={editRewardsManually}
+									>Edit manually</button
+								>
+							{/if}
 						</footer>
 					</div>
 				{:else}
@@ -6050,6 +6136,38 @@
 		font-size: 0.67rem;
 	}
 
+	.reward-profile-picker {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		gap: 0.55rem;
+		margin: 1rem auto 0;
+		max-width: 500px;
+		text-align: left;
+	}
+
+	.reward-profile-picker label {
+		grid-column: 1 / -1;
+		color: var(--muted);
+		font-size: 0.62rem;
+		font-weight: 680;
+	}
+
+	.reward-profile-picker select {
+		width: 100%;
+		min-height: 42px;
+		padding: 0.62rem 0.7rem;
+		border: 1px solid var(--line-strong);
+		border-radius: 9px;
+		color: var(--ink);
+		font-size: 0.72rem;
+		background: white;
+	}
+
+	.reward-profile-picker .button {
+		min-height: 42px;
+		white-space: nowrap;
+	}
+
 	.reward-detail-actions {
 		margin-top: 1.1rem;
 	}
@@ -6718,6 +6836,14 @@
 
 		.reward-profile-categories ul {
 			grid-template-columns: 1fr;
+		}
+
+		.reward-profile-picker {
+			grid-template-columns: 1fr;
+		}
+
+		.reward-profile-picker label {
+			grid-column: auto;
 		}
 
 		.transaction-list li {

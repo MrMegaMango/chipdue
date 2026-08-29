@@ -54,7 +54,12 @@ vi.mock('plaid', async (importOriginal) => {
 	};
 });
 
-import { listCards, listCardTransactions, updateCardRewards } from './cards';
+import {
+	applyAutomaticCardRewardProfile,
+	listCards,
+	listCardTransactions,
+	updateCardRewards
+} from './cards';
 import { resetCryptoStateForTests } from './crypto';
 import { closeDatabaseForTests, getDatabase } from './database';
 import {
@@ -593,6 +598,42 @@ describe.sequential('Plaid transaction history', () => {
 				expect.objectContaining({ name: 'Other travel', multiplier: 2, matchCategory: 'travel' })
 			])
 		);
+	});
+
+	it('keeps a selected product profile when Plaid continues returning a generic card name', async () => {
+		const itemId = await savePlaidItem(
+			'provider-item-selected-rewards',
+			'test-access-value',
+			'Chase'
+		);
+		plaidMocks.accountsGet.mockResolvedValue({
+			data: {
+				accounts: [
+					{
+						...liabilityResponse().data.accounts[0],
+						name: 'CREDIT CARD',
+						official_name: null
+					}
+				]
+			}
+		});
+		plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
+
+		await syncPlaidItem(itemId);
+		const [genericCard] = await listCards();
+		expect(genericCard.rewardSource).toBeNull();
+
+		await applyAutomaticCardRewardProfile(genericCard.id, 'chase-freedom-unlimited');
+		await syncPlaidItem(itemId);
+
+		const [refreshedCard] = await listCards();
+		expect(refreshedCard).toMatchObject({
+			id: genericCard.id,
+			rewardProfileName: 'Chase Freedom Unlimited',
+			rewardProgramName: 'Chase Ultimate Rewards',
+			rewardBaseRate: 1.5,
+			rewardSource: 'automatic'
+		});
 	});
 
 	it('keeps user-entered rewards when a Plaid card refreshes', async () => {

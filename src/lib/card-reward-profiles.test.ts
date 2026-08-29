@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { matchAutomaticCardRewardProfile } from './card-reward-profiles';
+import {
+	automaticCardRewardProfileById,
+	matchAutomaticCardRewardProfile
+} from './card-reward-profiles';
 
 describe('automatic card reward profiles', () => {
 	it('matches a Chase card from Plaid official_name even when the account name is generic', () => {
@@ -30,6 +33,16 @@ describe('automatic card reward profiles', () => {
 		).toBeNull();
 	});
 
+	it('looks up a complete profile from a one-time product selection', () => {
+		expect(automaticCardRewardProfileById('chase-freedom-unlimited')).toMatchObject({
+			issuer: 'Chase',
+			cardName: 'Chase Freedom Unlimited',
+			programName: 'Chase Ultimate Rewards',
+			baseRate: 1.5
+		});
+		expect(automaticCardRewardProfileById('unknown-card')).toBeNull();
+	});
+
 	it('recognizes the dynamically ranked Venmo rewards program', () => {
 		expect(
 			matchAutomaticCardRewardProfile({
@@ -41,6 +54,19 @@ describe('automatic card reward profiles', () => {
 			programName: 'Venmo Cash Back',
 			calculation: 'venmo_spend_ranked',
 			baseRate: 1
+		});
+	});
+
+	it('identifies a generic Venmo card from the linked institution', () => {
+		expect(
+			matchAutomaticCardRewardProfile({
+				institutionName: 'Venmo',
+				accountName: 'CREDIT CARD',
+				officialName: null
+			})
+		).toMatchObject({
+			cardName: 'Venmo Credit Card',
+			calculation: 'venmo_spend_ranked'
 		});
 	});
 

@@ -139,6 +139,15 @@ describe('Google-only setup privacy contract', () => {
 });
 
 describe('card activity preview', () => {
+	it('offers one-time card selection when Plaid sends a generic product name', () => {
+		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+		expect(source).toContain('Plaid sent a generic card name. Choose the card once');
+		expect(source).toContain('Which card is this?');
+		expect(source).toContain('Fill reward details');
+		expect(source).toContain("method: 'PUT'");
+		expect(source).toContain("resolve('/api/cards/[id]/rewards/profile', { id: card.id })");
+	});
+
 	it('shows three recent transactions and keeps full history behind a button', () => {
 		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
 		expect(source).toContain('const RECENT_ACTIVITY_LIMIT = 3');
