@@ -644,6 +644,9 @@
 		if (/\b(chase|jpmorgan)\b/i.test(identity)) {
 			return AUTOMATIC_CARD_REWARD_PROFILES.filter((profile) => profile.issuer === 'Chase');
 		}
+		if (/\bu\.?\s*s\.?\s*bank\b/i.test(identity)) {
+			return AUTOMATIC_CARD_REWARD_PROFILES.filter((profile) => profile.issuer === 'U.S. Bank');
+		}
 		if (/\bvenmo\b/i.test(identity)) {
 			return AUTOMATIC_CARD_REWARD_PROFILES.filter((profile) => profile.issuer === 'Venmo');
 		}

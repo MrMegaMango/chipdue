@@ -609,6 +609,46 @@ describe.sequential('Plaid transaction history', () => {
 		);
 	});
 
+	it('automatically populates U.S. Bank rewards from a specific Plaid official name', async () => {
+		const itemId = await savePlaidItem(
+			'provider-item-us-bank-rewards',
+			'test-access-value',
+			'U.S. Bank'
+		);
+		plaidMocks.accountsGet.mockResolvedValue({
+			data: {
+				accounts: [
+					{
+						...liabilityResponse().data.accounts[0],
+						name: 'Credit Card - 2984',
+						official_name: 'U.S. BANK ALTITUDE GO VISA SIGNATURE'
+					}
+				]
+			}
+		});
+		plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
+
+		await syncPlaidItem(itemId);
+
+		const [card] = await listCards();
+		expect(card).toMatchObject({
+			nickname: 'Credit Card - 2984',
+			rewardProgramName: 'U.S. Bank Altitude Rewards',
+			rewardType: 'points',
+			rewardBaseRate: 1,
+			rewardSource: 'automatic',
+			rewardProfileName: 'U.S. Bank Altitude Go'
+		});
+		expect(card.rewardCategories).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ name: 'Dining · first $2,000/quarter', multiplier: 4 }),
+				expect.objectContaining({ name: 'Groceries', multiplier: 2 }),
+				expect.objectContaining({ name: 'Gas & EV charging', multiplier: 2 }),
+				expect.objectContaining({ name: 'Streaming', multiplier: 2 })
+			])
+		);
+	});
+
 	it('classifies Blue Cash Preferred purchases without asking for a card selection', async () => {
 		const rewardYear = new Date().getUTCFullYear();
 		const itemId = await savePlaidItem(
@@ -786,14 +826,14 @@ describe.sequential('Plaid transaction history', () => {
 		const itemId = await savePlaidItem(
 			'provider-item-venmo-rewards',
 			'test-access-value',
-			'Synchrony Bank'
+			'Venmo - Personal'
 		);
 		plaidMocks.accountsGet.mockResolvedValue({
 			data: {
 				accounts: [
 					{
 						...liabilityResponse().data.accounts[0],
-						name: 'Venmo Credit Card'
+						name: 'Credit Card ••••8180'
 					}
 				]
 			}

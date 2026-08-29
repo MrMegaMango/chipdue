@@ -4,11 +4,11 @@ export type CardRewardCalculation = 'static' | 'venmo_spend_ranked';
 
 export interface AutomaticCardRewardProfile {
 	id: string;
-	issuer: 'American Express' | 'Chase' | 'Venmo';
+	issuer: 'American Express' | 'Chase' | 'U.S. Bank' | 'Venmo';
 	cardName: string;
 	programName: string;
-	rewardType: CardRewardType;
-	baseRate: number;
+	rewardType: CardRewardType | null;
+	baseRate: number | null;
 	calculation: CardRewardCalculation;
 	categories: Array<{
 		name: string;
@@ -30,9 +30,11 @@ interface ProfileMatcher {
 	institution?: RegExp;
 }
 
-// These profiles intentionally contain only earning rules that can be inferred from
-// Plaid's transaction categories. Portal-only, merchant-only, capped, and activated
-// promotions are omitted so activity estimates do not promise rewards they cannot verify.
+const US_BANK_INSTITUTION = /\bu\.?\s*s\.?\s*bank\b/i;
+
+// Categories that require a bank portal, selected merchant, or relationship tier are shown
+// for completeness but deliberately have no Plaid category match. Transaction estimates then
+// stay at the dependable base rate instead of promising a bonus ChipDue cannot verify.
 const PROFILE_MATCHERS: ProfileMatcher[] = [
 	{
 		product: /\bsapphire\s+preferred\b/i,
@@ -199,6 +201,157 @@ const PROFILE_MATCHERS: ProfileMatcher[] = [
 		}
 	},
 	{
+		product: /\baltitude\s+go\b/i,
+		institution: US_BANK_INSTITUTION,
+		profile: {
+			id: 'us-bank-altitude-go',
+			issuer: 'U.S. Bank',
+			cardName: 'U.S. Bank Altitude Go',
+			programName: 'U.S. Bank Altitude Rewards',
+			rewardType: 'points',
+			baseRate: 1,
+			calculation: 'static',
+			categories: [
+				{ name: 'Dining · first $2,000/quarter', multiplier: 4, matchCategory: 'dining' },
+				{ name: 'Groceries', multiplier: 2, matchCategory: 'groceries' },
+				{ name: 'Gas & EV charging', multiplier: 2, matchCategory: 'gas' },
+				{ name: 'Streaming', multiplier: 2, matchCategory: 'streaming' }
+			]
+		}
+	},
+	{
+		product: /\baltitude\s+connect\b/i,
+		institution: US_BANK_INSTITUTION,
+		profile: {
+			id: 'us-bank-altitude-connect',
+			issuer: 'U.S. Bank',
+			cardName: 'U.S. Bank Altitude Connect',
+			programName: 'U.S. Bank Altitude Rewards',
+			rewardType: 'points',
+			baseRate: 1,
+			calculation: 'static',
+			categories: [
+				{ name: 'Travel Center hotels & cars', multiplier: 5, matchCategory: null },
+				{ name: 'Travel', multiplier: 4, matchCategory: 'travel' },
+				{ name: 'Transit', multiplier: 4, matchCategory: 'transit' },
+				{
+					name: 'Gas & EV charging · first $1,000/quarter',
+					multiplier: 4,
+					matchCategory: 'gas'
+				},
+				{ name: 'Dining', multiplier: 2, matchCategory: 'dining' },
+				{ name: 'Groceries', multiplier: 2, matchCategory: 'groceries' },
+				{ name: 'Streaming', multiplier: 2, matchCategory: 'streaming' }
+			]
+		}
+	},
+	{
+		product: /\baltitude\s+reserve\b/i,
+		institution: US_BANK_INSTITUTION,
+		profile: {
+			id: 'us-bank-altitude-reserve',
+			issuer: 'U.S. Bank',
+			cardName: 'U.S. Bank Altitude Reserve',
+			programName: 'U.S. Bank Altitude Rewards',
+			rewardType: 'points',
+			baseRate: 1,
+			calculation: 'static',
+			categories: [
+				{ name: 'Travel Center hotels & cars', multiplier: 10, matchCategory: null },
+				{ name: 'Travel Center flights', multiplier: 5, matchCategory: null },
+				{
+					name: 'Mobile wallet · first $5,000/billing cycle',
+					multiplier: 3,
+					matchCategory: null
+				},
+				{ name: 'Travel', multiplier: 3, matchCategory: 'travel' },
+				{ name: 'Transit', multiplier: 3, matchCategory: 'transit' }
+			]
+		}
+	},
+	{
+		product: /\bcash\s*(?:\+|plus\b)/i,
+		institution: US_BANK_INSTITUTION,
+		profile: {
+			id: 'us-bank-cash-plus',
+			issuer: 'U.S. Bank',
+			cardName: 'U.S. Bank Cash+',
+			programName: 'U.S. Bank Cash Rewards',
+			rewardType: 'cash_back',
+			baseRate: 1,
+			calculation: 'static',
+			categories: [
+				{
+					name: 'Two selected categories · first $2,000/quarter',
+					multiplier: 5,
+					matchCategory: null
+				},
+				{ name: 'Travel Center prepaid travel', multiplier: 5, matchCategory: null },
+				{ name: 'Selected everyday category', multiplier: 2, matchCategory: null }
+			]
+		}
+	},
+	{
+		product: /\bshopper\s+cash(?:\s+rewards?)?\b/i,
+		institution: US_BANK_INSTITUTION,
+		profile: {
+			id: 'us-bank-shopper-cash-rewards',
+			issuer: 'U.S. Bank',
+			cardName: 'U.S. Bank Shopper Cash Rewards',
+			programName: 'U.S. Bank Cash Rewards',
+			rewardType: 'cash_back',
+			baseRate: 1.5,
+			calculation: 'static',
+			categories: [
+				{
+					name: 'Two selected retailers · first $1,500/quarter',
+					multiplier: 6,
+					matchCategory: null
+				},
+				{ name: 'Travel Center hotels & cars', multiplier: 5.5, matchCategory: null },
+				{
+					name: 'Selected everyday category · first $1,500/quarter',
+					multiplier: 3,
+					matchCategory: null
+				}
+			]
+		}
+	},
+	{
+		product: /\b(?:bank\s+)?smartly\b/i,
+		institution: US_BANK_INSTITUTION,
+		profile: {
+			id: 'us-bank-smartly',
+			issuer: 'U.S. Bank',
+			cardName: 'U.S. Bank Smartly',
+			programName: 'U.S. Bank Smartly Rewards',
+			rewardType: 'cash_back',
+			baseRate: 2,
+			calculation: 'static',
+			categories: [
+				{
+					name: 'Qualifying relationship tier · up to',
+					multiplier: 4,
+					matchCategory: null
+				}
+			]
+		}
+	},
+	{
+		product: /\bshield\b/i,
+		institution: US_BANK_INSTITUTION,
+		profile: {
+			id: 'us-bank-shield',
+			issuer: 'U.S. Bank',
+			cardName: 'U.S. Bank Shield',
+			programName: 'U.S. Bank Cash Rewards',
+			rewardType: 'cash_back',
+			baseRate: null,
+			calculation: 'static',
+			categories: [{ name: 'Travel Center prepaid travel', multiplier: 4, matchCategory: null }]
+		}
+	},
+	{
 		product: /\bvenmo\b.*\b(credit|visa|card)\b|\b(credit|visa)\b.*\bvenmo\b/i,
 		profile: {
 			id: 'venmo-credit-card',
@@ -238,7 +391,10 @@ export function matchAutomaticCardRewardProfile(
 	identity: CardRewardIdentity
 ): AutomaticCardRewardProfile | null {
 	const { product, institution } = normalizedIdentity(identity);
-	if (/\bvenmo\b/i.test(institution) && /^\s*(?:credit\s+card\s*)+$/i.test(product)) {
+	if (
+		/\bvenmo\b/i.test(institution) &&
+		/^\s*(?:credit\s+card|visa|mastercard|card)(?:\s*(?:[-–—•·*]+\s*)*\d{4})?\s*$/i.test(product)
+	) {
 		return automaticCardRewardProfileById('venmo-credit-card');
 	}
 	const match = PROFILE_MATCHERS.find(

@@ -110,6 +110,57 @@ describe('automatic card reward profiles', () => {
 			cardName: 'Venmo Credit Card',
 			calculation: 'venmo_spend_ranked'
 		});
+		expect(
+			matchAutomaticCardRewardProfile({
+				institutionName: 'Venmo - Personal',
+				accountName: 'Credit Card ••••8180',
+				officialName: null
+			})
+		).toMatchObject({
+			cardName: 'Venmo Credit Card',
+			calculation: 'venmo_spend_ranked'
+		});
+	});
+
+	it.each([
+		['ALTITUDE GO VISA SIGNATURE', 'U.S. Bank Altitude Go', 1],
+		['U.S. BANK ALTITUDE CONNECT VISA SIGNATURE', 'U.S. Bank Altitude Connect', 1],
+		['ALTITUDE RESERVE VISA INFINITE', 'U.S. Bank Altitude Reserve', 1],
+		['CASH+ VISA SIGNATURE', 'U.S. Bank Cash+', 1],
+		['SHOPPER CASH REWARDS VISA SIGNATURE', 'U.S. Bank Shopper Cash Rewards', 1.5],
+		['BANK SMARTLY VISA SIGNATURE', 'U.S. Bank Smartly', 2],
+		['SHIELD VISA', 'U.S. Bank Shield', null]
+	])(
+		'recognizes U.S. Bank product %s from Plaid official_name',
+		(officialName, cardName, baseRate) => {
+			expect(
+				matchAutomaticCardRewardProfile({
+					institutionName: 'U.S. Bank',
+					accountName: 'Credit Card - 2984',
+					officialName
+				})
+			).toMatchObject({ issuer: 'U.S. Bank', cardName, baseRate });
+		}
+	);
+
+	it('does not invent a U.S. Bank product when Plaid returns only a generic card name', () => {
+		expect(
+			matchAutomaticCardRewardProfile({
+				institutionName: 'U.S. Bank',
+				accountName: 'Credit Card - 2984',
+				officialName: null
+			})
+		).toBeNull();
+	});
+
+	it('requires U.S. Bank for its product names', () => {
+		expect(
+			matchAutomaticCardRewardProfile({
+				institutionName: 'Example Bank',
+				accountName: 'Altitude Go',
+				officialName: null
+			})
+		).toBeNull();
 	});
 
 	it('requires the expected issuer for similarly named Chase products', () => {
