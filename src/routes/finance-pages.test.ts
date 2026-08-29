@@ -42,7 +42,12 @@ describe('financial workspace navigation', () => {
 
 	it('adds a read-only official E*TRADE order connection', () => {
 		expect(accountsSource).toContain("resolve('/api/accounts/[id]/orders'");
-		expect(accountsSource).toContain('E*TRADE orders');
+		expect(accountsSource).not.toContain(
+			'<a class="finance-button secondary" href={resolve(\'/etrade\')}>E*TRADE orders</a>'
+		);
+		expect(accountsSource).toContain("? 'Connect E*TRADE'");
+		expect(accountsSource).toContain("? 'Reconnect E*TRADE'");
+		expect(accountsSource).toContain(": 'Review E*TRADE setup'");
 		expect(etradeSource).toContain('Live consumer key');
 		expect(etradeSource).toContain('verification code');
 		expect(etradeSource).toContain('midnight Eastern');

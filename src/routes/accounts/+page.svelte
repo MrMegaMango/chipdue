@@ -743,7 +743,6 @@
 				</p>
 			</div>
 			<div class="account-toolbar-actions">
-				<a class="finance-button secondary" href={resolve('/etrade')}>E*TRADE orders</a>
 				{#if plaidConfigured}
 					<a
 						class="finance-button secondary"
@@ -1157,9 +1156,14 @@
 																{ordersByAccount[account.id]?.availability === 'account_not_found'
 																	? 'ChipDue could not match this account to E*TRADE. Make sure its last four characters are current.'
 																	: 'Connect E*TRADE for today to load open orders.'}
-																<a class="open-orders-link" href={resolve('/etrade')}
-																	>Manage E*TRADE access</a
-																>
+																<a class="open-orders-link" href={resolve('/etrade')}>
+																	{ordersByAccount[account.id]?.availability === 'not_configured'
+																		? 'Connect E*TRADE'
+																		: ordersByAccount[account.id]?.availability ===
+																			  'authorization_required'
+																			? 'Reconnect E*TRADE'
+																			: 'Review E*TRADE setup'}
+																</a>
 															</p>
 														{/if}
 													</section>
