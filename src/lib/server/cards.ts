@@ -1125,6 +1125,16 @@ function transactionMatchesRewardCategory(
 	}
 }
 
+function transactionMatchesVenmoCostcoWarehouse(transaction: StoredFinancialTransaction): boolean {
+	const detailed = transaction.categoryDetailed?.toUpperCase() ?? '';
+	if (detailed !== 'GENERAL_MERCHANDISE_SUPERSTORES') return false;
+
+	const merchant = `${transaction.merchantName ?? ''} ${transaction.name}`
+		.toUpperCase()
+		.replace(/[^A-Z0-9]+/g, ' ');
+	return /\bCOSTCO\b/.test(merchant);
+}
+
 interface RankedRewardRate {
 	rate: number;
 	categoryName: string;
@@ -1139,7 +1149,10 @@ function venmoEligibleCategory(
 	if (transactionMatchesRewardCategory(transaction, 'travel')) {
 		return { key: 'travel', label: 'Travel' };
 	}
-	if (transactionMatchesRewardCategory(transaction, 'groceries')) {
+	if (
+		transactionMatchesRewardCategory(transaction, 'groceries') ||
+		transactionMatchesVenmoCostcoWarehouse(transaction)
+	) {
 		return { key: 'groceries', label: 'Groceries' };
 	}
 	if (transactionMatchesRewardCategory(transaction, 'entertainment')) {

@@ -852,10 +852,31 @@ describe.sequential('Plaid transaction history', () => {
 						}
 					},
 					{
-						...transaction('venmo-gas', 20, 'Synthetic gas', '2026-08-18'),
+						...transaction('venmo-costco', 60, 'Costco', '2026-08-18'),
+						personal_finance_category: {
+							primary: 'GENERAL_MERCHANDISE',
+							detailed: 'GENERAL_MERCHANDISE_SUPERSTORES'
+						}
+					},
+					{
+						...transaction('venmo-costco-food-court', 10, 'Costco Food Court', '2026-08-17'),
+						personal_finance_category: {
+							primary: 'FOOD_AND_DRINK',
+							detailed: 'FOOD_AND_DRINK_FAST_FOOD'
+						}
+					},
+					{
+						...transaction('venmo-gas', 20, 'Costco Gas', '2026-08-16'),
 						personal_finance_category: {
 							primary: 'TRANSPORTATION',
 							detailed: 'TRANSPORTATION_GAS'
+						}
+					},
+					{
+						...transaction('venmo-walmart', 50, 'Walmart', '2026-08-15'),
+						personal_finance_category: {
+							primary: 'GENERAL_MERCHANDISE',
+							detailed: 'GENERAL_MERCHANDISE_SUPERSTORES'
 						}
 					}
 				],
@@ -877,12 +898,19 @@ describe.sequential('Plaid transaction history', () => {
 		});
 		expect(history.transactions.map((entry) => entry.rewardEstimate)).toEqual([
 			expect.objectContaining({
-				rate: 3,
-				amount: 240,
-				categoryName: 'Dining & nightlife · top category'
+				rate: 2,
+				amount: 160,
+				categoryName: 'Dining & nightlife · second category'
 			}),
-			expect.objectContaining({ rate: 2, amount: 80, categoryName: 'Groceries · second category' }),
-			expect.objectContaining({ rate: 1, amount: 20, categoryName: 'Gas · other category' })
+			expect.objectContaining({ rate: 3, amount: 120, categoryName: 'Groceries · top category' }),
+			expect.objectContaining({ rate: 3, amount: 180, categoryName: 'Groceries · top category' }),
+			expect.objectContaining({
+				rate: 2,
+				amount: 20,
+				categoryName: 'Dining & nightlife · second category'
+			}),
+			expect.objectContaining({ rate: 1, amount: 20, categoryName: 'Gas · other category' }),
+			expect.objectContaining({ rate: 1, amount: 50, categoryName: null })
 		]);
 	});
 
