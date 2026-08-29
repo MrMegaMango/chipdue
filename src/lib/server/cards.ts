@@ -359,6 +359,38 @@ function sortCards(cards: Card[]): Card[] {
 	});
 }
 
+function preferMoreRecentCard(left: Card, right: Card): Card {
+	const syncComparison = (left.lastSyncedAt ?? '').localeCompare(right.lastSyncedAt ?? '');
+	if (syncComparison !== 0) return syncComparison > 0 ? left : right;
+
+	const updateComparison = left.updatedAt.localeCompare(right.updatedAt);
+	if (updateComparison !== 0) return updateComparison > 0 ? left : right;
+
+	return left.id.localeCompare(right.id) > 0 ? left : right;
+}
+
+function uniqueCards(rows: CardRow[]): Card[] {
+	const cards: Card[] = [];
+	const plaidCardsByAccount = new Map<string, Card>();
+
+	for (const row of rows) {
+		const card = rowToCard(row);
+		if (!card) continue;
+		if (row.source !== 'plaid' || !row.external_account_ref) {
+			cards.push(card);
+			continue;
+		}
+
+		const existing = plaidCardsByAccount.get(row.external_account_ref);
+		plaidCardsByAccount.set(
+			row.external_account_ref,
+			existing ? preferMoreRecentCard(existing, card) : card
+		);
+	}
+
+	return [...cards, ...plaidCardsByAccount.values()];
+}
+
 function snapshotPayload(snapshot: PlaidCardSnapshot, rewards?: StoredCardRewards): CardPayload {
 	return {
 		nickname: snapshot.nickname,
@@ -393,7 +425,7 @@ export async function listCards(): Promise<Card[]> {
 						 FROM cards`
 					)
 					.all() as CardRow[]);
-	return sortCards(rows.map(rowToCard).filter((card): card is Card => card !== null));
+	return sortCards(uniqueCards(rows));
 }
 
 async function findCardRow(id: string): Promise<CardRow | undefined> {
