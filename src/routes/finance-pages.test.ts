@@ -74,6 +74,18 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain('Plaid does not provide open-order data.');
 	});
 
+	it('renders the account inventory before loading provider-backed details', () => {
+		const initializeSource = accountsSource.slice(
+			accountsSource.indexOf('async function initialize'),
+			accountsSource.indexOf('async function requestJson')
+		);
+		expect(initializeSource).toContain('loading = false;');
+		expect(initializeSource).toContain(
+			'void loadSupplementalAccountData(accountResponse.accounts);'
+		);
+		expect(initializeSource).not.toContain('await loadSupplementalAccountData');
+	});
+
 	it('adds a read-only official E*TRADE data connection', () => {
 		expect(accountsSource).toContain("resolve('/api/accounts/[id]/orders'");
 		expect(accountsSource).toContain("resolve('/api/accounts/[id]/estimated-history'");

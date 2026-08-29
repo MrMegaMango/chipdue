@@ -233,11 +233,10 @@
 			trackedBonusAccountIds = bonusResponse.bonuses
 				.map((bonus) => bonus.accountId)
 				.filter((accountId): accountId is string => Boolean(accountId));
-			await Promise.all([
-				loadAccountActivities(accountResponse.accounts),
-				loadBrokerageOrders(accountResponse.accounts),
-				loadPlaidEstimatedHistories(accountResponse.accounts)
-			]);
+			loading = false;
+			// Activity, open orders, and estimated history can involve provider calls. Render the
+			// account inventory first, then let those details fill in without blocking the page.
+			void loadSupplementalAccountData(accountResponse.accounts);
 		} catch (error) {
 			pageError = readableError(error, 'Your accounts could not be loaded.');
 		} finally {
@@ -716,14 +715,21 @@
 		}
 	}
 
+	async function loadSupplementalAccountData(
+		loadedAccounts: FinancialAccount[],
+		refreshPlaidEstimates = false
+	): Promise<void> {
+		await Promise.all([
+			loadAccountActivities(loadedAccounts),
+			loadBrokerageOrders(loadedAccounts),
+			loadPlaidEstimatedHistories(loadedAccounts, refreshPlaidEstimates)
+		]);
+	}
+
 	async function reloadAccounts(refreshPlaidEstimates = false): Promise<void> {
 		const response = await requestJson<{ accounts: FinancialAccount[] }>(resolve('/api/accounts'));
 		accounts = response.accounts;
-		await Promise.all([
-			loadAccountActivities(response.accounts),
-			loadBrokerageOrders(response.accounts),
-			loadPlaidEstimatedHistories(response.accounts, refreshPlaidEstimates)
-		]);
+		await loadSupplementalAccountData(response.accounts, refreshPlaidEstimates);
 	}
 
 	async function syncConnectedAccounts(): Promise<void> {
