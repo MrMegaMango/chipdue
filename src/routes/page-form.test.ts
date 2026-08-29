@@ -9,6 +9,7 @@ import {
 	GOOGLE_BOOTSTRAP_CONTINUE_TO,
 	formatRewardEstimate,
 	formatRewardRate,
+	googleCalendarEventUrl,
 	inputToCents,
 	inputToRewardRate,
 	interestSavingTarget,
@@ -19,6 +20,36 @@ import {
 	LAST_FOUR_PATTERN,
 	parseGoogleCallbackResult
 } from './+page.svelte';
+
+describe('Google Calendar event links', () => {
+	it('opens an all-day event draft without disclosing payment amounts', () => {
+		const value = googleCalendarEventUrl({
+			nickname: 'Daily, card',
+			dueDate: '2027-02-28'
+		});
+		expect(value).not.toBeNull();
+		const url = new URL(value!);
+		expect(url.origin).toBe('https://calendar.google.com');
+		expect(url.pathname).toBe('/calendar/render');
+		expect(url.searchParams.get('action')).toBe('TEMPLATE');
+		expect(url.searchParams.get('text')).toBe('Daily, card payment due');
+		expect(url.searchParams.get('dates')).toBe('20270228/20270301');
+		expect(url.searchParams.get('details')).toBeNull();
+		expect(value).not.toContain('$');
+	});
+
+	it('rejects invalid dates instead of opening a malformed Google event', () => {
+		expect(googleCalendarEventUrl({ nickname: 'Card', dueDate: '2027-02-30' })).toBeNull();
+		expect(googleCalendarEventUrl({ nickname: 'Card', dueDate: 'not-a-date' })).toBeNull();
+	});
+
+	it('makes Google Calendar primary and keeps the calendar file as a fallback', () => {
+		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+		expect(source).toContain('Add to Google Calendar');
+		expect(source).toContain('Review and save each due date in Google Calendar.');
+		expect(source).toContain('Download .ics instead');
+	});
+});
 
 describe('manual card form conversions', () => {
 	it('converts the numeric values emitted by number inputs without treating them as strings', () => {

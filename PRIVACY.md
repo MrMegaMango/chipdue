@@ -59,7 +59,7 @@ In cloud mode, users may enter their own Plaid client ID and Production secret. 
 
 Google authentication enables multi-account cloud access. A first ordinary sign-in creates an isolated ChipDue account. Password mode can instead link one Google identity to the original operator account; Google-only bootstrap serves the same purpose for pre-existing operator data without a password fallback. During each Google flow, the browser contacts Google and Google necessarily receives network and service metadata such as the IP address, time, requested `openid` scope, and ChipDue hostname. Google's consent screen also displays the User Support Email configured by the deployer and is reachable through the public login start; use a dedicated non-personal monitored alias or group whose membership is private. Google returns a short-lived authorization code to ChipDue's exact callback. The server exchanges and validates it, keeps only a keyed issuer-and-subject fingerprint and random tenant identifier, issues ChipDue's own opaque tenant-bound session, and discards the provider tokens.
 
-The ChipDue application contains no analytics, advertising, telemetry, crash-reporting SDK, remote font, or webhook relay. It does not load Google JavaScript; the optional flow is an ordinary full-page redirect. Hosting and identity providers may retain infrastructure or authentication logs according to their plans and policies.
+The ChipDue application contains no analytics, advertising, telemetry, crash-reporting SDK, remote font, or webhook relay. It does not load Google JavaScript; optional Google sign-in and Calendar actions use ordinary full-page navigation. Hosting and identity providers may retain infrastructure or authentication logs according to their plans and policies.
 
 ## Logs, caches, and browser storage
 
@@ -75,9 +75,11 @@ Neon backups and point-in-time recovery contain ChipDue ciphertext and metadata.
 
 Losing the AES key makes existing encrypted account, bonus, card, and Plaid records unrecoverable. Replacing `CARDDUE_MASTER_KEY` does not rotate existing ciphertext; this release has no automatic bulk re-encryption workflow. Provider free-tier retention and availability are not permanent guarantees.
 
-## Calendar exports
+## Calendar actions and exports
 
-Calendar files omit monetary amounts by default. Cloud exports require an authenticated session, but the downloaded file becomes independent of ChipDue. If you include amounts or import the file into a cloud calendar, that calendar provider receives those values. Treat every `.ics` file as private financial data.
+The Google Calendar action opens an unsaved event draft and sends the card nickname and due date to Google only after you choose **Review event**. It excludes balances, payment amounts, and card numbers; Google still receives the draft fields in the URL and may retain them under its policies. Google asks you to save each event and ChipDue receives no Calendar access token.
+
+Calendar files omit monetary amounts by default. Cloud exports require an authenticated session, but the downloaded file becomes independent of ChipDue. If you import the file into a cloud calendar, that calendar provider receives its values. Treat every `.ics` file as private financial data.
 
 ## Limits of protection
 

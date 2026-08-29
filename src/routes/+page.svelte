@@ -4,6 +4,33 @@
 	export const LAST_FOUR_PATTERN = '[0-9][0-9][0-9][0-9]';
 	export const GOOGLE_BOOTSTRAP_CONTINUE_TO = '/api/auth/google/bootstrap/continue';
 	export const SETUP_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+	export type GoogleCalendarEvent = {
+		nickname: string;
+		dueDate: string;
+	};
+
+	function nextCalendarDate(value: string): string | null {
+		if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+		const [year, month, day] = value.split('-').map(Number);
+		const date = new Date(Date.UTC(year, month - 1, day));
+		if (date.toISOString().slice(0, 10) !== value) return null;
+		return new Date(Date.UTC(year, month - 1, day + 1)).toISOString().slice(0, 10);
+	}
+
+	export function googleCalendarEventUrl(event: GoogleCalendarEvent): string | null {
+		const endDate = nextCalendarDate(event.dueDate);
+		if (!endDate) return null;
+
+		const url = new URL('https://calendar.google.com/calendar/render');
+		url.searchParams.set('action', 'TEMPLATE');
+		url.searchParams.set('text', `${event.nickname} payment due`);
+		url.searchParams.set(
+			'dates',
+			`${event.dueDate.replaceAll('-', '')}/${endDate.replaceAll('-', '')}`
+		);
+		url.searchParams.set('trp', 'false');
+		return url.toString();
+	}
 
 	export function inputToCents(value: string | number | undefined): number | null {
 		if (value === undefined || (typeof value === 'string' && !value.trim())) return null;
@@ -431,6 +458,8 @@
 	let rewardProfileSelection = $state('');
 	let rewardsFirstField = $state<HTMLInputElement>();
 	let rewardsCloseButton = $state<HTMLButtonElement>();
+	let calendarDialogOpen = $state(false);
+	let calendarCloseButton = $state<HTMLButtonElement>();
 	let recentActivityByCard = $state<Record<string, CardTransaction[]>>({});
 	let recentActivityLoadingByCard = $state<Record<string, boolean>>({});
 	let recentActivityErrorByCard = $state<Record<string, boolean>>({});
@@ -485,6 +514,11 @@
 		interestSavingTargets.filter((target) => target.source === 'current').length
 	);
 	const dueSoonCount = $derived(cards.filter((card) => isDueSoon(card)).length);
+	const calendarCards = $derived(
+		cards
+			.filter((card): card is CardView & { dueDate: string } => Boolean(card.dueDate))
+			.toSorted((left, right) => left.dueDate.localeCompare(right.dueDate))
+	);
 	const nextCard = $derived(
 		cards
 			.filter((card) => card.dueDate && daysUntil(card.dueDate) >= 0)
@@ -527,7 +561,7 @@
 			setupToken = '';
 			if (noticeTimer) clearTimeout(noticeTimer);
 			if (clockTimer) clearInterval(clockTimer);
-			if (dialogMode || historyCard || rewardsCard) {
+			if (dialogMode || historyCard || rewardsCard || calendarDialogOpen) {
 				document.body.style.overflow = previousBodyOverflow;
 			}
 			document.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -964,6 +998,8 @@
 		rewardProfileSelection = '';
 		rewardsFirstField = undefined;
 		rewardsCloseButton = undefined;
+		calendarDialogOpen = false;
+		calendarCloseButton = undefined;
 		recentActivityByCard = {};
 		recentActivityLoadingByCard = {};
 		recentActivityErrorByCard = {};
@@ -1386,6 +1422,25 @@
 		void tick().then(() => focusTarget?.focus());
 	}
 
+	async function openCalendarDialog(): Promise<void> {
+		if (calendarCards.length === 0) {
+			showNotice('Add a due date to a card first.', 'error');
+			return;
+		}
+		prepareDialog();
+		calendarDialogOpen = true;
+		await tick();
+		calendarCloseButton?.focus();
+	}
+
+	function closeCalendarDialog(): void {
+		const focusTarget = previouslyFocused;
+		calendarDialogOpen = false;
+		document.body.style.overflow = previousBodyOverflow;
+		previouslyFocused = undefined;
+		void tick().then(() => focusTarget?.focus());
+	}
+
 	async function saveCardRewards(event: SubmitEvent): Promise<void> {
 		event.preventDefault();
 		const card = rewardsCard;
@@ -1499,11 +1554,12 @@
 	}
 
 	function handleWindowKeydown(event: KeyboardEvent): void {
-		if (!dialogMode && !historyCard && !rewardsCard) return;
+		if (!dialogMode && !historyCard && !rewardsCard && !calendarDialogOpen) return;
 		if (event.key === 'Escape') {
 			event.preventDefault();
 			if (historyCard) closeTransactionHistory();
 			else if (rewardsCard) closeRewardsDialog();
+			else if (calendarDialogOpen) closeCalendarDialog();
 			else closeDialog();
 			return;
 		}
@@ -2342,9 +2398,9 @@
 				</svg>
 				<p>
 					{#if googleOnlyMode || googleLoginAvailable}
-						<strong>Google never receives your financial data.</strong> Choosing Google reveals this site’s
-						domain, your IP address, and sign-in timing. ChipDue requests no email or profile details,
-						keeps no Google access token, and stores no financial data in browser storage.
+						<strong>Google sign-in does not share your financial data.</strong> Choosing Google here reveals
+						this site’s domain, your IP address, and sign-in timing. ChipDue requests no email or profile
+						details, keeps no Google access token, and stores no financial data in browser storage.
 					{:else}
 						<strong>Know where your data lives.</strong> Cloud mode stores financial data on the private
 						ChipDue server you chose, not solely on this device. Use a deployment you trust over HTTPS.
@@ -3183,24 +3239,20 @@
 						>
 					</div>
 					<div class="panel-content">
-						<p class="section-kicker">Calendar export</p>
-						<h2>Take due dates with you.</h2>
-						<p>
-							Download a standard calendar file. Amounts are excluded by default for safer sharing.
-						</p>
+						<p class="section-kicker">Google Calendar</p>
+						<h2>Put due dates on your calendar.</h2>
+						<p>Review and save each due date in Google Calendar. Amounts stay private.</p>
 						<div class="calendar-actions">
-							<a
-								class="button button-secondary"
-								href={resolve('/api/export/calendar.ics?amounts=0')}
-								download
-							>
+							<button class="button button-secondary" type="button" onclick={openCalendarDialog}>
 								<svg aria-hidden="true" viewBox="0 0 20 20"
-									><path d="M10 3v10m0 0 4-4m-4 4L6 9M4 16h12"></path></svg
+									><path
+										d="M6 2v3M14 2v3M3 8h14M5 4h10a2 2 0 0 1 2 2v10H3V6a2 2 0 0 1 2-2Zm5 7v4m-2-2h4"
+									></path></svg
 								>
-								Export dates only
-							</a>
-							<a class="text-link" href={resolve('/api/export/calendar.ics?amounts=1')} download>
-								Include amounts
+								Add to Google Calendar
+							</button>
+							<a class="text-link" href={resolve('/api/export/calendar.ics?amounts=0')} download>
+								Download .ics instead
 								<svg aria-hidden="true" viewBox="0 0 16 16"><path d="m6 3 5 5-5 5"></path></svg>
 							</a>
 						</div>
@@ -3216,6 +3268,83 @@
 			>
 		</footer>
 	</div>
+
+	{#if calendarDialogOpen}
+		<div class="dialog-layer">
+			<div class="dialog-backdrop"></div>
+			<div
+				bind:this={dialogElement}
+				class="dialog calendar-dialog"
+				role="dialog"
+				aria-modal="true"
+				aria-labelledby="calendar-dialog-title"
+				aria-describedby="calendar-dialog-description"
+			>
+				<header class="dialog-header">
+					<div>
+						<p class="section-kicker">Google Calendar</p>
+						<h2 id="calendar-dialog-title">Add payment due dates</h2>
+						<p id="calendar-dialog-description">
+							Google will ask you to save each event. ChipDue shares only its date and card name.
+						</p>
+					</div>
+					<button
+						bind:this={calendarCloseButton}
+						class="icon-button"
+						type="button"
+						onclick={closeCalendarDialog}
+						aria-label="Close Google Calendar events"
+					>
+						<svg aria-hidden="true" viewBox="0 0 20 20"><path d="m5 5 10 10M15 5 5 15"></path></svg>
+					</button>
+				</header>
+
+				<div class="calendar-dialog-body">
+					<div class="calendar-privacy-note">
+						<svg aria-hidden="true" viewBox="0 0 20 20"
+							><path d="M10 2 4 5v4c0 4 2.5 7 6 9 3.5-2 6-5 6-9V5l-6-3Zm-2 8 1.5 1.5L13 8"
+							></path></svg
+						>
+						<span>Balances, payment amounts, and card numbers are not included.</span>
+					</div>
+					<ul class="calendar-event-list">
+						<!-- eslint-disable svelte/no-navigation-without-resolve -- Google Calendar event drafts use external URLs. -->
+						{#each calendarCards as card (card.id)}
+							{@const eventUrl = googleCalendarEventUrl(card)}
+							{#if eventUrl}
+								<li>
+									<div>
+										<strong>{card.nickname}</strong>
+										<span>{formatDate(card.dueDate)}</span>
+									</div>
+									<a
+										class="button button-secondary"
+										href={eventUrl}
+										target="_blank"
+										rel="noopener noreferrer"
+									>
+										Review event
+										<svg aria-hidden="true" viewBox="0 0 20 20"
+											><path d="M8 4h8v8m0-8-9 9M5 7H3v10h10v-2"></path></svg
+										>
+									</a>
+								</li>
+							{/if}
+						{/each}
+						<!-- eslint-enable svelte/no-navigation-without-resolve -->
+					</ul>
+					<footer class="dialog-actions calendar-dialog-actions">
+						<a class="text-link" href={resolve('/api/export/calendar.ics?amounts=0')} download>
+							Download all as .ics
+						</a>
+						<button class="button button-quiet" type="button" onclick={closeCalendarDialog}
+							>Done</button
+						>
+					</footer>
+				</div>
+			</div>
+		</div>
+	{/if}
 
 	{#if dialogMode}
 		<div class="dialog-layer">
@@ -5870,6 +5999,94 @@
 		margin-top: 1.2rem;
 	}
 
+	.calendar-dialog {
+		width: min(100%, 680px);
+	}
+
+	.calendar-dialog-body {
+		padding: 1.2rem 1.5rem 1.5rem;
+	}
+
+	.calendar-privacy-note {
+		display: flex;
+		gap: 0.55rem;
+		align-items: center;
+		padding: 0.7rem 0.8rem;
+		border: 1px solid #bddccf;
+		border-radius: 9px;
+		color: #245c48;
+		font-size: 0.68rem;
+		font-weight: 650;
+		background: #eef8f3;
+	}
+
+	.calendar-privacy-note svg {
+		width: 18px;
+		height: 18px;
+		flex: 0 0 auto;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.7;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+	}
+
+	.calendar-event-list {
+		display: grid;
+		gap: 0.55rem;
+		margin: 1rem 0 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	.calendar-event-list li {
+		display: flex;
+		gap: 1rem;
+		align-items: center;
+		justify-content: space-between;
+		padding: 0.75rem 0.8rem;
+		border: 1px solid var(--line);
+		border-radius: 9px;
+		background: white;
+	}
+
+	.calendar-event-list li > div {
+		display: grid;
+		min-width: 0;
+		gap: 0.2rem;
+	}
+
+	.calendar-event-list strong {
+		overflow: hidden;
+		font-size: 0.76rem;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.calendar-event-list span {
+		color: var(--muted);
+		font-size: 0.66rem;
+	}
+
+	.calendar-event-list .button {
+		min-height: 36px;
+		flex: 0 0 auto;
+		padding: 0.5rem 0.7rem;
+		font-size: 0.68rem;
+	}
+
+	.calendar-event-list .button svg {
+		width: 15px;
+		height: 15px;
+	}
+
+	.calendar-dialog-actions {
+		justify-content: space-between;
+		margin-top: 1rem;
+		padding-top: 1rem;
+		border-top: 1px solid var(--line);
+	}
+
 	.text-link {
 		display: inline-flex;
 		gap: 0.2rem;
@@ -6816,7 +7033,8 @@
 		.dialog-header,
 		.card-form,
 		.history-body,
-		.reward-details-body {
+		.reward-details-body,
+		.calendar-dialog-body {
 			padding-right: 1.15rem;
 			padding-left: 1.15rem;
 		}
@@ -6899,6 +7117,20 @@
 
 		.connection-actions button {
 			flex: 1;
+		}
+
+		.calendar-event-list li {
+			align-items: stretch;
+			flex-direction: column;
+		}
+
+		.calendar-event-list .button {
+			width: 100%;
+		}
+
+		.calendar-dialog-actions {
+			align-items: stretch;
+			flex-direction: column-reverse;
 		}
 	}
 </style>

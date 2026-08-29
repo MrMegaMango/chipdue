@@ -22,7 +22,7 @@ Choose one of two deployment modes:
 - Connect Plaid only when you explicitly choose to; manual mode never contacts Plaid.
 - Encrypt account and bonus records, card payloads, transaction history, Plaid cursors, access tokens, Item IDs, and institution names with AES-256-GCM.
 - Request Plaid Accounts, Investments, Liabilities, and up to 24 months of Transactions data—never identity or full account numbers.
-- Export due dates as an iCalendar file, with amounts omitted by default.
+- Add due dates through Google Calendar event drafts without balances, amounts, or card numbers; keep an iCalendar download as a fallback.
 - Keep financial data out of browser persistence, logs, source code, CI, and Git history.
 - Run privacy and full-history secret checks before every push.
 

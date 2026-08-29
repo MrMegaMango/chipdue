@@ -12,7 +12,7 @@ Use [local mode](../README.md#start-locally) instead if you do not want Vercel t
 - The Neon runtime role connects through a direct, unpooled TLS URL. It can read and change ChipDue's compatibility-stable `carddue_*` table rows but cannot migrate the schema.
 - An owner-capable direct, unpooled Neon TLS URL is used only for explicit migration from a trusted local environment.
 - Vercel Preview and Development receive no real database, key, authentication verifier, recovery bundle, Google secret, or Plaid credentials.
-- Google is optional for the original password-backed operator account and is required to create additional accounts. Google receives no financial fields from ChipDue.
+- Google is optional for the original password-backed operator account and is required to create additional accounts. Sign-in shares no financial fields; the separate Calendar action sends only a user-selected card nickname and due date.
 - Plaid is optional. Each user can supply an independent Plaid Production team from the dashboard; manual entry works without Plaid.
 
 This design limits a Neon-only disclosure. It does not protect data from someone who controls the Vercel project, production build, Function runtime, owner session, or recovery bundle.
