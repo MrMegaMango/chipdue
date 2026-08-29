@@ -45,6 +45,11 @@
 		openedDate: string;
 		notes: string;
 	};
+	type AccountOwnershipGroup = {
+		id: FinancialAccountOwner;
+		title: string;
+		accounts: FinancialAccount[];
+	};
 
 	const money = new Intl.NumberFormat('en-US', {
 		style: 'currency',
@@ -178,6 +183,21 @@
 			openedDate: '',
 			notes: ''
 		};
+	}
+
+	function splitAccountsByOwner(groupAccounts: FinancialAccount[]): AccountOwnershipGroup[] {
+		return [
+			{
+				id: 'business',
+				title: 'Business',
+				accounts: groupAccounts.filter((account) => account.ownerType === 'business')
+			},
+			{
+				id: 'personal',
+				title: 'Personal',
+				accounts: groupAccounts.filter((account) => account.ownerType === 'personal')
+			}
+		];
 	}
 
 	function institutionLogoUrl(account: FinancialAccount): string | null {
@@ -944,424 +964,458 @@
 									<h3 id={`${accountGroup.id}-account-list-title`}>{accountGroup.title}</h3>
 									<p>{accountGroup.description}</p>
 								</div>
-								<div class="finance-grid">
-									{#each accountGroup.accounts as account (account.id)}
-										{@const bonusOffers = availableBonusOffers(account)}
-										{@const logoUrl = institutionLogoUrl(account)}
-										<article
-											class:brokerage-detail={account.accountType === 'brokerage'}
-											class:hidden-account={account.hidden}
-											class="finance-card"
+								{#each splitAccountsByOwner(accountGroup.accounts) as ownershipGroup (ownershipGroup.id)}
+									{#if ownershipGroup.accounts.length > 0}
+										<section
+											class="account-ownership-group"
+											aria-labelledby={`${accountGroup.id}-${ownershipGroup.id}-account-list-title`}
 										>
-											<header>
-												<div class="account-identity">
-													<span class:institution-logo={logoUrl} class="institution-mark">
-														{#if logoUrl}
-															<img
-																src={logoUrl}
-																alt={`${account.institution ?? account.nickname} logo`}
-															/>
-														{:else}
-															<svg viewBox="0 0 24 24" aria-hidden="true">
-																<path d="M3 9h18M5 9V7l7-4 7 4v2M5 20h14M7 9v8m5-8v8m5-8v8" />
-															</svg>
-														{/if}
-													</span>
-													<div>
-														<h4>{account.nickname}</h4>
-														<p>
-															{account.institution ?? 'Institution not entered'}{account.last4
-																? ` · •••• ${account.last4}`
-																: ''}
-														</p>
-													</div>
-												</div>
-												<div class="account-pills">
-													<span
-														class:connected={account.source === 'connected'}
-														class="finance-pill source"
-													>
-														{account.source === 'connected'
-															? financialProviderName(account.connectionProvider)
-															: 'Manual'}
-													</span>
-													<span
-														class:good={account.status === 'active'}
-														class:muted={account.status !== 'active'}
-														class="finance-pill"
-													>
-														{account.status}
-													</span>
-													{#if account.hidden}
-														<span class="finance-pill muted">Hidden</span>
-													{/if}
-												</div>
-											</header>
-											<div class="finance-card-value">
+											<div
+												class:business={ownershipGroup.id === 'business'}
+												class="account-ownership-heading"
+											>
+												<h4 id={`${accountGroup.id}-${ownershipGroup.id}-account-list-title`}>
+													{ownershipGroup.title}
+												</h4>
 												<span
-													>{account.source === 'connected'
-														? 'Synced balance'
-														: 'Current balance'}</span
+													>{ownershipGroup.accounts.length}
+													{ownershipGroup.accounts.length === 1 ? 'account' : 'accounts'}</span
 												>
-												<strong>{formatMoney(account.currentBalanceCents)}</strong>
 											</div>
-											<dl class="finance-details">
-												<div>
-													<dt>Account type</dt>
-													<dd>{typeLabel(account.accountType)}</dd>
-												</div>
-												<div>
-													<dt>Ownership</dt>
-													<dd>{account.ownerType === 'business' ? 'Business' : 'Personal'}</dd>
-												</div>
-												<div>
-													<dt>Opened</dt>
-													<dd>{formatDate(account.openedDate)}</dd>
-												</div>
-												<div>
-													<dt>Data source</dt>
-													<dd>
-														{account.source === 'connected'
-															? formatSyncTime(account.lastSyncedAt)
-															: 'Manual entry'}
-													</dd>
-												</div>
-												{#if account.accountType === 'brokerage'}
-													<div>
-														<dt>Investment return</dt>
-														<dd
-															class:gain={investmentReturn(account) !== null &&
-																(investmentReturn(account) ?? 0) >= 0}
-														>
-															{investmentReturnLabel(account)}
-														</dd>
-													</div>
-												{/if}
-											</dl>
-											{#if account.accountType === 'brokerage'}
-												<BalanceHistoryChart
-													accountId={account.id}
-													accountName={account.nickname}
-													currency={account.currency}
-													points={account.balanceHistory}
-													netContributionsCents={account.netContributionsCents}
-												/>
-												{#if account.source === 'connected'}
-													<div class="history-estimate-action">
-														<div>
-															<strong>Estimated portfolio history</strong>
-															<span
-																>Uses {isEtradeBrokerage(account)
-																	? 'E*TRADE'
-																	: financialProviderName(account.connectionProvider)} activity and daily
-																market closes; it is not broker-reported performance.</span
-															>
-															{#if historyEstimateErrorByAccount[account.id]}
-																<small class="error"
-																	>{historyEstimateErrorByAccount[account.id]}</small
-																>
-															{:else if historyEstimateNoteByAccount[account.id]}
-																<small>{historyEstimateNoteByAccount[account.id]}</small>
-															{/if}
-														</div>
-														{#if !account.transactionHistoryEnabled && !isEtradeBrokerage(account)}
-															<span class="disabled-label">Sync activity first</span>
-														{:else if !isEtradeBrokerage(account) || ordersByAccount[account.id]?.availability === 'available'}
-															<button
-																type="button"
-																disabled={historyEstimateLoadingByAccount[account.id]}
-																onclick={() => buildEstimatedHistory(account)}
-															>
-																{historyEstimateLoadingByAccount[account.id]
-																	? 'Building…'
-																	: account.balanceHistory.some(
-																				(point) => point.source === 'estimated'
-																		  )
-																		? 'Refresh estimate'
-																		: 'Build 2-year estimate'}
-															</button>
-														{:else}
-															<a href={resolve('/etrade')}>Connect E*TRADE</a>
-														{/if}
-													</div>
-												{/if}
-											{/if}
-											{#if bonusOffers.length > 0}
-												<section class="bonus-offer-callout" aria-label="Verified bonus offers">
-													<div>
-														<span>Verified bonus catalog</span>
-														<strong>
-															{bonusOffers.length} matching {bonusOffers.length === 1
-																? 'offer'
-																: 'offers'}
-														</strong>
-													</div>
-													<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- bonusSetupHref resolves the route before appending its query. -->
-													<a href={bonusSetupHref(account)}>Choose your offer</a>
-												</section>
-											{/if}
-											{#if account.accountType === 'brokerage' && account.source === 'connected'}
-												<section class="holding-list" aria-label={`${account.nickname} holdings`}>
-													<div class="holding-list-heading">
-														<h4>Holdings</h4>
-														<span>
-															{account.holdings.length
-																? `${account.holdings.length} ${account.holdings.length === 1 ? 'position' : 'positions'}`
-																: 'No positions reported'}
-														</span>
-													</div>
-													{#if account.holdings.length > 0}
-														<div
-															class="holding-table"
-															role="table"
-															aria-label="Holdings and current prices"
-														>
-															<div class="holding-row heading" role="row">
-																<span role="columnheader">Holding</span>
-																<span role="columnheader">Units</span>
-																<span role="columnheader">Current price</span>
-																<span role="columnheader">Value</span>
-															</div>
-															{#each account.holdings as holding, index (index)}
-																<div class="holding-row" role="row">
-																	<span class="holding-name" role="cell">
-																		<strong
-																			>{isCashSweepHolding(holding)
-																				? `Cash${holding.tickerSymbol ? ` (${holding.tickerSymbol})` : ''}`
-																				: (holding.tickerSymbol ?? holding.name)}</strong
-																		>
-																		<small>
-																			{isCashSweepHolding(holding)
-																				? 'Uninvested cash held at Chase'
-																				: holding.tickerSymbol
-																					? holding.name
-																					: (holding.securityType ?? 'Security')}
-																		</small>
-																	</span>
-																	<span role="cell" data-label="Units">
-																		{isCashSweepHolding(holding)
-																			? '—'
-																			: formatQuantity(holding.quantity)}
-																	</span>
-																	<span
-																		class="holding-price"
-																		role="cell"
-																		data-label="Current price"
-																	>
-																		<strong
-																			>{isCashSweepHolding(holding)
-																				? 'Fixed at $1.00'
-																				: formatPrice(holding)}</strong
-																		>
-																		{#if holding.priceAsOf}<small
-																				>as of {formatDate(holding.priceAsOf)}</small
-																			>{/if}
-																	</span>
-																	<span role="cell" data-label="Value"
-																		>{formatHoldingValue(holding)}</span
-																	>
+											<div class="finance-grid">
+												{#each ownershipGroup.accounts as account (account.id)}
+													{@const bonusOffers = availableBonusOffers(account)}
+													{@const logoUrl = institutionLogoUrl(account)}
+													<article
+														class:brokerage-detail={account.accountType === 'brokerage'}
+														class:hidden-account={account.hidden}
+														class="finance-card"
+													>
+														<header>
+															<div class="account-identity">
+																<span class:institution-logo={logoUrl} class="institution-mark">
+																	{#if logoUrl}
+																		<img
+																			src={logoUrl}
+																			alt={`${account.institution ?? account.nickname} logo`}
+																		/>
+																	{:else}
+																		<svg viewBox="0 0 24 24" aria-hidden="true">
+																			<path d="M3 9h18M5 9V7l7-4 7 4v2M5 20h14M7 9v8m5-8v8m5-8v8" />
+																		</svg>
+																	{/if}
+																</span>
+																<div>
+																	<h4>{account.nickname}</h4>
+																	<p>
+																		{account.institution ?? 'Institution not entered'}{account.last4
+																			? ` · •••• ${account.last4}`
+																			: ''}
+																	</p>
 																</div>
-															{/each}
-														</div>
-													{:else}
-														<p class="holding-empty">
-															No holdings are available from the provider yet. Sync again after
-															investment data is ready.
-														</p>
-													{/if}
-												</section>
-											{/if}
-											{#if account.source === 'connected'}
-												<section
-													class="account-activity"
-													aria-label={`${account.accountType === 'brokerage' ? 'Investment' : 'Recent'} activity for ${account.nickname}`}
-												>
-													<div class="account-detail-heading">
-														<h4>
-															{account.accountType === 'brokerage'
-																? 'Investment activity'
-																: 'Recent activity'}
-														</h4>
-														{#if activityByAccount[account.id]?.transactions.length}
-															<span>
-																{activityByAccount[account.id].transactions
-																	.length}{activityByAccount[account.id].transactions.length ===
-																RECENT_ACTIVITY_LIMIT
-																	? '+'
-																	: ''}
-																loaded
-															</span>
-														{/if}
-													</div>
-													{#if !account.transactionHistoryEnabled}
-														<p class="account-activity-message">
-															Sync accounts to load activity from {financialProviderName(
-																account.connectionProvider
-															)}.
-														</p>
-													{:else if activityLoadingByAccount[account.id]}
-														<p class="account-activity-message" aria-busy="true">
-															Loading activity…
-														</p>
-													{:else if activityErrorByAccount[account.id]}
-														<p class="account-activity-message">
-															Activity is unavailable right now.
-														</p>
-													{:else if activityByAccount[account.id]?.transactions.length}
-														{#if hasCashSweepActivity(account.id)}
-															<p class="cash-sweep-explainer">
-																QACDS is Chase’s name for uninvested cash. “Cash used” means Chase
-																took cash from QACDS to pay for a purchase or withdrawal. It is not
-																a stock sale or investment gain.
-															</p>
-														{/if}
-														<ul class="account-activity-list">
-															{#each visibleAccountTransactions(account.id) as transaction (transaction.id)}
-																<li>
-																	<div class="account-activity-date">
-																		<strong>{formatShortDate(transaction.date)}</strong>
-																		<span>{transaction.pending ? 'Pending' : 'Posted'}</span>
-																	</div>
-																	<div class="account-activity-description">
-																		<strong>{activityTitle(transaction)}</strong>
-																		<span>{activityDetail(transaction)}</span>
-																	</div>
-																	<strong
-																		class:credit={transaction.amountCents < 0 &&
-																			!isCashSweepTransaction(transaction)}
-																		class="account-activity-amount"
-																	>
-																		{formatAccountTransactionAmount(transaction)}
-																	</strong>
-																</li>
-															{/each}
-														</ul>
-														{#if activityByAccount[account.id].transactions.length > COLLAPSED_ACTIVITY_COUNT}
-															<button
-																class="account-activity-toggle"
-																type="button"
-																onclick={() => toggleAccountActivity(account.id)}
+															</div>
+															<div class="account-pills">
+																<span
+																	class:connected={account.source === 'connected'}
+																	class="finance-pill source"
+																>
+																	{account.source === 'connected'
+																		? financialProviderName(account.connectionProvider)
+																		: 'Manual'}
+																</span>
+																<span
+																	class:good={account.status === 'active'}
+																	class:muted={account.status !== 'active'}
+																	class="finance-pill"
+																>
+																	{account.status}
+																</span>
+																{#if account.hidden}
+																	<span class="finance-pill muted">Hidden</span>
+																{/if}
+															</div>
+														</header>
+														<div class="finance-card-value">
+															<span
+																>{account.source === 'connected'
+																	? 'Synced balance'
+																	: 'Current balance'}</span
 															>
-																{expandedActivityAccountIds.includes(account.id)
-																	? 'Show less'
-																	: `Show all ${activityByAccount[account.id].transactions.length}`}
-															</button>
-														{/if}
-													{:else}
-														<p class="account-activity-message">
-															{activityByAccount[account.id]?.status === 'preparing'
-																? 'The provider is still preparing older activity.'
-																: `No ${account.accountType === 'brokerage' ? 'investment activity' : 'transactions'} returned by ${financialProviderName(account.connectionProvider)}.`}
-														</p>
-													{/if}
-												</section>
-												{#if account.accountType === 'brokerage'}
-													<section
-														class="open-orders"
-														aria-label={`Open orders for ${account.nickname}`}
-													>
-														<div class="account-detail-heading">
-															<h4>Open orders</h4>
-															<span>
-																{isEtradeBrokerage(account)
-																	? ordersLoadingByAccount[account.id]
-																		? 'Checking E*TRADE…'
-																		: ordersByAccount[account.id]?.availability === 'available'
-																			? `${ordersByAccount[account.id].orders.length} open`
-																			: 'E*TRADE setup needed'
-																	: 'Not available'}
-															</span>
+															<strong>{formatMoney(account.currentBalanceCents)}</strong>
 														</div>
-														{#if !isEtradeBrokerage(account)}
-															<p>
-																Plaid does not provide open-order data. Check your brokerage before
-																placing or changing a trade.
-															</p>
-														{:else if ordersLoadingByAccount[account.id]}
-															<p aria-busy="true">Loading open orders from E*TRADE…</p>
-														{:else if ordersErrorByAccount[account.id]}
-															<p>
-																E*TRADE orders are temporarily unavailable. Verify them at the
-																brokerage before trading.
-															</p>
-														{:else if ordersByAccount[account.id]?.availability === 'available'}
-															{#if ordersByAccount[account.id].orders.length > 0}
-																<ul class="open-order-list">
-																	{#each ordersByAccount[account.id].orders as order (order.id)}
-																		<li>
-																			<span class="open-order-security">
-																				<strong>{order.symbol}</strong>
-																				<small>{order.description ?? titleCase(order.status)}</small
-																				>
-																			</span>
-																			<span class="open-order-action">
-																				<strong>{orderActionLabel(order)}</strong>
-																				<small>{orderDetailLabel(order)}</small>
-																			</span>
-																			<strong class="open-order-price"
-																				>{orderPriceLabel(order)}</strong
-																			>
-																		</li>
-																	{/each}
-																</ul>
-															{:else}
-																<p>No open orders were reported by E*TRADE.</p>
+														<dl class="finance-details">
+															<div>
+																<dt>Account type</dt>
+																<dd>{typeLabel(account.accountType)}</dd>
+															</div>
+															<div>
+																<dt>Ownership</dt>
+																<dd>
+																	{account.ownerType === 'business' ? 'Business' : 'Personal'}
+																</dd>
+															</div>
+															<div>
+																<dt>Opened</dt>
+																<dd>{formatDate(account.openedDate)}</dd>
+															</div>
+															<div>
+																<dt>Data source</dt>
+																<dd>
+																	{account.source === 'connected'
+																		? formatSyncTime(account.lastSyncedAt)
+																		: 'Manual entry'}
+																</dd>
+															</div>
+															{#if account.accountType === 'brokerage'}
+																<div>
+																	<dt>Investment return</dt>
+																	<dd
+																		class:gain={investmentReturn(account) !== null &&
+																			(investmentReturn(account) ?? 0) >= 0}
+																	>
+																		{investmentReturnLabel(account)}
+																	</dd>
+																</div>
 															{/if}
-														{:else}
-															<p>
-																{ordersByAccount[account.id]?.availability === 'account_not_found'
-																	? 'ChipDue could not match this account to E*TRADE. Make sure its last four characters are current.'
-																	: 'Connect E*TRADE for today to load open orders.'}
-																<a class="open-orders-link" href={resolve('/etrade')}>
-																	{ordersByAccount[account.id]?.availability === 'not_configured'
-																		? 'Connect E*TRADE'
-																		: ordersByAccount[account.id]?.availability ===
-																			  'authorization_required'
-																			? 'Reconnect E*TRADE'
-																			: 'Review E*TRADE setup'}
-																</a>
-															</p>
+														</dl>
+														{#if account.accountType === 'brokerage'}
+															<BalanceHistoryChart
+																accountId={account.id}
+																accountName={account.nickname}
+																currency={account.currency}
+																points={account.balanceHistory}
+																netContributionsCents={account.netContributionsCents}
+															/>
+															{#if account.source === 'connected'}
+																<div class="history-estimate-action">
+																	<div>
+																		<strong>Estimated portfolio history</strong>
+																		<span
+																			>Uses {isEtradeBrokerage(account)
+																				? 'E*TRADE'
+																				: financialProviderName(account.connectionProvider)} activity
+																			and daily market closes; it is not broker-reported performance.</span
+																		>
+																		{#if historyEstimateErrorByAccount[account.id]}
+																			<small class="error"
+																				>{historyEstimateErrorByAccount[account.id]}</small
+																			>
+																		{:else if historyEstimateNoteByAccount[account.id]}
+																			<small>{historyEstimateNoteByAccount[account.id]}</small>
+																		{/if}
+																	</div>
+																	{#if !account.transactionHistoryEnabled && !isEtradeBrokerage(account)}
+																		<span class="disabled-label">Sync activity first</span>
+																	{:else if !isEtradeBrokerage(account) || ordersByAccount[account.id]?.availability === 'available'}
+																		<button
+																			type="button"
+																			disabled={historyEstimateLoadingByAccount[account.id]}
+																			onclick={() => buildEstimatedHistory(account)}
+																		>
+																			{historyEstimateLoadingByAccount[account.id]
+																				? 'Building…'
+																				: account.balanceHistory.some(
+																							(point) => point.source === 'estimated'
+																					  )
+																					? 'Refresh estimate'
+																					: 'Build 2-year estimate'}
+																		</button>
+																	{:else}
+																		<a href={resolve('/etrade')}>Connect E*TRADE</a>
+																	{/if}
+																</div>
+															{/if}
 														{/if}
-													</section>
-												{/if}
-											{/if}
-											<footer>
-												<span
-													>{account.hidden
-														? 'Excluded from totals'
-														: account.source === 'connected'
-															? 'Automatic balance'
-															: 'Manual balance'}</span
-												>
-												<div>
-													<button type="button" onclick={() => openEdit(account)}>
-														{account.source === 'connected' ? 'Details' : 'Edit'}
-													</button>
-													<button
-														type="button"
-														disabled={visibilityId === account.id}
-														onclick={() => setAccountHidden(account, !account.hidden)}
-													>
-														{visibilityId === account.id
-															? 'Saving…'
-															: account.hidden
-																? 'Show'
-																: 'Hide'}
-													</button>
-													{#if account.source === 'manual'}
-														<button
-															class="delete"
-															type="button"
-															onclick={() => deleteAccount(account)}
-														>
-															{deletingId === account.id ? 'Deleting…' : 'Delete'}
-														</button>
-													{/if}
-												</div>
-											</footer>
-										</article>
-									{/each}
-								</div>
+														{#if bonusOffers.length > 0}
+															<section
+																class="bonus-offer-callout"
+																aria-label="Verified bonus offers"
+															>
+																<div>
+																	<span>Verified bonus catalog</span>
+																	<strong>
+																		{bonusOffers.length} matching {bonusOffers.length === 1
+																			? 'offer'
+																			: 'offers'}
+																	</strong>
+																</div>
+																<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- bonusSetupHref resolves the route before appending its query. -->
+																<a href={bonusSetupHref(account)}>Choose your offer</a>
+															</section>
+														{/if}
+														{#if account.accountType === 'brokerage' && account.source === 'connected'}
+															<section
+																class="holding-list"
+																aria-label={`${account.nickname} holdings`}
+															>
+																<div class="holding-list-heading">
+																	<h4>Holdings</h4>
+																	<span>
+																		{account.holdings.length
+																			? `${account.holdings.length} ${account.holdings.length === 1 ? 'position' : 'positions'}`
+																			: 'No positions reported'}
+																	</span>
+																</div>
+																{#if account.holdings.length > 0}
+																	<div
+																		class="holding-table"
+																		role="table"
+																		aria-label="Holdings and current prices"
+																	>
+																		<div class="holding-row heading" role="row">
+																			<span role="columnheader">Holding</span>
+																			<span role="columnheader">Units</span>
+																			<span role="columnheader">Current price</span>
+																			<span role="columnheader">Value</span>
+																		</div>
+																		{#each account.holdings as holding, index (index)}
+																			<div class="holding-row" role="row">
+																				<span class="holding-name" role="cell">
+																					<strong
+																						>{isCashSweepHolding(holding)
+																							? `Cash${holding.tickerSymbol ? ` (${holding.tickerSymbol})` : ''}`
+																							: (holding.tickerSymbol ?? holding.name)}</strong
+																					>
+																					<small>
+																						{isCashSweepHolding(holding)
+																							? 'Uninvested cash held at Chase'
+																							: holding.tickerSymbol
+																								? holding.name
+																								: (holding.securityType ?? 'Security')}
+																					</small>
+																				</span>
+																				<span role="cell" data-label="Units">
+																					{isCashSweepHolding(holding)
+																						? '—'
+																						: formatQuantity(holding.quantity)}
+																				</span>
+																				<span
+																					class="holding-price"
+																					role="cell"
+																					data-label="Current price"
+																				>
+																					<strong
+																						>{isCashSweepHolding(holding)
+																							? 'Fixed at $1.00'
+																							: formatPrice(holding)}</strong
+																					>
+																					{#if holding.priceAsOf}<small
+																							>as of {formatDate(holding.priceAsOf)}</small
+																						>{/if}
+																				</span>
+																				<span role="cell" data-label="Value"
+																					>{formatHoldingValue(holding)}</span
+																				>
+																			</div>
+																		{/each}
+																	</div>
+																{:else}
+																	<p class="holding-empty">
+																		No holdings are available from the provider yet. Sync again
+																		after investment data is ready.
+																	</p>
+																{/if}
+															</section>
+														{/if}
+														{#if account.source === 'connected'}
+															<section
+																class="account-activity"
+																aria-label={`${account.accountType === 'brokerage' ? 'Investment' : 'Recent'} activity for ${account.nickname}`}
+															>
+																<div class="account-detail-heading">
+																	<h4>
+																		{account.accountType === 'brokerage'
+																			? 'Investment activity'
+																			: 'Recent activity'}
+																	</h4>
+																	{#if activityByAccount[account.id]?.transactions.length}
+																		<span>
+																			{activityByAccount[account.id].transactions
+																				.length}{activityByAccount[account.id].transactions
+																				.length === RECENT_ACTIVITY_LIMIT
+																				? '+'
+																				: ''}
+																			loaded
+																		</span>
+																	{/if}
+																</div>
+																{#if !account.transactionHistoryEnabled}
+																	<p class="account-activity-message">
+																		Sync accounts to load activity from {financialProviderName(
+																			account.connectionProvider
+																		)}.
+																	</p>
+																{:else if activityLoadingByAccount[account.id]}
+																	<p class="account-activity-message" aria-busy="true">
+																		Loading activity…
+																	</p>
+																{:else if activityErrorByAccount[account.id]}
+																	<p class="account-activity-message">
+																		Activity is unavailable right now.
+																	</p>
+																{:else if activityByAccount[account.id]?.transactions.length}
+																	{#if hasCashSweepActivity(account.id)}
+																		<p class="cash-sweep-explainer">
+																			QACDS is Chase’s name for uninvested cash. “Cash used” means
+																			Chase took cash from QACDS to pay for a purchase or
+																			withdrawal. It is not a stock sale or investment gain.
+																		</p>
+																	{/if}
+																	<ul class="account-activity-list">
+																		{#each visibleAccountTransactions(account.id) as transaction (transaction.id)}
+																			<li>
+																				<div class="account-activity-date">
+																					<strong>{formatShortDate(transaction.date)}</strong>
+																					<span>{transaction.pending ? 'Pending' : 'Posted'}</span>
+																				</div>
+																				<div class="account-activity-description">
+																					<strong>{activityTitle(transaction)}</strong>
+																					<span>{activityDetail(transaction)}</span>
+																				</div>
+																				<strong
+																					class:credit={transaction.amountCents < 0 &&
+																						!isCashSweepTransaction(transaction)}
+																					class="account-activity-amount"
+																				>
+																					{formatAccountTransactionAmount(transaction)}
+																				</strong>
+																			</li>
+																		{/each}
+																	</ul>
+																	{#if activityByAccount[account.id].transactions.length > COLLAPSED_ACTIVITY_COUNT}
+																		<button
+																			class="account-activity-toggle"
+																			type="button"
+																			onclick={() => toggleAccountActivity(account.id)}
+																		>
+																			{expandedActivityAccountIds.includes(account.id)
+																				? 'Show less'
+																				: `Show all ${activityByAccount[account.id].transactions.length}`}
+																		</button>
+																	{/if}
+																{:else}
+																	<p class="account-activity-message">
+																		{activityByAccount[account.id]?.status === 'preparing'
+																			? 'The provider is still preparing older activity.'
+																			: `No ${account.accountType === 'brokerage' ? 'investment activity' : 'transactions'} returned by ${financialProviderName(account.connectionProvider)}.`}
+																	</p>
+																{/if}
+															</section>
+															{#if account.accountType === 'brokerage'}
+																<section
+																	class="open-orders"
+																	aria-label={`Open orders for ${account.nickname}`}
+																>
+																	<div class="account-detail-heading">
+																		<h4>Open orders</h4>
+																		<span>
+																			{isEtradeBrokerage(account)
+																				? ordersLoadingByAccount[account.id]
+																					? 'Checking E*TRADE…'
+																					: ordersByAccount[account.id]?.availability ===
+																						  'available'
+																						? `${ordersByAccount[account.id].orders.length} open`
+																						: 'E*TRADE setup needed'
+																				: 'Not available'}
+																		</span>
+																	</div>
+																	{#if !isEtradeBrokerage(account)}
+																		<p>
+																			Plaid does not provide open-order data. Check your brokerage
+																			before placing or changing a trade.
+																		</p>
+																	{:else if ordersLoadingByAccount[account.id]}
+																		<p aria-busy="true">Loading open orders from E*TRADE…</p>
+																	{:else if ordersErrorByAccount[account.id]}
+																		<p>
+																			E*TRADE orders are temporarily unavailable. Verify them at the
+																			brokerage before trading.
+																		</p>
+																	{:else if ordersByAccount[account.id]?.availability === 'available'}
+																		{#if ordersByAccount[account.id].orders.length > 0}
+																			<ul class="open-order-list">
+																				{#each ordersByAccount[account.id].orders as order (order.id)}
+																					<li>
+																						<span class="open-order-security">
+																							<strong>{order.symbol}</strong>
+																							<small
+																								>{order.description ??
+																									titleCase(order.status)}</small
+																							>
+																						</span>
+																						<span class="open-order-action">
+																							<strong>{orderActionLabel(order)}</strong>
+																							<small>{orderDetailLabel(order)}</small>
+																						</span>
+																						<strong class="open-order-price"
+																							>{orderPriceLabel(order)}</strong
+																						>
+																					</li>
+																				{/each}
+																			</ul>
+																		{:else}
+																			<p>No open orders were reported by E*TRADE.</p>
+																		{/if}
+																	{:else}
+																		<p>
+																			{ordersByAccount[account.id]?.availability ===
+																			'account_not_found'
+																				? 'ChipDue could not match this account to E*TRADE. Make sure its last four characters are current.'
+																				: 'Connect E*TRADE for today to load open orders.'}
+																			<a class="open-orders-link" href={resolve('/etrade')}>
+																				{ordersByAccount[account.id]?.availability ===
+																				'not_configured'
+																					? 'Connect E*TRADE'
+																					: ordersByAccount[account.id]?.availability ===
+																						  'authorization_required'
+																						? 'Reconnect E*TRADE'
+																						: 'Review E*TRADE setup'}
+																			</a>
+																		</p>
+																	{/if}
+																</section>
+															{/if}
+														{/if}
+														<footer>
+															<span
+																>{account.hidden
+																	? 'Excluded from totals'
+																	: account.source === 'connected'
+																		? 'Automatic balance'
+																		: 'Manual balance'}</span
+															>
+															<div>
+																<button type="button" onclick={() => openEdit(account)}>
+																	{account.source === 'connected' ? 'Details' : 'Edit'}
+																</button>
+																<button
+																	type="button"
+																	disabled={visibilityId === account.id}
+																	onclick={() => setAccountHidden(account, !account.hidden)}
+																>
+																	{visibilityId === account.id
+																		? 'Saving…'
+																		: account.hidden
+																			? 'Show'
+																			: 'Hide'}
+																</button>
+																{#if account.source === 'manual'}
+																	<button
+																		class="delete"
+																		type="button"
+																		onclick={() => deleteAccount(account)}
+																	>
+																		{deletingId === account.id ? 'Deleting…' : 'Delete'}
+																	</button>
+																{/if}
+															</div>
+														</footer>
+													</article>
+												{/each}
+											</div>
+										</section>
+									{/if}
+								{/each}
 							</section>
 						{/if}
 					{/each}
@@ -1607,6 +1661,46 @@
 		margin: 0.28rem 0 0;
 		color: var(--faint);
 		font-size: 0.64rem;
+	}
+
+	.account-ownership-group + .account-ownership-group {
+		margin-top: 1.5rem;
+	}
+
+	.account-ownership-heading {
+		display: flex;
+		gap: 0.75rem;
+		align-items: center;
+		justify-content: space-between;
+		margin-bottom: 0.65rem;
+		padding: 0.5rem 0.65rem;
+		border-left: 3px solid var(--accent);
+		border-radius: 6px;
+		background: var(--accent-soft);
+	}
+
+	.account-ownership-heading.business {
+		border-left-color: var(--amber);
+		background: var(--amber-soft);
+	}
+
+	.account-ownership-heading h4 {
+		margin: 0;
+		color: var(--accent-dark);
+		font-size: 0.7rem;
+		font-weight: 800;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+	}
+
+	.account-ownership-heading.business h4 {
+		color: var(--amber);
+	}
+
+	.account-ownership-heading span {
+		color: var(--muted);
+		font-size: 0.62rem;
+		font-weight: 700;
 	}
 
 	.finance-card h4 {

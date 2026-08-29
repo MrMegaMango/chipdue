@@ -55,6 +55,16 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain('{#each accountGroups as accountGroup');
 	});
 
+	it('separates business and personal accounts within each account group', () => {
+		expect(accountsSource).toContain(
+			'{#each splitAccountsByOwner(accountGroup.accounts) as ownershipGroup'
+		);
+		expect(accountsSource).toContain("title: 'Business'");
+		expect(accountsSource).toContain("account.ownerType === 'business'");
+		expect(accountsSource).toContain("title: 'Personal'");
+		expect(accountsSource).toContain("account.ownerType === 'personal'");
+	});
+
 	it('shows provider activity and explains the open-order limitation', () => {
 		expect(accountsSource).toContain("'Recent activity'");
 		expect(accountsSource).toContain("'Investment activity'");
