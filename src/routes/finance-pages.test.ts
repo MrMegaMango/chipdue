@@ -116,4 +116,12 @@ describe('financial workspace navigation', () => {
 			expect(source).not.toContain('indexedDB');
 		}
 	});
+
+	it('lets installation Plaid accounts switch future connections to a personal team', () => {
+		expect(dashboardSource).toContain('{:else if plaid.configured}');
+		expect(dashboardSource).toContain('Installation Plaid account is connected');
+		expect(dashboardSource).toContain(
+			'Switch future institutions to your personal Plaid team without disrupting existing connections.'
+		);
+	});
 });

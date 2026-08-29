@@ -3241,12 +3241,20 @@
 									You remain responsible for your Plaid account and its terms.
 								</small>
 							</section>
-						{:else if plaid.source === 'personal'}
+						{:else if plaid.configured}
 							<div class="plaid-personal-ready">
 								<span aria-hidden="true">✓</span>
 								<div>
-									<strong>Your Plaid developer account is connected</strong>
-									<small>Production credentials are encrypted for this ChipDue account only.</small>
+									<strong>
+										{plaid.source === 'personal'
+											? 'Your Plaid developer account is connected'
+											: 'Installation Plaid account is connected'}
+									</strong>
+									<small>
+										{plaid.source === 'personal'
+											? 'Production credentials are encrypted for this ChipDue account only.'
+											: 'Switch future institutions to your personal Plaid team without disrupting existing connections.'}
+									</small>
 								</div>
 								<button
 									class="button button-secondary plaid-replace-button"
