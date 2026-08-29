@@ -68,14 +68,19 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain('{#each accountGroups as accountGroup');
 	});
 
-	it('separates business and personal accounts within each account group', () => {
+	it('separates cash accounts by owner without splitting brokerage accounts', () => {
 		expect(accountsSource).toContain(
-			'{#each splitAccountsByOwner(accountGroup.accounts) as ownershipGroup'
+			'splitAccountsByOwner(accountGroup.accounts, accountGroup.separateByOwner)'
 		);
+		expect(accountsSource).toContain('separateByOwner: true');
+		expect(accountsSource).toContain('separateByOwner: false');
+		expect(accountsSource).toContain("return [{ id: 'all', title: null");
 		expect(accountsSource).toContain("title: 'Business'");
 		expect(accountsSource).toContain("account.ownerType === 'business'");
 		expect(accountsSource).toContain("title: 'Personal'");
 		expect(accountsSource).toContain("account.ownerType === 'personal'");
+		expect(accountsSource).toContain("{#if account.accountType !== 'brokerage'}");
+		expect(accountsSource).toContain("{#if form.accountType !== 'brokerage'}");
 	});
 
 	it('orders account cards by value within each ownership group', () => {

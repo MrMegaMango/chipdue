@@ -47,8 +47,8 @@
 		notes: string;
 	};
 	type AccountOwnershipGroup = {
-		id: FinancialAccountOwner;
-		title: string;
+		id: FinancialAccountOwner | 'all';
+		title: string | null;
 		accounts: FinancialAccount[];
 	};
 
@@ -116,12 +116,14 @@
 			id: 'cash',
 			title: 'Cash accounts',
 			description: 'Checking, savings, and cash management.',
+			separateByOwner: true,
 			accounts: visibleAccounts.filter((account) => account.accountType !== 'brokerage')
 		},
 		{
 			id: 'brokerage',
 			title: 'Brokerage accounts',
 			description: 'Investments, positions, and performance.',
+			separateByOwner: false,
 			accounts: visibleAccounts.filter((account) => account.accountType === 'brokerage')
 		},
 		...(showHidden
@@ -130,6 +132,7 @@
 						id: 'hidden',
 						title: 'Hidden accounts',
 						description: 'Excluded from your account map and summary totals.',
+						separateByOwner: true,
 						accounts: hiddenAccounts
 					}
 				]
@@ -188,7 +191,13 @@
 		};
 	}
 
-	function splitAccountsByOwner(groupAccounts: FinancialAccount[]): AccountOwnershipGroup[] {
+	function splitAccountsByOwner(
+		groupAccounts: FinancialAccount[],
+		separateByOwner: boolean
+	): AccountOwnershipGroup[] {
+		if (!separateByOwner) {
+			return [{ id: 'all', title: null, accounts: sortAccountsByValue(groupAccounts) }];
+		}
 		return [
 			{
 				id: 'business',
@@ -1068,24 +1077,29 @@
 									<h3 id={`${accountGroup.id}-account-list-title`}>{accountGroup.title}</h3>
 									<p>{accountGroup.description}</p>
 								</div>
-								{#each splitAccountsByOwner(accountGroup.accounts) as ownershipGroup (ownershipGroup.id)}
+								{#each splitAccountsByOwner(accountGroup.accounts, accountGroup.separateByOwner) as ownershipGroup (ownershipGroup.id)}
 									{#if ownershipGroup.accounts.length > 0}
-										<section
+										<div
 											class="account-ownership-group"
-											aria-labelledby={`${accountGroup.id}-${ownershipGroup.id}-account-list-title`}
+											role={ownershipGroup.title ? 'region' : undefined}
+											aria-labelledby={ownershipGroup.title
+												? `${accountGroup.id}-${ownershipGroup.id}-account-list-title`
+												: undefined}
 										>
-											<div
-												class:business={ownershipGroup.id === 'business'}
-												class="account-ownership-heading"
-											>
-												<h4 id={`${accountGroup.id}-${ownershipGroup.id}-account-list-title`}>
-													{ownershipGroup.title}
-												</h4>
-												<span
-													>{ownershipGroup.accounts.length}
-													{ownershipGroup.accounts.length === 1 ? 'account' : 'accounts'}</span
+											{#if ownershipGroup.title}
+												<div
+													class:business={ownershipGroup.id === 'business'}
+													class="account-ownership-heading"
 												>
-											</div>
+													<h4 id={`${accountGroup.id}-${ownershipGroup.id}-account-list-title`}>
+														{ownershipGroup.title}
+													</h4>
+													<span
+														>{ownershipGroup.accounts.length}
+														{ownershipGroup.accounts.length === 1 ? 'account' : 'accounts'}</span
+													>
+												</div>
+											{/if}
 											<div class="finance-grid">
 												{#each ownershipGroup.accounts as account (account.id)}
 													{@const bonusOffers = availableBonusOffers(account)}
@@ -1158,12 +1172,14 @@
 																	<dd>{formatApy(account.apyBasisPoints)}</dd>
 																</div>
 															{/if}
-															<div>
-																<dt>Ownership</dt>
-																<dd>
-																	{account.ownerType === 'business' ? 'Business' : 'Personal'}
-																</dd>
-															</div>
+															{#if account.accountType !== 'brokerage'}
+																<div>
+																	<dt>Ownership</dt>
+																	<dd>
+																		{account.ownerType === 'business' ? 'Business' : 'Personal'}
+																	</dd>
+																</div>
+															{/if}
 															<div>
 																<dt>Opened</dt>
 																<dd>{formatDate(account.openedDate)}</dd>
@@ -1527,7 +1543,7 @@
 													</article>
 												{/each}
 											</div>
-										</section>
+										</div>
 									{/if}
 								{/each}
 							</section>
@@ -1595,13 +1611,15 @@
 							<option value="other">Other</option>
 						</select>
 					</div>
-					<div class="finance-field">
-						<label for="account-owner">Ownership</label>
-						<select id="account-owner" bind:value={form.ownerType}>
-							<option value="personal">Personal</option>
-							<option value="business">Business</option>
-						</select>
-					</div>
+					{#if form.accountType !== 'brokerage'}
+						<div class="finance-field">
+							<label for="account-owner">Ownership</label>
+							<select id="account-owner" bind:value={form.ownerType}>
+								<option value="personal">Personal</option>
+								<option value="business">Business</option>
+							</select>
+						</div>
+					{/if}
 					<div class="finance-field">
 						<label for="account-balance">Current balance</label>
 						<input
