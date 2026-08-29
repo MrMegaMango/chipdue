@@ -94,6 +94,7 @@ import {
 	createPlaidTransactionsUpdateToken,
 	createPlaidUpdateToken,
 	exchangePlaidPublicToken,
+	plaidConfigurationStatus,
 	resetPlaidClientForTests,
 	syncPlaidItem
 } from './plaid';
@@ -265,7 +266,9 @@ describe.sequential('Plaid transaction history', () => {
 		expect(status).toEqual({
 			configured: true,
 			source: 'personal',
-			environment: 'production'
+			environment: 'production',
+			alternatingTeams: false,
+			nextConnectionTeam: 'current'
 		});
 		const durableMetadata = JSON.stringify(getDatabase().prepare('SELECT * FROM metadata').all());
 		expect(durableMetadata).not.toContain('personal-client-id');
@@ -304,6 +307,85 @@ describe.sequential('Plaid transaction history', () => {
 		const durableMetadata = JSON.stringify(getDatabase().prepare('SELECT * FROM metadata').all());
 		expect(durableMetadata).not.toContain('original-production-secret');
 		expect(durableMetadata).not.toContain('next-production-secret');
+	});
+
+	it('alternates successful new connections between the new and original Plaid teams', async () => {
+		plaidMocks.institutionsGet.mockResolvedValue({ data: { institutions: [] } });
+		plaidMocks.linkTokenCreate.mockResolvedValue({
+			data: { link_token: 'test-link-value', expiration: '2026-08-28T00:00:00.000Z' }
+		});
+		plaidMocks.itemPublicTokenExchange.mockResolvedValueOnce({
+			data: { item_id: 'provider-item-original-team', access_token: 'original-access-token' }
+		});
+
+		await configurePersonalPlaid('original-client-id', 'original-production-secret');
+		await exchangePlaidPublicToken('original-public-token', 'Original Bank');
+		await configurePersonalPlaid('new-client-id', 'new-production-secret');
+
+		expect(await plaidConfigurationStatus()).toEqual(
+			expect.objectContaining({ alternatingTeams: true, nextConnectionTeam: 'current' })
+		);
+		plaidMocks.clientCalls.length = 0;
+		await createPlaidLinkToken();
+
+		plaidMocks.itemPublicTokenExchange.mockResolvedValueOnce({
+			data: { item_id: 'provider-item-new-team', access_token: 'new-access-token' }
+		});
+		const newTeamConnection = await exchangePlaidPublicToken('new-public-token', 'New Team Bank');
+		expect(await plaidConfigurationStatus()).toEqual(
+			expect.objectContaining({ alternatingTeams: true, nextConnectionTeam: 'original' })
+		);
+
+		await createPlaidLinkToken();
+		plaidMocks.itemPublicTokenExchange.mockResolvedValueOnce({
+			data: { item_id: 'provider-item-old-team-again', access_token: 'old-team-access-token' }
+		});
+		const oldTeamConnection = await exchangePlaidPublicToken(
+			'old-team-public-token',
+			'Old Team Bank'
+		);
+		expect(await plaidConfigurationStatus()).toEqual(
+			expect.objectContaining({ alternatingTeams: true, nextConnectionTeam: 'current' })
+		);
+
+		expect(plaidMocks.clientCalls).toEqual([
+			{
+				method: 'linkTokenCreate',
+				clientId: 'new-client-id',
+				secret: 'new-production-secret'
+			},
+			{
+				method: 'itemPublicTokenExchange',
+				clientId: 'new-client-id',
+				secret: 'new-production-secret'
+			},
+			{
+				method: 'linkTokenCreate',
+				clientId: 'original-client-id',
+				secret: 'original-production-secret'
+			},
+			{
+				method: 'itemPublicTokenExchange',
+				clientId: 'original-client-id',
+				secret: 'original-production-secret'
+			}
+		]);
+
+		plaidMocks.clientCalls.length = 0;
+		await createPlaidUpdateToken(newTeamConnection.connection.id);
+		await createPlaidUpdateToken(oldTeamConnection.connection.id);
+		expect(plaidMocks.clientCalls).toEqual([
+			{
+				method: 'linkTokenCreate',
+				clientId: 'new-client-id',
+				secret: 'new-production-secret'
+			},
+			{
+				method: 'linkTokenCreate',
+				clientId: 'original-client-id',
+				secret: 'original-production-secret'
+			}
+		]);
 	});
 
 	it('pins pre-upgrade Items to the original Plaid team before switching', async () => {

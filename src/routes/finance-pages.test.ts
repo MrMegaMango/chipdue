@@ -137,4 +137,10 @@ describe('financial workspace navigation', () => {
 			'Switch future institutions to your personal Plaid team without disrupting existing connections.'
 		);
 	});
+
+	it('shows which Plaid team will receive the next alternating connection', () => {
+		expect(dashboardSource).toContain('Alternating Plaid Teams');
+		expect(dashboardSource).toContain("? 'original Team'");
+		expect(dashboardSource).toContain(": 'new personal Team'");
+	});
 });

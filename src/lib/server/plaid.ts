@@ -32,6 +32,8 @@ import {
 	type ConnectedFinancialAccountSnapshot
 } from './financial-records';
 import {
+	advancePlaidLinkAlternation,
+	getPlaidLinkRouting,
 	getPrivatePlaidItem,
 	listPlaidConnectionTenants,
 	listPlaidConnections,
@@ -40,6 +42,7 @@ import {
 	preparePlaidItemsForConfigurationChange,
 	publicPlaidConnection,
 	removeLocalPlaidItem,
+	resetPlaidLinkAlternation,
 	savePlaidItem
 } from './plaid-store';
 import {
@@ -66,12 +69,17 @@ export async function plaidConfigurationStatus(): Promise<{
 	configured: boolean;
 	source: 'personal' | 'installation' | null;
 	environment: 'sandbox' | 'production' | null;
+	alternatingTeams: boolean;
+	nextConnectionTeam: 'current' | 'original' | null;
 }> {
 	const config = await getPlaidConfiguration();
+	const routing = config ? await getPlaidLinkRouting(config) : null;
 	return {
 		configured: config !== null,
 		source: config?.source ?? null,
-		environment: config?.environment ?? null
+		environment: config?.environment ?? null,
+		alternatingTeams: routing?.alternating ?? false,
+		nextConnectionTeam: routing?.nextTeam ?? null
 	};
 }
 
@@ -93,10 +101,6 @@ function clientForConfiguration(config: PlaidClientConfiguration): PlaidApi {
 	const client = new PlaidApi(configuration);
 	cachedClient = { signature, client };
 	return client;
-}
-
-async function getPlaidClient(): Promise<PlaidApi> {
-	return clientForConfiguration(await requirePlaidConfiguration());
 }
 
 async function getPlaidClientForItem(
@@ -151,8 +155,13 @@ async function baseLinkTokenRequest(): Promise<Omit<LinkTokenCreateRequest, 'pro
 	};
 }
 
-export async function createPlaidLinkToken(): Promise<{ linkToken: string; expiration: string }> {
-	const client = await getPlaidClient();
+export async function createPlaidLinkToken(): Promise<{
+	linkToken: string;
+	expiration: string;
+	team: 'current' | 'original';
+}> {
+	const routing = await getPlaidLinkRouting(await requirePlaidConfiguration());
+	const client = clientForConfiguration(routing.configuration);
 	const request = {
 		...(await baseLinkTokenRequest()),
 		products: [Products.Transactions],
@@ -163,7 +172,11 @@ export async function createPlaidLinkToken(): Promise<{ linkToken: string; expir
 			...request,
 			additional_consented_products: [Products.Liabilities, Products.Investments]
 		});
-		return { linkToken: response.data.link_token, expiration: response.data.expiration };
+		return {
+			linkToken: response.data.link_token,
+			expiration: response.data.expiration,
+			team: routing.nextTeam
+		};
 	} catch (error) {
 		if (error instanceof AppError) throw error;
 		if (!optionalLinkProductUnavailable(error)) throw await sanitizedPlaidError(error);
@@ -174,7 +187,11 @@ export async function createPlaidLinkToken(): Promise<{ linkToken: string; expir
 			...request,
 			additional_consented_products: [Products.Liabilities]
 		});
-		return { linkToken: response.data.link_token, expiration: response.data.expiration };
+		return {
+			linkToken: response.data.link_token,
+			expiration: response.data.expiration,
+			team: routing.nextTeam
+		};
 	} catch (error) {
 		if (error instanceof AppError) throw error;
 		if (!optionalLinkProductUnavailable(error)) throw await sanitizedPlaidError(error);
@@ -182,7 +199,11 @@ export async function createPlaidLinkToken(): Promise<{ linkToken: string; expir
 
 	try {
 		const response = await client.linkTokenCreate(request);
-		return { linkToken: response.data.link_token, expiration: response.data.expiration };
+		return {
+			linkToken: response.data.link_token,
+			expiration: response.data.expiration,
+			team: routing.nextTeam
+		};
 	} catch (error) {
 		if (error instanceof AppError) throw error;
 		throw await sanitizedPlaidError(error);
@@ -256,7 +277,9 @@ export async function exchangePlaidPublicToken(
 	publicToken: string,
 	institutionName: string | null
 ): Promise<{ connection: FinancialConnection; synced: boolean }> {
-	const configuration = await requirePlaidConfiguration();
+	const current = await requirePlaidConfiguration();
+	const routing = await getPlaidLinkRouting(current);
+	const configuration = routing.configuration;
 	const client = clientForConfiguration(configuration);
 	let itemId: string;
 	let accessToken: string;
@@ -270,6 +293,7 @@ export async function exchangePlaidPublicToken(
 	}
 
 	const localItemId = await savePlaidItem(itemId, accessToken, institutionName, configuration);
+	await advancePlaidLinkAlternation(current, configuration);
 	return { connection: await publicPlaidConnection(localItemId), synced: false };
 }
 
@@ -909,6 +933,7 @@ export async function configurePersonalPlaid(
 		await preparePlaidItemsForConfigurationChange(current, candidate);
 	}
 	await savePersonalPlaidConfiguration(normalizedClientId, normalizedSecret);
+	await resetPlaidLinkAlternation();
 	cachedClient = undefined;
 	return plaidConfigurationStatus();
 }

@@ -37,6 +37,11 @@ interface StoredPlaidItemConfiguration {
 	environment: 'sandbox' | 'production';
 }
 
+interface StoredPlaidLinkAlternation {
+	version: 1;
+	nextClientId: string;
+}
+
 interface PublicPlaidItemRow extends Record<string, unknown> {
 	id: string;
 	item_ref: string;
@@ -58,6 +63,7 @@ export interface PrivatePlaidItem {
 }
 
 const ITEM_CONFIGURATION_KEY_PREFIX = 'plaid_item_config_v1:';
+const LINK_ALTERNATION_KEY_PREFIX = 'plaid_link_alternation_v1:';
 
 function itemConfigurationKey(tenantId: string, itemId: string): string {
 	return `${ITEM_CONFIGURATION_KEY_PREFIX}${tenantId}:${itemId}`;
@@ -65,6 +71,14 @@ function itemConfigurationKey(tenantId: string, itemId: string): string {
 
 function itemConfigurationContext(tenantId: string, itemId: string): string {
 	return `plaid-item-config:${tenantId}:${itemId}`;
+}
+
+function linkAlternationKey(tenantId: string): string {
+	return `${LINK_ALTERNATION_KEY_PREFIX}${tenantId}`;
+}
+
+function linkAlternationContext(tenantId: string): string {
+	return `plaid-link-alternation:${tenantId}`;
 }
 
 function validCredential(value: unknown): value is string {
@@ -161,6 +175,123 @@ async function listItemIdentityRows(): Promise<PlaidItemIdentityRow[]> {
 		: (getDatabase()
 				.prepare(`SELECT id, item_ref FROM plaid_items ORDER BY created_at`)
 				.all() as PlaidItemIdentityRow[]);
+}
+
+async function listItemConfigurations(): Promise<PlaidClientConfiguration[]> {
+	const tenantId = currentTenantId();
+	const rows = (await listItemIdentityRows()).filter((row) =>
+		plaidItemBelongsToCurrentTenant(row.item_ref)
+	);
+	const configurations = await Promise.all(
+		rows.map((row) => readItemConfiguration(row.id, tenantId))
+	);
+	const distinct = new Map<string, PlaidClientConfiguration>();
+	for (const configuration of configurations) {
+		if (configuration && !distinct.has(configuration.clientId)) {
+			distinct.set(configuration.clientId, configuration);
+		}
+	}
+	return [...distinct.values()];
+}
+
+async function readNextPlaidClientId(): Promise<string | null> {
+	const tenantId = currentTenantId();
+	const key = linkAlternationKey(tenantId);
+	const row =
+		getRuntimeMode() === 'cloud'
+			? (
+					await cloudQuery<{ value: string }>(
+						`SELECT value FROM public.carddue_metadata WHERE key = $1`,
+						[key]
+					)
+				)[0]
+			: (getDatabase().prepare(`SELECT value FROM metadata WHERE key = ?`).get(key) as
+					{ value: string } | undefined);
+	if (!row) return null;
+	const state = decryptJson<Partial<StoredPlaidLinkAlternation>>(
+		row.value,
+		linkAlternationContext(tenantId)
+	);
+	if (state?.version !== 1 || !validCredential(state.nextClientId)) {
+		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
+	}
+	return state.nextClientId;
+}
+
+async function saveNextPlaidClientId(clientId: string): Promise<void> {
+	const tenantId = currentTenantId();
+	const key = linkAlternationKey(tenantId);
+	const value = encryptJson(
+		{ version: 1, nextClientId: clientId },
+		linkAlternationContext(tenantId)
+	);
+	if (getRuntimeMode() === 'cloud') {
+		await cloudQuery(
+			`INSERT INTO public.carddue_metadata AS link_alternation (key, value)
+			 VALUES ($1, $2)
+			 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+			[key, value]
+		);
+		return;
+	}
+	getDatabase()
+		.prepare(
+			`INSERT INTO metadata (key, value) VALUES (?, ?)
+			 ON CONFLICT (key) DO UPDATE SET value = excluded.value`
+		)
+		.run(key, value);
+}
+
+export async function resetPlaidLinkAlternation(): Promise<void> {
+	const key = linkAlternationKey(currentTenantId());
+	if (getRuntimeMode() === 'cloud') {
+		await cloudQuery(`DELETE FROM public.carddue_metadata WHERE key = $1`, [key]);
+		return;
+	}
+	getDatabase().prepare(`DELETE FROM metadata WHERE key = ?`).run(key);
+}
+
+export type PlaidLinkTeam = 'current' | 'original';
+
+export interface PlaidLinkRouting {
+	configuration: PlaidClientConfiguration;
+	alternating: boolean;
+	nextTeam: PlaidLinkTeam;
+}
+
+export async function getPlaidLinkRouting(
+	current: PlaidClientConfiguration
+): Promise<PlaidLinkRouting> {
+	const original = (await listItemConfigurations()).find(
+		(configuration) => configuration.clientId !== current.clientId
+	);
+	if (!original) {
+		return { configuration: current, alternating: false, nextTeam: 'current' };
+	}
+
+	const nextClientId = await readNextPlaidClientId();
+	const useOriginal = nextClientId === original.clientId;
+	return {
+		configuration: useOriginal ? original : current,
+		alternating: true,
+		nextTeam: useOriginal ? 'original' : 'current'
+	};
+}
+
+export async function advancePlaidLinkAlternation(
+	current: PlaidClientConfiguration,
+	used: PlaidClientConfiguration
+): Promise<void> {
+	const original = (await listItemConfigurations()).find(
+		(configuration) => configuration.clientId !== current.clientId
+	);
+	if (!original) {
+		await resetPlaidLinkAlternation();
+		return;
+	}
+	await saveNextPlaidClientId(
+		used.clientId === current.clientId ? original.clientId : current.clientId
+	);
 }
 
 export async function preparePlaidItemsForConfigurationChange(

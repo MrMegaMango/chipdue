@@ -293,6 +293,8 @@
 		configured: boolean;
 		source: 'personal' | 'installation' | null;
 		environment: 'sandbox' | 'production' | null;
+		alternatingTeams: boolean;
+		nextConnectionTeam: 'current' | 'original' | null;
 		connectedItems: number;
 		lastSyncedAt: string | null;
 	};
@@ -310,6 +312,8 @@
 		configured: boolean;
 		source: 'personal' | 'installation' | null;
 		environment: 'sandbox' | 'production' | null;
+		alternatingTeams: boolean;
+		nextConnectionTeam: 'current' | 'original' | null;
 	};
 
 	type FinancialConnectionsResponse = {
@@ -373,6 +377,8 @@
 		configured: false,
 		source: null,
 		environment: null,
+		alternatingTeams: false,
+		nextConnectionTeam: null,
 		connectedItems: 0,
 		lastSyncedAt: null
 	};
@@ -1216,6 +1222,8 @@
 				configured: payload.configured,
 				source: payload.source,
 				environment: payload.environment,
+				alternatingTeams: payload.alternatingTeams,
+				nextConnectionTeam: payload.nextConnectionTeam,
 				connectedItems: financialConnections.length,
 				lastSyncedAt
 			};
@@ -1859,7 +1867,7 @@
 			if (isPrivateEpochCurrent(epoch)) {
 				showNotice(
 					plaid.connectedItems > 0
-						? 'Future Plaid connections will use the new developer account. Existing connections keep their original account.'
+						? 'Future Plaid connections will alternate between the new and original Teams. Existing connections keep their original account.'
 						: 'Your Plaid developer account is ready. You can connect an institution now.'
 				);
 			}
@@ -3168,7 +3176,7 @@
 								</div>
 								<p>
 									{plaid.configured
-										? 'Future institutions use the newly saved Plaid team. Existing institutions stay securely attached to the team that created them.'
+										? 'Future institutions alternate between the newly saved Plaid Team and the original Team. Existing institutions stay securely attached to the Team that created them.'
 										: 'Create a free personal Plaid team, enable its Trial plan, then add its Production credentials here. Its ten-Item trial allowance belongs only to you.'}
 								</p>
 								<a
@@ -3250,11 +3258,21 @@
 											? 'Your Plaid developer account is connected'
 											: 'Installation Plaid account is connected'}
 									</strong>
-									<small>
-										{plaid.source === 'personal'
-											? 'Production credentials are encrypted for this ChipDue account only.'
-											: 'Switch future institutions to your personal Plaid team without disrupting existing connections.'}
-									</small>
+									{#if plaid.alternatingTeams}
+										<small>
+											Alternating Plaid Teams · Next: {plaid.nextConnectionTeam === 'original'
+												? 'original Team'
+												: 'new personal Team'} · Then: {plaid.nextConnectionTeam === 'original'
+												? 'new personal Team'
+												: 'original Team'}
+										</small>
+									{:else}
+										<small>
+											{plaid.source === 'personal'
+												? 'Production credentials are encrypted for this ChipDue account only.'
+												: 'Switch future institutions to your personal Plaid team without disrupting existing connections.'}
+										</small>
+									{/if}
 								</div>
 								<button
 									class="button button-secondary plaid-replace-button"
