@@ -2013,11 +2013,7 @@
 	<main class="auth-shell auth-loading" aria-busy="true">
 		<div class="auth-brand" aria-label="ChipDue">
 			<span class="brand-mark" aria-hidden="true">
-				<svg viewBox="0 0 32 32">
-					<rect x="6" y="8" width="20" height="18" rx="4"></rect>
-					<path d="M6 13h20M11 5.5v5M21 5.5v5"></path>
-					<circle cx="21" cy="21" r="2.5"></circle>
-				</svg>
+				<img src={asset('/logo-mark.svg')} alt="" />
 			</span>
 			<span>ChipDue</span>
 		</div>
@@ -2029,11 +2025,7 @@
 		<section class="auth-card auth-error-card" aria-labelledby="session-error-title">
 			<div class="auth-brand">
 				<span class="brand-mark" aria-hidden="true">
-					<svg viewBox="0 0 32 32">
-						<rect x="6" y="8" width="20" height="18" rx="4"></rect>
-						<path d="M6 13h20M11 5.5v5M21 5.5v5"></path>
-						<circle cx="21" cy="21" r="2.5"></circle>
-					</svg>
+					<img src={asset('/logo-mark.svg')} alt="" />
 				</span>
 				<span>ChipDue</span>
 			</div>
@@ -2049,11 +2041,7 @@
 		<section class="auth-card" aria-labelledby="login-title">
 			<div class="auth-brand">
 				<span class="brand-mark" aria-hidden="true">
-					<svg viewBox="0 0 32 32">
-						<rect x="6" y="8" width="20" height="18" rx="4"></rect>
-						<path d="M6 13h20M11 5.5v5M21 5.5v5"></path>
-						<circle cx="21" cy="21" r="2.5"></circle>
-					</svg>
+					<img src={asset('/logo-mark.svg')} alt="" />
 				</span>
 				<span>ChipDue</span>
 			</div>
@@ -3938,32 +3926,16 @@
 	}
 
 	.brand-mark {
-		display: grid;
+		display: block;
 		width: 34px;
 		height: 34px;
-		place-items: center;
-		border-radius: 6px;
-		color: white;
-		background: var(--accent);
-		box-shadow: 3px 3px 0 rgba(39, 58, 165, 0.28);
+		filter: drop-shadow(3px 3px 0 rgba(39, 58, 165, 0.24));
 	}
 
-	.brand-mark svg {
-		width: 25px;
-		fill: white;
-		stroke: var(--accent);
-		stroke-width: 1.8;
-	}
-
-	.brand-mark svg path {
-		fill: none;
-		stroke: white;
-		stroke-linecap: round;
-	}
-
-	.brand-mark svg circle {
-		fill: #e5b855;
-		stroke: none;
+	.brand-mark img {
+		display: block;
+		width: 100%;
+		height: 100%;
 	}
 
 	.header-status {
