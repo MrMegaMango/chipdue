@@ -148,11 +148,11 @@
 				(account) =>
 					account.accountType === 'brokerage' &&
 					account.currentBalanceCents !== null &&
-					account.netContributionsCents !== null
+					effectiveNetContributions(account) !== null
 			)
 			.reduce(
 				(total, account) =>
-					total + (account.currentBalanceCents ?? 0) - (account.netContributionsCents ?? 0),
+					total + (account.currentBalanceCents ?? 0) - (effectiveNetContributions(account) ?? 0),
 				0
 			)
 	);
@@ -161,7 +161,7 @@
 			(account) =>
 				account.accountType === 'brokerage' &&
 				account.currentBalanceCents !== null &&
-				account.netContributionsCents !== null
+				effectiveNetContributions(account) !== null
 		).length
 	);
 
@@ -454,28 +454,42 @@
 		}[type];
 	}
 
+	function effectiveNetContributions(account: FinancialAccount): number | null {
+		if (account.netContributionsCents !== null) return account.netContributionsCents;
+		return (
+			account.balanceHistory
+				.slice()
+				.reverse()
+				.find((point) => point.netContributionsCents !== null)?.netContributionsCents ?? null
+		);
+	}
+
 	function investmentReturn(account: FinancialAccount): number | null {
+		const contributions = effectiveNetContributions(account);
 		if (
 			account.accountType !== 'brokerage' ||
 			account.currentBalanceCents === null ||
-			account.netContributionsCents === null
+			contributions === null
 		) {
 			return null;
 		}
-		return account.currentBalanceCents - account.netContributionsCents;
+		return account.currentBalanceCents - contributions;
 	}
 
 	function investmentReturnLabel(account: FinancialAccount): string {
 		const gain = investmentReturn(account);
-		if (
-			gain === null ||
-			account.netContributionsCents === null ||
-			account.netContributionsCents === 0
-		) {
-			return 'Add net contributions to separate deposits from returns';
+		const contributions = effectiveNetContributions(account);
+		if (gain === null || contributions === null) {
+			return account.source === 'connected'
+				? 'Sync activity to calculate contributions and return'
+				: 'Add net contributions to separate deposits from returns';
 		}
-		const percent = (gain / Math.abs(account.netContributionsCents)) * 100;
-		return `${gain >= 0 ? '+' : ''}${money.format(gain / 100)} · ${percent >= 0 ? '+' : ''}${percent.toFixed(1)}%`;
+		const periodLabel = account.netContributionsCents === null ? ' · since history began' : '';
+		if (contributions === 0) {
+			return `${gain >= 0 ? '+' : ''}${money.format(gain / 100)}${periodLabel}`;
+		}
+		const percent = (gain / Math.abs(contributions)) * 100;
+		return `${gain >= 0 ? '+' : ''}${money.format(gain / 100)} · ${percent >= 0 ? '+' : ''}${percent.toFixed(1)}%${periodLabel}`;
 	}
 
 	function availableBonusOffers(account: FinancialAccount) {
@@ -581,6 +595,14 @@
 				return;
 			}
 			await reloadAccounts();
+			if (
+				editingAccount?.source === 'connected' &&
+				editingAccount.accountType === 'brokerage' &&
+				editingAccount.netContributionsCents !== savedAccount.netContributionsCents
+			) {
+				const refreshedAccount = accounts.find((account) => account.id === savedAccount.id);
+				if (refreshedAccount) await buildEstimatedHistory(refreshedAccount, true);
+			}
 			showToast(editingId ? 'Account updated.' : 'Account added.');
 		} catch (error) {
 			formError = readableError(error, 'The account could not be saved.');
@@ -622,6 +644,14 @@
 		);
 	}
 
+	function needsEstimatedContributionHistory(account: FinancialAccount): boolean {
+		const estimatedPoints = account.balanceHistory.filter((point) => point.source === 'estimated');
+		return (
+			estimatedPoints.length === 0 ||
+			estimatedPoints.every((point) => point.netContributionsCents === null)
+		);
+	}
+
 	async function loadBrokerageOrders(loadedAccounts: FinancialAccount[]): Promise<void> {
 		const eligibleAccounts = loadedAccounts.filter(
 			(account) => account.source === 'connected' && isEtradeBrokerage(account)
@@ -638,10 +668,7 @@
 						resolve('/api/accounts/[id]/orders', { id: account.id })
 					);
 					ordersByAccount = { ...ordersByAccount, [account.id]: response };
-					if (
-						response.availability === 'available' &&
-						!account.balanceHistory.some((point) => point.source === 'estimated')
-					) {
+					if (response.availability === 'available' && needsEstimatedContributionHistory(account)) {
 						await buildEstimatedHistory(account, true);
 					}
 				} catch {
@@ -664,7 +691,7 @@
 				account.accountType === 'brokerage' &&
 				!isEtradeBrokerage(account) &&
 				account.transactionHistoryEnabled &&
-				(refreshExisting || !account.balanceHistory.some((point) => point.source === 'estimated'))
+				(refreshExisting || needsEstimatedContributionHistory(account))
 		);
 		await Promise.all(eligibleAccounts.map((account) => buildEstimatedHistory(account, true)));
 	}
@@ -700,7 +727,7 @@
 			}
 			if (!silent) {
 				showToast(
-					`Built ${response.estimatedPointCount} estimated daily portfolio values from ${providerName} activity.`
+					`Built ${response.estimatedPointCount} estimated daily portfolio values${response.account.netContributionsCents === null ? ' and calculated net contributions' : ''} from ${providerName} activity.`
 				);
 			}
 		} catch (error) {
@@ -1102,6 +1129,10 @@
 																				: financialProviderName(account.connectionProvider)} activity
 																			and daily market closes; it is not broker-reported performance.</span
 																		>
+																		<small>
+																			Net contributions are calculated automatically for the
+																			available history.
+																		</small>
 																		{#if historyEstimateErrorByAccount[account.id]}
 																			<small class="error"
 																				>{historyEstimateErrorByAccount[account.id]}</small
@@ -1507,7 +1538,11 @@
 					</div>
 					{#if form.accountType === 'brokerage'}
 						<div class="finance-field">
-							<label for="account-contributions">Net contributions</label>
+							<label for="account-contributions">
+								{dialogAccount?.source === 'connected'
+									? 'Lifetime net contributions (optional)'
+									: 'Net contributions'}
+							</label>
 							<input
 								id="account-contributions"
 								type="number"
@@ -1515,7 +1550,11 @@
 								bind:value={form.netContributions}
 								placeholder="0.00"
 							/>
-							<small>Money deposited minus money withdrawn. This is your invested principal.</small>
+							<small>
+								{dialogAccount?.source === 'connected'
+									? 'ChipDue calculates the displayed period automatically. Enter a lifetime total only to override it.'
+									: 'Money deposited minus money withdrawn. This is your invested principal.'}
+							</small>
 						</div>
 						<div class="finance-field">
 							<label for="account-cost-basis">

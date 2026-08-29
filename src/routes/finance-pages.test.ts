@@ -38,6 +38,19 @@ describe('financial workspace navigation', () => {
 		expect(balanceHistoryChartSource).toContain('Investment return');
 		expect(balanceHistoryChartSource).toContain('Estimated history');
 		expect(balanceHistoryChartSource).toContain('Observed snapshot');
+		expect(balanceHistoryChartSource).toContain('automaticContributions');
+		expect(balanceHistoryChartSource).toContain('first estimated value plus synced');
+	});
+
+	it('calculates connected brokerage contributions without requiring manual entry', () => {
+		expect(accountsSource).toContain('effectiveNetContributions(account)');
+		expect(accountsSource).toContain('needsEstimatedContributionHistory(account)');
+		expect(accountsSource).toContain('Net contributions are calculated automatically');
+		expect(accountsSource).toContain('Lifetime net contributions (optional)');
+		expect(accountsSource).toContain('Enter a lifetime total only to override it.');
+		expect(accountsSource).toContain(
+			'editingAccount.netContributionsCents !== savedAccount.netContributionsCents'
+		);
 	});
 
 	it('shows institution branding on account cards', () => {

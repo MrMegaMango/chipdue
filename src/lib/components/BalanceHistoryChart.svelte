@@ -59,6 +59,10 @@
 	const estimatedPointCount = $derived(
 		sortedPoints.filter((point) => point.source === 'estimated').length
 	);
+	const automaticContributions = $derived(
+		netContributionsCents === null &&
+			sortedPoints.some((point) => point.netContributionsCents !== null)
+	);
 	const observedPointCount = $derived(sortedPoints.length - estimatedPointCount);
 	const chart = $derived(chartFor(visiblePoints));
 	const latestPoint = $derived(visiblePoints.at(-1));
@@ -335,9 +339,10 @@
 					<span>Net contributions</span>
 					<strong>
 						{latestContributionsCents === null
-							? 'Not entered'
+							? 'Not available'
 							: formatMoney(latestContributionsCents)}
 					</strong>
+					{#if automaticContributions}<small>Calculated</small>{/if}
 				</div>
 				<div class:negative={investmentReturnCents !== null && investmentReturnCents < 0}>
 					<span>Investment return</span>
@@ -486,14 +491,19 @@
 				)}–{formatDate(visiblePoints.at(-1)!.recordedAt, true)}
 			{/if}
 		</p>
-		{#if latestContributionsCents !== null}
+		{#if automaticContributions}
+			<p class="return-explainer">
+				Net contributions are calculated from the portfolio's first estimated value plus synced
+				deposits, withdrawals, and transfers. Return is measured from that starting point.
+			</p>
+		{:else if latestContributionsCents !== null}
 			<p class="return-explainer">
 				Investment return is value minus net contributions. It includes market movement, dividends,
 				interest, and fees.
 			</p>
 		{:else}
 			<p class="return-explainer">
-				Add net contributions in account details to separate deposits from investment return.
+				Build estimated history to calculate net contributions and investment return automatically.
 			</p>
 		{/if}
 

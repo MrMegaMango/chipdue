@@ -5,11 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { rebuildBrokerageHistory } from './brokerage-history-service';
 import { resetCryptoStateForTests } from './crypto';
 import { closeDatabaseForTests } from './database';
-import {
-	listFinancialAccounts,
-	replaceConnectedFinancialAccounts,
-	updateFinancialAccount
-} from './financial-records';
+import { listFinancialAccounts, replaceConnectedFinancialAccounts } from './financial-records';
 import { setMarketHistoryFetchForTests } from './market-history';
 import { savePlaidItem } from './plaid-store';
 
@@ -77,6 +73,27 @@ describe.sequential('provider-neutral brokerage history', () => {
 						status: 'historical_complete',
 						transactions: [
 							{
+								transactionId: 'provider-deposit',
+								name: 'Cash deposit',
+								merchantName: null,
+								amountCents: -9_000,
+								currency: 'USD',
+								date: '2026-08-28',
+								authorizedDate: null,
+								pending: false,
+								categoryPrimary: 'INVESTMENT',
+								categoryDetailed: 'cash: deposit',
+								investmentDetails: {
+									type: 'cash',
+									subtype: 'deposit',
+									securityName: null,
+									tickerSymbol: null,
+									quantity: 0,
+									priceMicros: 0,
+									feesCents: null
+								}
+							},
+							{
 								transactionId: 'provider-buy',
 								name: 'Bought SYN',
 								merchantName: 'SYN',
@@ -104,7 +121,6 @@ describe.sequential('provider-neutral brokerage history', () => {
 			'2026-08-29T15:00:00.000Z'
 		);
 		const [account] = await listFinancialAccounts();
-		await updateFinancialAccount(account.id, { netContributionsCents: 9_000 });
 		setMarketHistoryFetchForTests(
 			async () =>
 				new Response(
@@ -129,11 +145,14 @@ describe.sequential('provider-neutral brokerage history', () => {
 		expect(response.provider).toBe('plaid');
 		expect(response.availability).toBe('available');
 		expect(response.estimatedPointCount).toBe(2);
+		expect(response.account?.netContributionsCents).toBeNull();
 		expect(response.account?.balanceHistory.map((point) => point.source)).toEqual([
 			'estimated',
 			'estimated',
-			'observed',
 			'observed'
+		]);
+		expect(response.account?.balanceHistory.map((point) => point.netContributionsCents)).toEqual([
+			1_000, 10_000, 10_000
 		]);
 	});
 

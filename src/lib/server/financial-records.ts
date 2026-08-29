@@ -271,7 +271,8 @@ function accountBalanceHistory(
 
 export async function replaceEstimatedFinancialAccountHistory(
 	id: string,
-	estimatedPoints: AccountBalanceHistoryPoint[]
+	estimatedPoints: AccountBalanceHistoryPoint[],
+	options: { latestObservedNetContributionsCents?: number | null } = {}
 ): Promise<FinancialAccount> {
 	const row = await getRow(id);
 	const payload = row ? decodeRecord(row) : null;
@@ -285,9 +286,22 @@ export async function replaceEstimatedFinancialAccountHistory(
 			409
 		);
 	}
-	const observed = accountBalanceHistory(payload, row).filter(
-		(point) => point.source === 'observed'
-	);
+	let observed = accountBalanceHistory(payload, row).filter((point) => point.source === 'observed');
+	if (
+		payload.netContributionsCents === null &&
+		options.latestObservedNetContributionsCents !== undefined &&
+		options.latestObservedNetContributionsCents !== null &&
+		observed.length > 0
+	) {
+		observed = observed.map((point, index) =>
+			index === observed.length - 1
+				? {
+						...point,
+						netContributionsCents: options.latestObservedNetContributionsCents ?? null
+					}
+				: point
+		);
+	}
 	const firstObservedAt = observed[0]?.recordedAt ?? null;
 	const sanitized = estimatedPoints
 		.filter(

@@ -4,6 +4,7 @@ import type {
 	FinancialAccountTransaction,
 	InvestmentHolding
 } from '$lib/types';
+import { isCashSweepSecurity } from '$lib/investment-display';
 import {
 	reconstructBrokerageHistory,
 	type BrokeragePositionInput,
@@ -76,7 +77,11 @@ function plaidTransaction(
 		transactionType: `${details.type} ${details.subtype} ${transaction.name}`,
 		symbol: details.tickerSymbol,
 		securityType: holding?.securityType ?? '',
-		quantity: details.quantity
+		quantity: details.quantity,
+		externalCashFlow:
+			!isCashSweepSecurity(details.tickerSymbol, details.securityName) &&
+			(/^(?:contribution|deposit|withdrawal)$/.test(details.subtype.toLowerCase()) ||
+				(details.type.toLowerCase() === 'transfer' && details.subtype.toLowerCase() === 'transfer'))
 	};
 }
 
@@ -140,7 +145,13 @@ async function rebuildPlaidBrokerageHistory(
 			502
 		);
 	}
-	const updatedAccount = await replaceEstimatedFinancialAccountHistory(account.id, estimate.points);
+	const updatedAccount = await replaceEstimatedFinancialAccountHistory(
+		account.id,
+		estimate.points,
+		{
+			latestObservedNetContributionsCents: estimate.currentNetContributionsCents
+		}
+	);
 	return {
 		availability: 'available',
 		provider: 'plaid',

@@ -38,7 +38,7 @@ The hosted model has one production hostname, one Vercel project, and one Neon p
 
 ## Assets
 
-- Account and card nicknames, optional institution/issuer names and suffixes, current and historical brokerage balances, net contributions, brokerage cost basis, dates, autopay settings, and enabled transaction history
+- Account and card nicknames, optional institution/issuer names and suffixes, current and historical brokerage balances, automatically calculated period contributions or user-entered lifetime contributions, brokerage cost basis, dates, autopay settings, and enabled transaction history
 - Plaid access tokens, Item IDs, transaction cursors, institution names, and derived account references
 - E*TRADE consumer credentials, request and access tokens, open orders held in browser memory, and encrypted reconstructed history
 - The cloud AES key, mode-specific password hash or temporary bootstrap token/verifier, session and OAuth transaction cookies, and recovery bundles

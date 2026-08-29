@@ -14,7 +14,7 @@ Choose one of two deployment modes:
 - Keep a private inventory of personal and business checking, savings, cash-management, and brokerage accounts.
 - Track signup bonuses from opening through requirements, qualification, payout, and safe-to-close dates.
 - Automatically refresh eligible bank and brokerage balances through an installed financial-data provider.
-- See each brokerage account's value over time and separate net contributions from investment return, with every saved balance or successful sync extending its private history.
+- See each brokerage account's value over time and separate automatically calculated period contributions from investment return, with every saved balance or successful sync extending its private history. An optional lifetime contribution total can replace the period baseline.
 - See each connected brokerage position, share count, current institution price, value, and holding cost basis while keeping simple account-level performance.
 - Build clearly labeled estimated daily history for Plaid-connected brokerage accounts—including Chase Self-Directed—from current holdings, up to 24 months of investment activity, and public market closes.
 - Load current E*TRADE open orders and use E*TRADE positions and activity as alternate reconstruction inputs without enabling trade placement, changes, or cancellation.
@@ -60,7 +60,7 @@ Cards, accounts, bonuses, and transactions
    Plaid sync adapter        E*TRADE read-only adapter
 ```
 
-Cards and accounts record whether they are `manual` or `connected` and, for connected records, which provider supplied them. User-facing sync APIs live under `/api/connections`; the older `/api/plaid` endpoints remain as compatibility aliases. Plaid holdings and investment activity can reconstruct estimated history for its connected brokerage accounts. The separate E*TRADE adapter supplements a Plaid-synced E*TRADE brokerage account with live open orders and alternate reconstruction inputs by matching the account's last four characters. Plaid remains the source of current displayed balances and holdings.
+Cards and accounts record whether they are `manual` or `connected` and, for connected records, which provider supplied them. User-facing sync APIs live under `/api/connections`; the older `/api/plaid` endpoints remain as compatibility aliases. Plaid holdings and investment activity can reconstruct estimated history for its connected brokerage accounts. When no lifetime contribution total is entered, reconstruction treats the first estimated portfolio value as the period's starting contribution balance and adjusts it with synced deposits, withdrawals, and transfers. The separate E*TRADE adapter supplements a Plaid-synced E*TRADE brokerage account with live open orders and alternate reconstruction inputs by matching the account's last four characters. Plaid remains the source of current displayed balances and holdings.
 
 The deployed database retains its older Plaid-named columns for compatibility with encrypted records and cryptographic identifiers. Those names are isolated in the storage bridge until a coordinated database migration can safely rename them. Plaid and E*TRADE remain optional: an installation without provider credentials continues to work in manual mode at no provider cost.
 
@@ -172,7 +172,7 @@ E*TRADE is a narrow, read-only supplement to an E*TRADE brokerage account alread
 3. Approve access on E*TRADE's own site and paste the displayed verifier into ChipDue within five minutes.
 4. Reconnect after the access token expires at midnight Eastern. E*TRADE can also require renewal after two hours without an API request.
 
-ChipDue encrypts the key, secret, request-token secret, and access-token secret per account. It maps an account by its last four characters. Open-order results stay only in browser memory. When estimated history is built, E*TRADE portfolio and up-to-two-year transaction responses are reduced to the fields needed for reconstruction and discarded; only estimated daily values and their provenance are retained inside the account's encrypted payload. Historical closes are requested from Yahoo Finance using only a ticker and date range—never an account identifier, balance, or quantity. Estimates are not E*TRADE-reported performance and can be incomplete for unsupported or unpriced securities. The integration contains no endpoint or code path for placing, changing, previewing, or cancelling a trade.
+ChipDue encrypts the key, secret, request-token secret, and access-token secret per account. It maps an account by its last four characters. Open-order results stay only in browser memory. When estimated history is built, E*TRADE portfolio and up-to-two-year transaction responses are reduced to the fields needed for reconstruction and discarded; only estimated daily values, calculated period contributions, and their provenance are retained inside the account's encrypted payload. Historical closes are requested from Yahoo Finance using only a ticker and date range—never an account identifier, balance, or quantity. Estimates are not E*TRADE-reported performance and can be incomplete for unsupported or unpriced securities. The integration contains no endpoint or code path for placing, changing, previewing, or cancelling a trade.
 
 Official references:
 

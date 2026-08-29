@@ -175,18 +175,30 @@ describe.sequential('encrypted financial records', () => {
 				source: 'estimated'
 			}
 		]);
-		const refreshed = await replaceEstimatedFinancialAccountHistory(account.id, [
-			{
-				recordedAt: '2026-08-03T20:00:00.000Z',
-				balanceCents: 115_000,
-				netContributionsCents: null,
-				source: 'estimated'
-			}
-		]);
+		const refreshed = await replaceEstimatedFinancialAccountHistory(
+			account.id,
+			[
+				{
+					recordedAt: '2026-08-03T20:00:00.000Z',
+					balanceCents: 115_000,
+					netContributionsCents: 100_000,
+					source: 'estimated'
+				}
+			],
+			{ latestObservedNetContributionsCents: 105_000 }
+		);
 
 		expect(refreshed.balanceHistory).toMatchObject([
-			{ recordedAt: '2026-08-03T20:00:00.000Z', source: 'estimated' },
-			{ recordedAt: '2026-08-05T12:00:00.000Z', source: 'observed' }
+			{
+				recordedAt: '2026-08-03T20:00:00.000Z',
+				netContributionsCents: 100_000,
+				source: 'estimated'
+			},
+			{
+				recordedAt: '2026-08-05T12:00:00.000Z',
+				netContributionsCents: 105_000,
+				source: 'observed'
+			}
 		]);
 	});
 

@@ -7,6 +7,8 @@ const UNSUPPORTED_SECURITY = /option|future|bond/i;
 export interface BrokerageHistoryEstimate {
 	points: AccountBalanceHistoryPoint[];
 	unpricedSymbols: string[];
+	currentNetContributionsCents: number | null;
+	contributionBasis: 'account' | 'estimated_period';
 }
 
 export interface BrokeragePositionInput {
@@ -23,6 +25,7 @@ export interface BrokerageTransactionInput {
 	symbol: string | null;
 	securityType: string;
 	quantity: number;
+	externalCashFlow?: boolean;
 }
 
 function transactionShareDelta(transaction: BrokerageTransactionInput): number {
@@ -39,9 +42,50 @@ function transactionShareDelta(transaction: BrokerageTransactionInput): number {
 }
 
 function isExternalCashFlow(transaction: BrokerageTransactionInput): boolean {
-	return /deposit|withdraw|transfer|wire|ach|contribution|distribution/.test(
+	if (transaction.externalCashFlow !== undefined) return transaction.externalCashFlow;
+	return /deposit|withdraw|transfer|wire|ach|contribution/.test(
 		transaction.transactionType.toLowerCase()
 	);
+}
+
+function automaticContributionHistory(
+	points: AccountBalanceHistoryPoint[],
+	transactions: BrokerageTransactionInput[]
+): { points: AccountBalanceHistoryPoint[]; currentNetContributionsCents: number | null } {
+	const firstPoint = points[0];
+	if (!firstPoint) return { points, currentNetContributionsCents: null };
+
+	const firstDay = firstPoint.recordedAt.slice(0, 10);
+	const lastDay = points.at(-1)!.recordedAt.slice(0, 10);
+	const externalFlows = transactions
+		.filter(isExternalCashFlow)
+		.slice()
+		.sort((left, right) => left.date.localeCompare(right.date));
+	let contributions = firstPoint.balanceCents / 100;
+	let flowIndex = 0;
+	while (flowIndex < externalFlows.length && externalFlows[flowIndex].date <= firstDay) {
+		flowIndex += 1;
+	}
+
+	const withContributions = points.map((point, index) => {
+		const day = point.recordedAt.slice(0, 10);
+		if (index > 0) {
+			while (flowIndex < externalFlows.length && externalFlows[flowIndex].date <= day) {
+				contributions += externalFlows[flowIndex].amount;
+				flowIndex += 1;
+			}
+		}
+		return { ...point, netContributionsCents: cents(contributions) };
+	});
+
+	while (flowIndex < externalFlows.length) {
+		if (externalFlows[flowIndex].date > lastDay) contributions += externalFlows[flowIndex].amount;
+		flowIndex += 1;
+	}
+	return {
+		points: withContributions,
+		currentNetContributionsCents: cents(contributions)
+	};
 }
 
 function cents(value: number): number {
@@ -154,5 +198,18 @@ export function reconstructBrokerageHistory(
 	const unpricedSymbols = [...new Set([...quantities.keys(), ...unsupportedSymbols])]
 		.filter((symbol) => unsupportedSymbols.includes(symbol) || !prices.get(symbol)?.size)
 		.sort();
-	return { points: points.reverse(), unpricedSymbols };
+	const chronologicalPoints = points.reverse();
+	if (account.netContributionsCents === null) {
+		return {
+			...automaticContributionHistory(chronologicalPoints, relevantTransactions),
+			unpricedSymbols,
+			contributionBasis: 'estimated_period'
+		};
+	}
+	return {
+		points: chronologicalPoints,
+		unpricedSymbols,
+		currentNetContributionsCents: account.netContributionsCents,
+		contributionBasis: 'account'
+	};
 }

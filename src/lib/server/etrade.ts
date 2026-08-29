@@ -879,7 +879,8 @@ export async function rebuildEtradeBrokerageHistory(
 	}
 	const updatedAccount = await replaceEstimatedFinancialAccountHistory(
 		financialAccount.id,
-		estimate.points
+		estimate.points,
+		{ latestObservedNetContributionsCents: estimate.currentNetContributionsCents }
 	);
 	return {
 		availability: 'available',
