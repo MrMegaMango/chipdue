@@ -46,13 +46,13 @@ describe('financial workspace navigation', () => {
 		expect(dashboardSource).toContain("{:else if currentSection === 'cards'}");
 	});
 
-	it('keeps the overview focused and moves account management into settings', () => {
+	it('keeps connection management in settings while exposing direct connection actions', () => {
 		expect(dashboardSource).toContain("hidden={currentSection === 'overview'}");
 		expect(dashboardSource).toContain("hidden={currentSection !== 'settings'}");
 		expect(dashboardSource).toContain("hidden={currentSection !== 'cards'}");
 		expect(dashboardSource).toContain('Account and data connections');
 		expect(dashboardSource).toContain('Manage sign-in, privacy, and data connections.');
-		expect(accountsSource).toContain("resolve('/settings#plaid-connections')");
+		expect(accountsSource).toContain('onclick={connectPlaid}');
 		expect(dashboardSource).toContain("resolve('/settings#plaid-setup')");
 	});
 
@@ -177,9 +177,7 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain(
 			'class="finance-button"\n\t\t\t\t\t\ttype="button"\n\t\t\t\t\t\tonclick={syncConnectedAccounts}'
 		);
-		expect(accountsSource).toContain(
-			'class="finance-button secondary" type="button" onclick={openAdd}'
-		);
+		expect(accountsSource).toContain('onclick={openAdd}');
 		expect(actionsSource.indexOf('Add manually')).toBeLessThan(
 			actionsSource.indexOf('Add connection')
 		);
@@ -194,8 +192,11 @@ describe('financial workspace navigation', () => {
 
 	it('uses the same connected-state actions on cards and accounts', () => {
 		expect(dashboardSource).toContain("currentSection === 'cards' && plaid.connectedItems > 0");
-		expect(dashboardSource).toContain("href={resolve('/settings#plaid-connections')}");
 		expect(dashboardSource).toContain('Add connection');
+		expect(dashboardSource).toContain('onclick={connectPlaid}');
+		expect(accountsSource).toContain('onclick={connectPlaid}');
+		expect(accountsSource).toContain("resolve('/api/plaid/link-token')");
+		expect(accountsSource).toContain("resolve('/api/plaid/exchange')");
 		expect(dashboardSource.match(/onclick=\{syncConnections\}/g)).toHaveLength(1);
 		expect(dashboardSource).not.toContain("'Connect another'");
 		expect(accountsSource).toContain("syncing ? 'Syncing…' : 'Sync connections'");

@@ -2619,13 +2619,21 @@
 								Add manually
 							</button>
 							{#if currentSection === 'cards' && plaid.connectedItems > 0}
-								<a class="button button-secondary" href={resolve('/settings#plaid-connections')}>
+								<button
+									class="button button-secondary"
+									type="button"
+									onclick={connectPlaid}
+									disabled={busyAction !== null || loading}
+									aria-busy={busyAction === 'connect'}
+									aria-describedby="plaid-consent-copy"
+									title="Open Plaid Link"
+								>
 									<svg aria-hidden="true" viewBox="0 0 20 20">
 										<path d="M3 8.5 10 5l7 3.5L10 12 3 8.5Z"></path>
 										<path d="M5 11v3.5M8.3 12.5V16m3.4-3.5V16m3.3-5v3.5M3 17h14"></path>
 									</svg>
-									Add connection
-								</a>
+									{busyAction === 'connect' ? 'Connecting…' : 'Add connection'}
+								</button>
 								<button
 									class="button button-primary"
 									type="button"

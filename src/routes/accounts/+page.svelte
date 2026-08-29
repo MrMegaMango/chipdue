@@ -51,6 +51,20 @@
 		title: string | null;
 		accounts: FinancialAccount[];
 	};
+	type PlaidHandler = {
+		open: () => void;
+		destroy: () => void;
+	};
+	type PlaidFactory = {
+		create: (configuration: {
+			token: string;
+			onSuccess: (
+				publicToken: string,
+				metadata?: { institution?: { name?: string | null } | null }
+			) => void;
+			onExit: (error: unknown) => void;
+		}) => PlaidHandler;
+	};
 
 	const money = new Intl.NumberFormat('en-US', {
 		style: 'currency',
@@ -99,11 +113,14 @@
 	let historyEstimateErrorByAccount = $state<Record<string, string>>({});
 	let historyEstimateNoteByAccount = $state<Record<string, string>>({});
 	let syncing = $state(false);
+	let connecting = $state(false);
 	let toast = $state('');
 	let toastError = $state(false);
 	let undoHiddenAccountId = $state<string | null>(null);
 	let supplementalRequestedAccountIds = $state<string[]>([]);
 	let toastTimer: ReturnType<typeof setTimeout> | undefined;
+	let plaidScriptPromise: Promise<void> | null = null;
+	let activePlaidHandler: PlaidHandler | null = null;
 
 	const visibleAccounts = $derived(accounts.filter((account) => !account.hidden));
 	const hiddenAccounts = $derived(accounts.filter((account) => account.hidden));
@@ -172,6 +189,10 @@
 
 	onMount(() => {
 		void initialize();
+		return () => {
+			activePlaidHandler?.destroy();
+			activePlaidHandler = null;
+		};
 	});
 
 	function blankForm(): AccountForm {
@@ -875,6 +896,117 @@
 		}
 	}
 
+	function plaidFactory(): PlaidFactory | undefined {
+		return (window as Window & { Plaid?: PlaidFactory }).Plaid;
+	}
+
+	function loadPlaidLink(): Promise<void> {
+		if (plaidFactory()) return Promise.resolve();
+		if (plaidScriptPromise) return plaidScriptPromise;
+
+		const script = document.createElement('script');
+		const attempt = new Promise<void>((resolvePromise, reject) => {
+			script.src = 'https://cdn.plaid.com/link/v2/stable/link-initialize.js';
+			script.async = true;
+			script.referrerPolicy = 'no-referrer';
+			script.dataset.cardduePlaidLink = 'true';
+			script.onload = () => {
+				if (plaidFactory()) resolvePromise();
+				else reject(new Error('Plaid Link did not load.'));
+			};
+			script.onerror = () =>
+				reject(new Error('Plaid Link could not be loaded. Check your connection.'));
+			document.head.append(script);
+		});
+		plaidScriptPromise = attempt;
+		void attempt.catch(() => {
+			script.remove();
+			if (plaidScriptPromise === attempt) plaidScriptPromise = null;
+		});
+		return attempt;
+	}
+
+	async function connectPlaid(): Promise<void> {
+		if (connecting || syncing) return;
+		if (!plaidConfigured) {
+			window.location.assign(resolve('/settings#plaid-setup'));
+			return;
+		}
+
+		connecting = true;
+		pageError = '';
+		try {
+			const [, tokenPayload] = await Promise.all([
+				loadPlaidLink(),
+				requestJson<{ linkToken?: string; link_token?: string }>(resolve('/api/plaid/link-token'), {
+					method: 'POST'
+				})
+			]);
+			const linkToken = tokenPayload.linkToken ?? tokenPayload.link_token;
+			if (!linkToken) throw new Error('The server did not return a Plaid link token.');
+
+			const factory = plaidFactory();
+			if (!factory) throw new Error('Plaid Link is unavailable.');
+
+			let handler: PlaidHandler;
+			handler = factory.create({
+				token: linkToken,
+				onSuccess: (publicToken, metadata) => {
+					const institutionName = metadata?.institution?.name?.trim().slice(0, 80) || null;
+					void finishPlaidConnection(publicToken, institutionName, handler);
+				},
+				onExit: (error) => {
+					handler.destroy();
+					if (activePlaidHandler === handler) activePlaidHandler = null;
+					connecting = false;
+					if (error) showToast('Plaid connection was not completed.', { error: true });
+				}
+			});
+			activePlaidHandler = handler;
+			handler.open();
+		} catch (error) {
+			connecting = false;
+			showToast(readableError(error, 'Plaid could not be opened.'), { error: true });
+		}
+	}
+
+	async function finishPlaidConnection(
+		publicToken: string,
+		institutionName: string | null,
+		handler: PlaidHandler
+	): Promise<void> {
+		try {
+			const exchanged = await requestJson<{ connection: FinancialConnection }>(
+				resolve('/api/plaid/exchange'),
+				{
+					method: 'POST',
+					body: JSON.stringify({ publicToken, institutionName })
+				}
+			);
+			await requestJson(
+				resolve('/api/connections/[id]/transactions/sync', { id: exchanged.connection.id }),
+				{ method: 'POST' }
+			);
+			const connectionsResponse = await requestJson<ConnectionsStatusResponse>(
+				resolve('/api/connections')
+			);
+			connections = connectionsResponse.connections;
+			plaidConfigured =
+				connectionsResponse.providers.find((status) => status.provider === 'plaid')?.configured ??
+				false;
+			await reloadAccounts(true);
+			showToast('Plaid connected. Accounts, cards, and activity are syncing.');
+		} catch (error) {
+			showToast(readableError(error, 'Plaid connected, but the first sync failed.'), {
+				error: true
+			});
+		} finally {
+			handler.destroy();
+			if (activePlaidHandler === handler) activePlaidHandler = null;
+			connecting = false;
+		}
+	}
+
 	async function deleteAccount(account: FinancialAccount): Promise<void> {
 		if (account.source === 'connected') return;
 		if (
@@ -988,25 +1120,35 @@
 				</p>
 			</div>
 			<div class="account-toolbar-actions">
-				<button class="finance-button secondary" type="button" onclick={openAdd}>
+				<button
+					class="finance-button secondary"
+					type="button"
+					onclick={openAdd}
+					disabled={connecting || syncing || loading}
+				>
 					<svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 4v12M4 10h12"></path></svg>
 					Add manually
 				</button>
-				<a
+				<button
 					class="finance-button"
 					class:secondary={connections.length > 0}
-					href={resolve('/settings#plaid-connections')}
+					type="button"
+					onclick={connectPlaid}
+					disabled={connecting || syncing || loading}
+					aria-busy={connecting}
 				>
 					<svg aria-hidden="true" viewBox="0 0 20 20">
 						<path d="M3 8.5 10 5l7 3.5L10 12 3 8.5Z"></path>
 						<path d="M5 11v3.5M8.3 12.5V16m3.4-3.5V16m3.3-5v3.5M3 17h14"></path>
 					</svg>
-					{connections.length > 0
-						? 'Add connection'
-						: plaidConfigured
-							? 'Connect Plaid'
-							: 'Set up Plaid'}
-				</a>
+					{connecting
+						? 'Connecting…'
+						: connections.length > 0
+							? 'Add connection'
+							: plaidConfigured
+								? 'Connect Plaid'
+								: 'Set up Plaid'}
+				</button>
 				{#if connections.length > 0}
 					<button
 						class="finance-button"
@@ -1066,17 +1208,28 @@
 					You can still add an unsupported account and maintain it manually.
 				</p>
 				<div class="empty-account-actions">
-					<button class="finance-button secondary" type="button" onclick={openAdd}>
+					<button
+						class="finance-button secondary"
+						type="button"
+						onclick={openAdd}
+						disabled={connecting || syncing || loading}
+					>
 						<svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 4v12M4 10h12"></path></svg>
 						Add manually
 					</button>
-					<a class="finance-button" href={resolve('/settings#plaid-connections')}>
+					<button
+						class="finance-button"
+						type="button"
+						onclick={connectPlaid}
+						disabled={connecting || syncing || loading}
+						aria-busy={connecting}
+					>
 						<svg aria-hidden="true" viewBox="0 0 20 20">
 							<path d="M3 8.5 10 5l7 3.5L10 12 3 8.5Z"></path>
 							<path d="M5 11v3.5M8.3 12.5V16m3.4-3.5V16m3.3-5v3.5M3 17h14"></path>
 						</svg>
-						{plaidConfigured ? 'Connect Plaid' : 'Set up Plaid'}
-					</a>
+						{connecting ? 'Connecting…' : plaidConfigured ? 'Connect Plaid' : 'Set up Plaid'}
+					</button>
 				</div>
 			</div>
 		{:else}
