@@ -14,6 +14,7 @@ export interface AutomaticCardRewardProfile {
 		name: string;
 		multiplier: number;
 		matchCategory: CardRewardCategoryMatch | null;
+		annualSpendCapCents?: number;
 	}>;
 }
 
@@ -154,9 +155,10 @@ const PROFILE_MATCHERS: ProfileMatcher[] = [
 			calculation: 'static',
 			categories: [
 				{
-					name: 'U.S. supermarkets (up to $6,000/year)',
+					name: 'U.S. supermarkets',
 					multiplier: 6,
-					matchCategory: 'groceries'
+					matchCategory: 'groceries',
+					annualSpendCapCents: 600_000
 				},
 				{ name: 'Select U.S. streaming', multiplier: 6, matchCategory: 'streaming' },
 				{ name: 'U.S. gas stations', multiplier: 3, matchCategory: 'gas' },
@@ -176,19 +178,22 @@ const PROFILE_MATCHERS: ProfileMatcher[] = [
 			calculation: 'static',
 			categories: [
 				{
-					name: 'U.S. supermarkets (up to $6,000/year)',
+					name: 'U.S. supermarkets',
 					multiplier: 3,
-					matchCategory: 'groceries'
+					matchCategory: 'groceries',
+					annualSpendCapCents: 600_000
 				},
 				{
-					name: 'U.S. gas stations (up to $6,000/year)',
+					name: 'U.S. gas stations',
 					multiplier: 3,
-					matchCategory: 'gas'
+					matchCategory: 'gas',
+					annualSpendCapCents: 600_000
 				},
 				{
-					name: 'U.S. online retail (up to $6,000/year)',
+					name: 'U.S. online retail',
 					multiplier: 3,
-					matchCategory: 'online_shopping'
+					matchCategory: 'online_shopping',
+					annualSpendCapCents: 600_000
 				}
 			]
 		}

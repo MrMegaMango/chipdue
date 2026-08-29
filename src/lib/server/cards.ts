@@ -41,6 +41,7 @@ interface StoredCardRewardCategory {
 	name: string;
 	multiplier?: number | null;
 	matchCategory?: CardRewardCategoryMatch | null;
+	annualSpendCapCents?: number | null;
 	rate?: string;
 }
 
@@ -303,7 +304,13 @@ function isStoredCardRewards(value: unknown): value is StoredCardRewards | undef
 						(typeof category.matchCategory === 'string' &&
 							CARD_REWARD_CATEGORY_MATCHES.has(
 								category.matchCategory as CardRewardCategoryMatch
-							)))) ||
+							))) &&
+					(category.annualSpendCapCents === undefined ||
+						category.annualSpendCapCents === null ||
+						(typeof category.annualSpendCapCents === 'number' &&
+							Number.isSafeInteger(category.annualSpendCapCents) &&
+							category.annualSpendCapCents > 0 &&
+							category.annualSpendCapCents <= 100_000_000_000))) ||
 					(typeof category.rate === 'string' &&
 						category.rate.length > 0 &&
 						category.rate.length <= 20))
@@ -359,7 +366,8 @@ function normalizeStoredRewards(rewards: StoredCardRewards | undefined): Normali
 			matchCategory:
 				category.matchCategory === undefined
 					? inferredRewardMatch(category.name)
-					: category.matchCategory
+					: category.matchCategory,
+			annualSpendCapCents: category.annualSpendCapCents ?? null
 		}))
 	};
 }

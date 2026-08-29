@@ -47,7 +47,12 @@ describe('automatic card reward profiles', () => {
 			rewardType: 'cash_back',
 			baseRate: 1,
 			categories: expect.arrayContaining([
-				expect.objectContaining({ multiplier: 6, matchCategory: 'groceries' }),
+				expect.objectContaining({
+					name: 'U.S. supermarkets',
+					multiplier: 6,
+					matchCategory: 'groceries',
+					annualSpendCapCents: 600_000
+				}),
 				expect.objectContaining({ multiplier: 6, matchCategory: 'streaming' }),
 				expect.objectContaining({ multiplier: 3, matchCategory: 'gas' }),
 				expect.objectContaining({ multiplier: 3, matchCategory: 'transit' })

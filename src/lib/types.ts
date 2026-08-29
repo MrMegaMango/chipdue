@@ -57,6 +57,7 @@ export interface CardRewardCategory {
 	name: string;
 	multiplier: number | null;
 	matchCategory: CardRewardCategoryMatch | null;
+	annualSpendCapCents: number | null;
 }
 
 export interface CardTransactionRewardEstimate {

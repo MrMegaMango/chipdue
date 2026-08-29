@@ -179,6 +179,7 @@ describe('card activity preview', () => {
 		expect(source).toContain("resolve('/api/cards/[id]/rewards/profile', { id: card.id })");
 		expect(source).toContain("profile.issuer === 'American Express'");
 		expect(source).toContain('does not have a verified reward profile for it yet');
+		expect(source).toContain('annual spend cap');
 	});
 
 	it('shows three recent transactions and keeps full history behind a button', () => {

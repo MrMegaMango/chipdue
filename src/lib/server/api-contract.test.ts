@@ -246,7 +246,12 @@ describe.sequential('cards API contract', () => {
 		});
 		expect(payload.card.rewardCategories).toEqual(
 			expect.arrayContaining([
-				expect.objectContaining({ multiplier: 6, matchCategory: 'groceries' }),
+				expect.objectContaining({
+					name: 'U.S. supermarkets',
+					multiplier: 6,
+					matchCategory: 'groceries',
+					annualSpendCapCents: 600_000
+				}),
 				expect.objectContaining({ multiplier: 3, matchCategory: 'transit' })
 			])
 		);

@@ -248,6 +248,7 @@
 		name: string;
 		multiplier: number | null;
 		matchCategory: CardRewardCategoryMatch | null;
+		annualSpendCapCents?: number | null;
 	};
 	type EditableRewardCategory = {
 		id?: string;
@@ -368,6 +369,11 @@
 		style: 'currency',
 		currency: 'USD',
 		minimumFractionDigits: 2
+	});
+	const wholeDollarMoney = new Intl.NumberFormat('en-US', {
+		style: 'currency',
+		currency: 'USD',
+		maximumFractionDigits: 0
 	});
 
 	const fullDate = new Intl.DateTimeFormat('en-US', {
@@ -1197,6 +1203,10 @@
 
 	function formatMoney(cents: number | null): string {
 		return cents === null ? 'Not reported' : money.format(cents / 100);
+	}
+
+	function formatAnnualSpendCap(cents: number): string {
+		return `${wholeDollarMoney.format(cents / 100)} annual spend cap`;
 	}
 
 	function formatDate(value: string | null): string {
@@ -2805,8 +2815,13 @@
 											<ul>
 												{#each card.rewardCategories as category (category.id)}
 													<li>
-														<span>{category.name}</span><strong
-															>{formatRewardRate(category.multiplier, card.rewardType)}</strong
+														<div>
+															<span>{category.name}</span>
+															{#if category.annualSpendCapCents}
+																<small>{formatAnnualSpendCap(category.annualSpendCapCents)}</small>
+															{/if}
+														</div>
+														<strong>{formatRewardRate(category.multiplier, card.rewardType)}</strong
 														>
 													</li>
 												{/each}
@@ -3623,7 +3638,12 @@
 									<ul>
 										{#each rewardsCard.rewardCategories as category (category.id)}
 											<li>
-												<span>{category.name}</span>
+												<div>
+													<span>{category.name}</span>
+													{#if category.annualSpendCapCents}
+														<small>{formatAnnualSpendCap(category.annualSpendCapCents)}</small>
+													{/if}
+												</div>
 												<strong
 													>{formatRewardRate(category.multiplier, rewardsCard.rewardType)}</strong
 												>
@@ -5198,29 +5218,49 @@
 	}
 
 	.card-rewards ul {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.38rem;
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.42rem;
 		margin: 0.7rem 0 0;
 		padding: 0;
 		list-style: none;
 	}
 
 	.card-rewards li {
-		display: inline-flex;
-		gap: 0.32rem;
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		gap: 0.5rem;
 		align-items: center;
-		padding: 0.3rem 0.42rem;
+		min-width: 0;
+		padding: 0.48rem 0.52rem;
 		border: 1px solid #ded7f2;
-		border-radius: 999px;
+		border-radius: 6px;
 		color: #544d67;
-		font-size: 0.63rem;
 		background: white;
+	}
+
+	.card-rewards li > div {
+		display: grid;
+		min-width: 0;
+		gap: 0.12rem;
+	}
+
+	.card-rewards li span {
+		font-size: 0.62rem;
+		font-weight: 650;
+		line-height: 1.25;
+	}
+
+	.card-rewards li small {
+		color: #817895;
+		font-size: 0.53rem;
+		line-height: 1.2;
 	}
 
 	.card-rewards li strong {
 		color: var(--accent);
-		font-size: inherit;
+		font-size: 0.67rem;
+		font-variant-numeric: tabular-nums;
 	}
 
 	.card-activity-preview {
@@ -6357,15 +6397,26 @@
 	}
 
 	.reward-profile-categories li {
-		display: flex;
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
 		gap: 0.8rem;
 		align-items: center;
-		justify-content: space-between;
 		padding: 0.65rem 0.7rem;
 		border: 1px solid var(--line);
 		border-radius: 8px;
 		font-size: 0.68rem;
 		background: white;
+	}
+
+	.reward-profile-categories li > div {
+		display: grid;
+		min-width: 0;
+		gap: 0.12rem;
+	}
+
+	.reward-profile-categories li small {
+		color: var(--muted);
+		font-size: 0.56rem;
 	}
 
 	.reward-profile-categories li strong {
@@ -7123,6 +7174,10 @@
 	}
 
 	@media (max-width: 430px) {
+		.card-rewards ul {
+			grid-template-columns: 1fr;
+		}
+
 		.header-controls {
 			gap: 0.5rem;
 		}

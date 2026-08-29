@@ -669,6 +669,14 @@ describe.sequential('Plaid transaction history', () => {
 			rewardSource: 'automatic',
 			rewardProfileName: 'Blue Cash Preferred'
 		});
+		expect(card.rewardCategories).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					name: 'U.S. supermarkets',
+					annualSpendCapCents: 600_000
+				})
+			])
+		);
 		expect(history.transactions.map((entry) => entry.rewardEstimate)).toEqual([
 			expect.objectContaining({ rate: 6, amount: 600 }),
 			expect.objectContaining({ rate: 6, amount: 120 }),
