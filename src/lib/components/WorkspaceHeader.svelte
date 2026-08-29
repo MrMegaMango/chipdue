@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { resolve } from '$app/paths';
+	import { asset, resolve } from '$app/paths';
 
 	type WorkspaceSection = 'dashboard' | 'accounts' | 'bonuses';
 	type Props = {
@@ -21,13 +21,7 @@
 <header class="workspace-header">
 	<a class="workspace-brand" href={resolve('/')} aria-label="ChipDue dashboard">
 		<span class="brand-mark" aria-hidden="true">
-			<svg viewBox="0 0 32 32">
-				<path d="M8 23V15M16 23V9M24 23V5"></path>
-				<path d="M6 25h20"></path>
-				<circle cx="8" cy="12" r="2"></circle>
-				<circle cx="16" cy="6" r="2"></circle>
-				<circle cx="24" cy="12" r="2"></circle>
-			</svg>
+			<img src={asset('/logo-mark.svg')} alt="" />
 		</span>
 		<span class="brand-copy">
 			<strong>ChipDue</strong>
@@ -76,28 +70,16 @@
 	}
 
 	.brand-mark {
-		display: grid;
-		width: 34px;
-		height: 34px;
-		place-items: center;
-		border-radius: 7px;
-		color: white;
-		background: var(--accent);
-		box-shadow: 3px 3px 0 rgba(39, 58, 165, 0.28);
+		display: block;
+		width: 38px;
+		height: 38px;
+		filter: drop-shadow(3px 3px 0 rgba(39, 58, 165, 0.24));
 	}
 
-	.brand-mark svg {
-		width: 25px;
-		fill: none;
-		stroke: currentColor;
-		stroke-linecap: round;
-		stroke-linejoin: round;
-		stroke-width: 1.8;
-	}
-
-	.brand-mark circle {
-		fill: #e5b855;
-		stroke: var(--accent);
+	.brand-mark img {
+		display: block;
+		width: 100%;
+		height: 100%;
 	}
 
 	.brand-copy {
@@ -106,9 +88,9 @@
 	}
 
 	.brand-copy strong {
-		font-size: 1.05rem;
-		font-weight: 780;
-		letter-spacing: -0.025em;
+		font-size: 1.08rem;
+		font-weight: 790;
+		letter-spacing: -0.035em;
 	}
 
 	.brand-copy small {

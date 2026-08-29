@@ -12,7 +12,7 @@
 		content="A private, local-first dashboard for financial accounts, signup bonuses, brokerage performance, and credit-card deadlines."
 	/>
 	<meta name="theme-color" content="#f7f6f1" />
-	<link rel="icon" href={asset('/favicon.svg')} />
+	<link rel="icon" href={asset('/logo-mark.svg')} type="image/svg+xml" />
 </svelte:head>
 
 {@render children()}
