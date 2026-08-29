@@ -171,6 +171,13 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain('<dd>{formatDate(account.openedDate)}</dd>');
 	});
 
+	it('keeps sync freshness in the low-emphasis account footer', () => {
+		expect(accountsSource).not.toContain('<dt>Data source</dt>');
+		expect(accountsSource).toContain('<span class="account-footer-meta">');
+		expect(accountsSource).toContain('<small>{formatSyncTime(account.lastSyncedAt)}</small>');
+		expect(accountsSource).toContain('.account-footer-meta small');
+	});
+
 	it('prioritizes automatic account updates over manual entry', () => {
 		const actionsSource = accountsSource.slice(
 			accountsSource.indexOf('class="account-toolbar-actions"'),

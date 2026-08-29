@@ -1398,14 +1398,6 @@
 																	<dd>{formatDate(account.openedDate)}</dd>
 																</div>
 															{/if}
-															<div>
-																<dt>Data source</dt>
-																<dd>
-																	{account.source === 'connected'
-																		? formatSyncTime(account.lastSyncedAt)
-																		: 'Manual entry'}
-																</dd>
-															</div>
 															{#if account.accountType === 'brokerage'}
 																<div>
 																	<dt>Investment return</dt>
@@ -1739,13 +1731,18 @@
 															{/if}
 														{/if}
 														<footer>
-															<span
-																>{account.hidden
-																	? 'Excluded from totals'
-																	: account.source === 'connected'
-																		? 'Automatic balance'
-																		: 'Manual balance'}</span
-															>
+															<span class="account-footer-meta">
+																<span>
+																	{account.hidden
+																		? 'Excluded from totals'
+																		: account.source === 'connected'
+																			? 'Automatic balance'
+																			: 'Manual balance'}
+																</span>
+																{#if account.source === 'connected'}
+																	<small>{formatSyncTime(account.lastSyncedAt)}</small>
+																{/if}
+															</span>
 															<div>
 																<button type="button" onclick={() => openEdit(account)}>
 																	{account.source === 'connected' ? 'Details' : 'Edit'}
@@ -2586,10 +2583,24 @@
 		justify-content: space-between;
 	}
 
-	.finance-card footer > span {
+	.finance-card footer > .account-footer-meta {
+		display: flex;
+		gap: 0.35rem;
+		align-items: baseline;
+		flex-wrap: wrap;
 		color: var(--faint);
 		font-size: 0.6rem;
 		font-weight: 680;
+	}
+
+	.account-footer-meta small {
+		font-size: 0.54rem;
+		font-weight: 520;
+	}
+
+	.account-footer-meta small::before {
+		margin-right: 0.35rem;
+		content: '·';
 	}
 
 	.finance-card footer button:disabled {
