@@ -39,6 +39,14 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain('Plaid does not provide open-order data.');
 	});
 
+	it('explains cash sweeps without presenting them as stock sales or gains', () => {
+		expect(accountsSource).toContain("return action === 'used' ? 'Cash used'");
+		expect(accountsSource).toContain('Paid from QACDS for a purchase or withdrawal');
+		expect(accountsSource).toContain('QACDS is Chase’s name for uninvested cash');
+		expect(accountsSource).toContain('stock sale or investment gain');
+		expect(accountsSource).toContain("? 'Fixed at $1.00'");
+	});
+
 	it('lets people hide stale accounts and restore them later', () => {
 		expect(accountsSource).toContain('Show hidden (');
 		expect(accountsSource).toContain('Excluded from your account map and summary totals.');

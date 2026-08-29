@@ -4,6 +4,7 @@
 	import { getCompatibleBonusOffers } from '$lib/bonus-offers';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
 	import { financialProviderName } from '$lib/financial-data';
+	import { cashSweepAction, isCashSweepSecurity } from '$lib/investment-display';
 	import type {
 		FinancialConnection,
 		FinancialAccount,
@@ -252,15 +253,38 @@
 		return quantity.format(value);
 	}
 
+	function isCashSweepHolding(holding: InvestmentHolding): boolean {
+		return isCashSweepSecurity(holding.tickerSymbol, holding.name);
+	}
+
+	function isCashSweepTransaction(transaction: FinancialAccountTransaction): boolean {
+		return isCashSweepSecurity(
+			transaction.investmentDetails?.tickerSymbol,
+			transaction.investmentDetails?.securityName
+		);
+	}
+
+	function cashSweepTransactionAction(transaction: FinancialAccountTransaction) {
+		const investment = transaction.investmentDetails;
+		return investment ? cashSweepAction(investment.type, investment.subtype) : 'moved';
+	}
+
 	function formatAccountTransactionAmount(transaction: FinancialAccountTransaction): string {
 		const amount = formatHoldingMoney(
 			Math.abs(transaction.amountCents) / 100,
 			transaction.currency
 		);
+		if (isCashSweepTransaction(transaction)) {
+			return `${amount} ${cashSweepTransactionAction(transaction)}`;
+		}
 		return transaction.amountCents < 0 ? `+${amount}` : `−${amount}`;
 	}
 
 	function activityTitle(transaction: FinancialAccountTransaction): string {
+		if (isCashSweepTransaction(transaction)) {
+			const action = cashSweepTransactionAction(transaction);
+			return action === 'used' ? 'Cash used' : action === 'added' ? 'Cash added' : 'Cash moved';
+		}
 		return (
 			transaction.investmentDetails?.tickerSymbol ??
 			transaction.investmentDetails?.securityName ??
@@ -281,6 +305,14 @@
 	function activityDetail(transaction: FinancialAccountTransaction): string {
 		const investment = transaction.investmentDetails;
 		if (investment) {
+			if (isCashSweepTransaction(transaction)) {
+				const action = cashSweepTransactionAction(transaction);
+				return action === 'used'
+					? 'Paid from QACDS for a purchase or withdrawal'
+					: action === 'added'
+						? 'Uninvested cash moved into the Chase cash sweep'
+						: 'Automatic movement in the Chase cash sweep';
+			}
 			const parts = [titleCase(investment.subtype || investment.type)];
 			if (investment.quantity !== 0) {
 				parts.push(
@@ -311,6 +343,10 @@
 		return expandedActivityAccountIds.includes(accountId)
 			? transactions
 			: transactions.slice(0, COLLAPSED_ACTIVITY_COUNT);
+	}
+
+	function hasCashSweepActivity(accountId: string): boolean {
+		return (activityByAccount[accountId]?.transactions ?? []).some(isCashSweepTransaction);
 	}
 
 	function toggleAccountActivity(accountId: string): void {
@@ -853,33 +889,45 @@
 														<div
 															class="holding-table"
 															role="table"
-															aria-label="Stocks and current prices"
+															aria-label="Holdings and current prices"
 														>
 															<div class="holding-row heading" role="row">
 																<span role="columnheader">Holding</span>
-																<span role="columnheader">Shares</span>
+																<span role="columnheader">Units</span>
 																<span role="columnheader">Current price</span>
 																<span role="columnheader">Value</span>
 															</div>
 															{#each account.holdings as holding, index (index)}
 																<div class="holding-row" role="row">
 																	<span class="holding-name" role="cell">
-																		<strong>{holding.tickerSymbol ?? holding.name}</strong>
+																		<strong
+																			>{isCashSweepHolding(holding)
+																				? `Cash${holding.tickerSymbol ? ` (${holding.tickerSymbol})` : ''}`
+																				: (holding.tickerSymbol ?? holding.name)}</strong
+																		>
 																		<small>
-																			{holding.tickerSymbol
-																				? holding.name
-																				: (holding.securityType ?? 'Security')}
+																			{isCashSweepHolding(holding)
+																				? 'Uninvested cash held at Chase'
+																				: holding.tickerSymbol
+																					? holding.name
+																					: (holding.securityType ?? 'Security')}
 																		</small>
 																	</span>
-																	<span role="cell" data-label="Shares"
-																		>{formatQuantity(holding.quantity)}</span
-																	>
+																	<span role="cell" data-label="Units">
+																		{isCashSweepHolding(holding)
+																			? '—'
+																			: formatQuantity(holding.quantity)}
+																	</span>
 																	<span
 																		class="holding-price"
 																		role="cell"
 																		data-label="Current price"
 																	>
-																		<strong>{formatPrice(holding)}</strong>
+																		<strong
+																			>{isCashSweepHolding(holding)
+																				? 'Fixed at $1.00'
+																				: formatPrice(holding)}</strong
+																		>
 																		{#if holding.priceAsOf}<small
 																				>as of {formatDate(holding.priceAsOf)}</small
 																			>{/if}
@@ -935,6 +983,13 @@
 															Activity is unavailable right now.
 														</p>
 													{:else if activityByAccount[account.id]?.transactions.length}
+														{#if hasCashSweepActivity(account.id)}
+															<p class="cash-sweep-explainer">
+																QACDS is Chase’s name for uninvested cash. “Cash used” means Chase
+																took cash from QACDS to pay for a purchase or withdrawal. It is not
+																a stock sale or investment gain.
+															</p>
+														{/if}
 														<ul class="account-activity-list">
 															{#each visibleAccountTransactions(account.id) as transaction (transaction.id)}
 																<li>
@@ -947,7 +1002,8 @@
 																		<span>{activityDetail(transaction)}</span>
 																	</div>
 																	<strong
-																		class:credit={transaction.amountCents < 0}
+																		class:credit={transaction.amountCents < 0 &&
+																			!isCashSweepTransaction(transaction)}
 																		class="account-activity-amount"
 																	>
 																		{formatAccountTransactionAmount(transaction)}
@@ -1439,6 +1495,17 @@
 		border-radius: 9px;
 		list-style: none;
 		overflow: hidden;
+	}
+
+	.cash-sweep-explainer {
+		margin: 0 0 0.55rem;
+		padding: 0.65rem 0.75rem;
+		border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
+		border-radius: 9px;
+		color: var(--muted);
+		font-size: 0.58rem;
+		line-height: 1.45;
+		background: color-mix(in srgb, var(--accent) 5%, var(--paper));
 	}
 
 	.account-activity-list li {
