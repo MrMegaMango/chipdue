@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { AccountBonus, BonusRequirement, FinancialAccount } from '$lib/types';
+import type {
+	AccountBonus,
+	BonusRequirement,
+	FinancialAccount,
+	InvestmentHolding
+} from '$lib/types';
 import { cloudQuery, cloudTransaction, type CloudStatement } from './cloud-database';
 import { decryptJson, encryptJson, privateFingerprint, privateUuid } from './crypto';
 import { getDatabase } from './database';
@@ -43,6 +48,7 @@ export interface PlaidFinancialAccountSnapshot {
 	currency: string;
 	currentBalanceCents: number | null;
 	costBasisCents: number | null;
+	holdings: InvestmentHolding[] | null;
 }
 
 const dateSchema = z
@@ -51,6 +57,17 @@ const dateSchema = z
 	.nullable();
 const nullableTextSchema = z.string().nullable();
 const nullableCentsSchema = z.number().int().nullable();
+const investmentHoldingSchema = z.object({
+	name: z.string(),
+	tickerSymbol: nullableTextSchema,
+	securityType: nullableTextSchema,
+	quantity: z.number().finite(),
+	priceMicros: z.number().int(),
+	valueCents: nullableCentsSchema,
+	costBasisCents: nullableCentsSchema,
+	currency: z.string(),
+	priceAsOf: dateSchema
+});
 
 const accountPayloadSchema = z.object({
 	recordType: z.literal('account'),
@@ -63,6 +80,7 @@ const accountPayloadSchema = z.object({
 	currency: z.string(),
 	currentBalanceCents: nullableCentsSchema,
 	costBasisCents: nullableCentsSchema,
+	holdings: z.array(investmentHoldingSchema).default([]),
 	openedDate: dateSchema,
 	notes: nullableTextSchema
 });
@@ -120,6 +138,7 @@ function rowToAccount(row: PrivateRecordRow, payload: AccountPayload): Financial
 		currency: payload.currency,
 		currentBalanceCents: payload.currentBalanceCents,
 		costBasisCents: payload.costBasisCents,
+		holdings: payload.holdings,
 		openedDate: payload.openedDate,
 		notes: payload.notes,
 		plaidConnectionId: row.source === 'plaid' ? row.plaid_item_id : null,
@@ -263,7 +282,7 @@ export async function createFinancialAccount(
 ): Promise<FinancialAccount> {
 	const id = randomUUID();
 	const now = new Date().toISOString();
-	await insertRecord(id, { recordType: 'account', ...input }, now);
+	await insertRecord(id, { recordType: 'account', ...input, holdings: [] }, now);
 	return getFinancialAccount(id);
 }
 
@@ -302,6 +321,7 @@ export async function updateFinancialAccount(
 				: changes.currentBalanceCents,
 		costBasisCents:
 			changes.costBasisCents === undefined ? existing.costBasisCents : changes.costBasisCents,
+		holdings: existing.holdings,
 		openedDate: changes.openedDate === undefined ? existing.openedDate : changes.openedDate,
 		notes: changes.notes === undefined ? existing.notes : changes.notes
 	};
@@ -336,6 +356,7 @@ function plaidAccountPayload(
 		currency: snapshot.currency,
 		currentBalanceCents: snapshot.currentBalanceCents,
 		costBasisCents: snapshot.costBasisCents ?? existing?.costBasisCents ?? null,
+		holdings: snapshot.holdings ?? existing?.holdings ?? [],
 		openedDate: existing?.openedDate ?? null,
 		notes: existing?.notes ?? null
 	};

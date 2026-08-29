@@ -18,6 +18,16 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain('<option value="brokerage">Brokerage</option>');
 		expect(accountsSource).toContain('Cost basis / contributions');
 		expect(accountsSource).toContain('Brokerage performance');
+		expect(accountsSource).toContain('Current price');
+		expect(accountsSource).toContain('account.holdings');
+	});
+
+	it('separates cash and brokerage accounts into distinct groups', () => {
+		expect(accountsSource).toContain("title: 'Cash accounts'");
+		expect(accountsSource).toContain("account.accountType !== 'brokerage'");
+		expect(accountsSource).toContain("title: 'Brokerage accounts'");
+		expect(accountsSource).toContain("account.accountType === 'brokerage'");
+		expect(accountsSource).toContain('{#each accountGroups as accountGroup');
 	});
 
 	it('tracks the full bonus lifecycle and manual requirements', () => {

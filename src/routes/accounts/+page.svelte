@@ -7,6 +7,7 @@
 		FinancialAccountOwner,
 		FinancialAccountStatus,
 		FinancialAccountType,
+		InvestmentHolding,
 		PlaidConnection
 	} from '$lib/types';
 	import '$lib/finance-pages.css';
@@ -43,6 +44,7 @@
 		hour: 'numeric',
 		minute: '2-digit'
 	});
+	const quantity = new Intl.NumberFormat('en-US', { maximumFractionDigits: 6 });
 
 	let mode = $state<RuntimeMode | null>(null);
 	let accounts = $state<FinancialAccount[]>([]);
@@ -65,6 +67,20 @@
 	const syncedAccountCount = $derived(
 		activeAccounts.filter((account) => account.source === 'plaid').length
 	);
+	const accountGroups = $derived([
+		{
+			id: 'cash',
+			title: 'Cash accounts',
+			description: 'Checking, savings, and cash management.',
+			accounts: accounts.filter((account) => account.accountType !== 'brokerage')
+		},
+		{
+			id: 'brokerage',
+			title: 'Brokerage accounts',
+			description: 'Investments, positions, and performance.',
+			accounts: accounts.filter((account) => account.accountType === 'brokerage')
+		}
+	]);
 	const dialogAccount = $derived(
 		editingId ? accounts.find((account) => account.id === editingId) : undefined
 	);
@@ -168,6 +184,30 @@
 
 	function formatMoney(value: number | null): string {
 		return value === null ? 'Not entered' : money.format(value / 100);
+	}
+
+	function formatHoldingMoney(value: number, currency: string, maximumFractionDigits = 2): string {
+		return new Intl.NumberFormat('en-US', {
+			style: 'currency',
+			currency,
+			minimumFractionDigits: 2,
+			maximumFractionDigits
+		}).format(value);
+	}
+
+	function formatPrice(holding: InvestmentHolding): string {
+		const value = holding.priceMicros / 1_000_000;
+		return formatHoldingMoney(value, holding.currency, Math.abs(value) < 1 ? 4 : 2);
+	}
+
+	function formatHoldingValue(holding: InvestmentHolding): string {
+		return holding.valueCents === null
+			? '—'
+			: formatHoldingMoney(holding.valueCents / 100, holding.currency);
+	}
+
+	function formatQuantity(value: number): string {
+		return quantity.format(value);
 	}
 
 	function formatDate(value: string | null): string {
@@ -307,7 +347,7 @@
 		try {
 			await requestJson(resolve('/api/plaid/sync'), { method: 'POST' });
 			await reloadAccounts();
-			showToast('Plaid balances are up to date.');
+			showToast('Plaid balances and holdings are up to date.');
 		} catch (error) {
 			pageError = readableError(error, 'Plaid accounts could not be synced.');
 		} finally {
@@ -397,7 +437,7 @@
 						onclick={syncPlaidAccounts}
 						disabled={syncing}
 					>
-						{syncing ? 'Syncing…' : 'Sync balances'}
+						{syncing ? 'Syncing…' : 'Sync accounts'}
 					</button>
 				{/if}
 				<button class="finance-button" type="button" onclick={openAdd}>+ Add manually</button>
@@ -463,81 +503,173 @@
 						<p>Credit cards remain on the Dashboard with their payment details.</p>
 					</div>
 				</div>
-				<div class="finance-grid">
-					{#each accounts as account (account.id)}
-						<article class="finance-card">
-							<header>
-								<div>
-									<h3>{account.nickname}</h3>
-									<p>
-										{account.institution ?? 'Institution not entered'}{account.last4
-											? ` · •••• ${account.last4}`
-											: ''}
-									</p>
+				<div class="account-groups">
+					{#each accountGroups as accountGroup (accountGroup.id)}
+						{#if accountGroup.accounts.length > 0}
+							<section
+								class="account-group"
+								aria-labelledby={`${accountGroup.id}-account-list-title`}
+							>
+								<div class="account-group-heading">
+									<h3 id={`${accountGroup.id}-account-list-title`}>{accountGroup.title}</h3>
+									<p>{accountGroup.description}</p>
 								</div>
-								<div class="account-pills">
-									<span class:plaid={account.source === 'plaid'} class="finance-pill source">
-										{account.source === 'plaid' ? 'Plaid' : 'Manual'}
-									</span>
-									<span
-										class:good={account.status === 'active'}
-										class:muted={account.status !== 'active'}
-										class="finance-pill"
-									>
-										{account.status}
-									</span>
-								</div>
-							</header>
-							<div class="finance-card-value">
-								<span>{account.source === 'plaid' ? 'Synced balance' : 'Current balance'}</span>
-								<strong>{formatMoney(account.currentBalanceCents)}</strong>
-							</div>
-							<dl class="finance-details">
-								<div>
-									<dt>Account type</dt>
-									<dd>{typeLabel(account.accountType)}</dd>
-								</div>
-								<div>
-									<dt>Ownership</dt>
-									<dd>{account.ownerType === 'business' ? 'Business' : 'Personal'}</dd>
-								</div>
-								<div>
-									<dt>Opened</dt>
-									<dd>{formatDate(account.openedDate)}</dd>
-								</div>
-								<div>
-									<dt>Data source</dt>
-									<dd>
-										{account.source === 'plaid'
-											? formatSyncTime(account.lastSyncedAt)
-											: 'Manual entry'}
-									</dd>
-								</div>
-								{#if account.accountType === 'brokerage'}
-									<div>
-										<dt>Performance</dt>
-										<dd
-											class:gain={performance(account) !== null && (performance(account) ?? 0) >= 0}
+								<div class="finance-grid">
+									{#each accountGroup.accounts as account (account.id)}
+										<article
+											class:brokerage-with-holdings={account.accountType === 'brokerage' &&
+												account.holdings.length > 0}
+											class="finance-card"
 										>
-											{performanceLabel(account)}
-										</dd>
-									</div>
-								{/if}
-							</dl>
-							<footer>
-								<span>{account.source === 'plaid' ? 'Automatic balance' : 'Manual balance'}</span>
-								<div>
-									<button type="button" onclick={() => openEdit(account)}>
-										{account.source === 'plaid' ? 'Details' : 'Edit'}
-									</button>
-									{#if account.source === 'manual'}
-										<button class="delete" type="button" onclick={() => deleteAccount(account)}>
-											{deletingId === account.id ? 'Deleting…' : 'Delete'}
-										</button>
-									{/if}
+											<header>
+												<div>
+													<h4>{account.nickname}</h4>
+													<p>
+														{account.institution ?? 'Institution not entered'}{account.last4
+															? ` · •••• ${account.last4}`
+															: ''}
+													</p>
+												</div>
+												<div class="account-pills">
+													<span
+														class:plaid={account.source === 'plaid'}
+														class="finance-pill source"
+													>
+														{account.source === 'plaid' ? 'Plaid' : 'Manual'}
+													</span>
+													<span
+														class:good={account.status === 'active'}
+														class:muted={account.status !== 'active'}
+														class="finance-pill"
+													>
+														{account.status}
+													</span>
+												</div>
+											</header>
+											<div class="finance-card-value">
+												<span
+													>{account.source === 'plaid' ? 'Synced balance' : 'Current balance'}</span
+												>
+												<strong>{formatMoney(account.currentBalanceCents)}</strong>
+											</div>
+											<dl class="finance-details">
+												<div>
+													<dt>Account type</dt>
+													<dd>{typeLabel(account.accountType)}</dd>
+												</div>
+												<div>
+													<dt>Ownership</dt>
+													<dd>{account.ownerType === 'business' ? 'Business' : 'Personal'}</dd>
+												</div>
+												<div>
+													<dt>Opened</dt>
+													<dd>{formatDate(account.openedDate)}</dd>
+												</div>
+												<div>
+													<dt>Data source</dt>
+													<dd>
+														{account.source === 'plaid'
+															? formatSyncTime(account.lastSyncedAt)
+															: 'Manual entry'}
+													</dd>
+												</div>
+												{#if account.accountType === 'brokerage'}
+													<div>
+														<dt>Performance</dt>
+														<dd
+															class:gain={performance(account) !== null &&
+																(performance(account) ?? 0) >= 0}
+														>
+															{performanceLabel(account)}
+														</dd>
+													</div>
+												{/if}
+											</dl>
+											{#if account.accountType === 'brokerage' && account.source === 'plaid'}
+												<section class="holding-list" aria-label={`${account.nickname} holdings`}>
+													<div class="holding-list-heading">
+														<h4>Holdings</h4>
+														<span>
+															{account.holdings.length
+																? `${account.holdings.length} ${account.holdings.length === 1 ? 'position' : 'positions'}`
+																: 'No positions reported'}
+														</span>
+													</div>
+													{#if account.holdings.length > 0}
+														<div
+															class="holding-table"
+															role="table"
+															aria-label="Stocks and current prices"
+														>
+															<div class="holding-row heading" role="row">
+																<span role="columnheader">Holding</span>
+																<span role="columnheader">Shares</span>
+																<span role="columnheader">Current price</span>
+																<span role="columnheader">Value</span>
+															</div>
+															{#each account.holdings as holding, index (index)}
+																<div class="holding-row" role="row">
+																	<span class="holding-name" role="cell">
+																		<strong>{holding.tickerSymbol ?? holding.name}</strong>
+																		<small>
+																			{holding.tickerSymbol
+																				? holding.name
+																				: (holding.securityType ?? 'Security')}
+																		</small>
+																	</span>
+																	<span role="cell" data-label="Shares"
+																		>{formatQuantity(holding.quantity)}</span
+																	>
+																	<span
+																		class="holding-price"
+																		role="cell"
+																		data-label="Current price"
+																	>
+																		<strong>{formatPrice(holding)}</strong>
+																		{#if holding.priceAsOf}<small
+																				>as of {formatDate(holding.priceAsOf)}</small
+																			>{/if}
+																	</span>
+																	<span role="cell" data-label="Value"
+																		>{formatHoldingValue(holding)}</span
+																	>
+																</div>
+															{/each}
+														</div>
+													{:else}
+														<p class="holding-empty">
+															No holdings are available from Plaid yet. Sync again after Investments
+															data is ready.
+														</p>
+													{/if}
+												</section>
+											{/if}
+											<footer>
+												<span
+													>{account.source === 'plaid'
+														? 'Automatic balance'
+														: 'Manual balance'}</span
+												>
+												<div>
+													<button type="button" onclick={() => openEdit(account)}>
+														{account.source === 'plaid' ? 'Details' : 'Edit'}
+													</button>
+													{#if account.source === 'manual'}
+														<button
+															class="delete"
+															type="button"
+															onclick={() => deleteAccount(account)}
+														>
+															{deletingId === account.id ? 'Deleting…' : 'Delete'}
+														</button>
+													{/if}
+												</div>
+											</footer>
+										</article>
+									{/each}
 								</div>
-							</footer>
-						</article>
+							</section>
+						{/if}
 					{/each}
 				</div>
 			</section>
@@ -711,6 +843,131 @@
 		color: var(--positive);
 	}
 
+	.account-group + .account-group {
+		margin-top: 2rem;
+		padding-top: 2rem;
+		border-top: 1px solid var(--line);
+	}
+
+	.account-group-heading {
+		margin-bottom: 0.8rem;
+	}
+
+	.account-group-heading h3 {
+		margin: 0;
+		font-size: 0.84rem;
+		letter-spacing: -0.01em;
+	}
+
+	.account-group-heading p {
+		margin: 0.28rem 0 0;
+		color: var(--faint);
+		font-size: 0.64rem;
+	}
+
+	.finance-card h4 {
+		margin: 0;
+		font-size: 1rem;
+		font-weight: 750;
+		letter-spacing: -0.025em;
+	}
+
+	.finance-card.brokerage-with-holdings {
+		grid-column: span 2;
+	}
+
+	.holding-list {
+		margin-top: 1rem;
+		padding-top: 0.9rem;
+		border-top: 1px solid var(--line);
+	}
+
+	.holding-list-heading {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		margin-bottom: 0.55rem;
+	}
+
+	.holding-list h4 {
+		margin: 0;
+		font-size: 0.72rem;
+	}
+
+	.holding-list-heading span,
+	.holding-empty {
+		color: var(--faint);
+		font-size: 0.58rem;
+	}
+
+	.holding-table {
+		border: 1px solid var(--line);
+		border-radius: 9px;
+		overflow: hidden;
+	}
+
+	.holding-row {
+		display: grid;
+		grid-template-columns: minmax(130px, 1.6fr) minmax(70px, 0.7fr) minmax(105px, 0.85fr) minmax(
+				95px,
+				0.8fr
+			);
+		gap: 0.7rem;
+		align-items: center;
+		padding: 0.65rem 0.75rem;
+		font-size: 0.66rem;
+	}
+
+	.holding-row + .holding-row {
+		border-top: 1px solid var(--line);
+	}
+
+	.holding-row.heading {
+		padding-top: 0.48rem;
+		padding-bottom: 0.48rem;
+		color: var(--faint);
+		font-size: 0.54rem;
+		font-weight: 720;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		background: var(--paper-soft);
+	}
+
+	.holding-name,
+	.holding-price {
+		display: grid;
+		gap: 0.13rem;
+		min-width: 0;
+	}
+
+	.holding-name strong,
+	.holding-name small,
+	.holding-price small {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.holding-name strong,
+	.holding-price strong {
+		font-size: 0.68rem;
+	}
+
+	.holding-name small,
+	.holding-price small {
+		color: var(--faint);
+		font-size: 0.54rem;
+	}
+
+	.holding-empty {
+		margin: 0;
+		padding: 0.7rem 0.75rem;
+		border: 1px dashed var(--line-strong);
+		border-radius: 9px;
+		line-height: 1.45;
+		background: var(--paper-soft);
+	}
+
 	.account-toolbar-actions,
 	.empty-account-actions,
 	.account-pills,
@@ -761,9 +1018,52 @@
 	}
 
 	@media (max-width: 620px) {
+		.finance-card.brokerage-with-holdings {
+			grid-column: auto;
+		}
+
 		.account-toolbar-actions {
 			display: grid;
 			width: 100%;
+		}
+
+		.holding-row {
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			gap: 0.55rem 1rem;
+		}
+
+		.holding-row.heading {
+			display: none;
+		}
+
+		.holding-row > span:nth-child(2)::before,
+		.holding-row > span:nth-child(3)::before,
+		.holding-row > span:nth-child(4)::before {
+			content: attr(data-label);
+			display: block;
+			margin-bottom: 0.13rem;
+			color: var(--faint);
+			font-size: 0.5rem;
+			font-weight: 700;
+			text-transform: uppercase;
+		}
+
+		.holding-row > span:nth-child(2),
+		.holding-row > span:nth-child(3),
+		.holding-row > span:nth-child(4) {
+			text-align: left;
+		}
+
+		.holding-row .holding-name {
+			grid-column: 1 / -1;
+		}
+
+		.holding-row > span:nth-child(3) {
+			text-align: center;
+		}
+
+		.holding-row > span:nth-child(4) {
+			text-align: right;
 		}
 	}
 </style>

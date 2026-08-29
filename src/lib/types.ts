@@ -112,6 +112,18 @@ export type FinancialAccountOwner = 'personal' | 'business';
 export type FinancialAccountStatus = 'planned' | 'active' | 'closed';
 export type FinancialAccountSource = 'manual' | 'plaid';
 
+export interface InvestmentHolding {
+	name: string;
+	tickerSymbol: string | null;
+	securityType: string | null;
+	quantity: number;
+	priceMicros: number;
+	valueCents: number | null;
+	costBasisCents: number | null;
+	currency: string;
+	priceAsOf: string | null;
+}
+
 export interface FinancialAccount {
 	id: string;
 	source: FinancialAccountSource;
@@ -124,6 +136,7 @@ export interface FinancialAccount {
 	currency: string;
 	currentBalanceCents: number | null;
 	costBasisCents: number | null;
+	holdings: InvestmentHolding[];
 	openedDate: string | null;
 	notes: string | null;
 	plaidConnectionId: string | null;

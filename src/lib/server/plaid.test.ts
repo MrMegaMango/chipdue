@@ -51,7 +51,7 @@ vi.mock('plaid', async (importOriginal) => {
 
 import { listCards, listCardTransactions, updateCardRewards } from './cards';
 import { resetCryptoStateForTests } from './crypto';
-import { closeDatabaseForTests } from './database';
+import { closeDatabaseForTests, getDatabase } from './database';
 import {
 	createPlaidLinkToken,
 	createPlaidTransactionsUpdateToken,
@@ -325,8 +325,41 @@ describe.sequential('Plaid transaction history', () => {
 		plaidMocks.investmentsHoldingsGet.mockResolvedValueOnce({
 			data: {
 				holdings: [
-					{ account_id: 'account-brokerage', cost_basis: 6_800 },
-					{ account_id: 'account-brokerage', cost_basis: 200 }
+					{
+						account_id: 'account-brokerage',
+						security_id: 'security-equity',
+						cost_basis: 6_800,
+						institution_price: 180,
+						institution_price_as_of: '2026-08-27',
+						institution_value: 7_200,
+						quantity: 40,
+						iso_currency_code: 'USD',
+						unofficial_currency_code: null
+					},
+					{
+						account_id: 'account-brokerage',
+						security_id: 'security-fund',
+						cost_basis: 200,
+						institution_price: 50,
+						institution_value: 1_200,
+						quantity: 24,
+						iso_currency_code: 'USD',
+						unofficial_currency_code: null
+					}
+				],
+				securities: [
+					{
+						security_id: 'security-equity',
+						name: 'Example Equity',
+						ticker_symbol: 'EXMPL',
+						type: 'equity'
+					},
+					{
+						security_id: 'security-fund',
+						name: 'Example Bond Fund',
+						ticker_symbol: 'XBND',
+						type: 'etf'
+					}
 				]
 			}
 		});
@@ -347,10 +380,26 @@ describe.sequential('Plaid transaction history', () => {
 					source: 'plaid',
 					accountType: 'brokerage',
 					currentBalanceCents: 840_000,
-					costBasisCents: 700_000
+					costBasisCents: 700_000,
+					holdings: [
+						expect.objectContaining({
+							name: 'Example Equity',
+							tickerSymbol: 'EXMPL',
+							quantity: 40,
+							priceMicros: 180_000_000,
+							valueCents: 720_000,
+							priceAsOf: '2026-08-27'
+						}),
+						expect.objectContaining({ tickerSymbol: 'XBND', priceMicros: 50_000_000 })
+					]
 				})
 			])
 		);
+		const encryptedRows = JSON.stringify(
+			getDatabase().prepare('SELECT payload_enc FROM cards').all()
+		);
+		expect(encryptedRows).not.toContain('Example Equity');
+		expect(encryptedRows).not.toContain('EXMPL');
 
 		const checking = accounts.find((account) => account.accountType === 'checking');
 		expect(checking).toBeDefined();
@@ -366,7 +415,28 @@ describe.sequential('Plaid transaction history', () => {
 
 		plaidMocks.accountsGet.mockResolvedValueOnce(mixedAccountsResponse(1_575, 8_900));
 		plaidMocks.investmentsHoldingsGet.mockResolvedValueOnce({
-			data: { holdings: [{ account_id: 'account-brokerage', cost_basis: 7_250 }] }
+			data: {
+				holdings: [
+					{
+						account_id: 'account-brokerage',
+						security_id: 'security-equity',
+						cost_basis: 7_250,
+						institution_price: 181.25,
+						institution_value: 7_250,
+						quantity: 40,
+						iso_currency_code: 'USD',
+						unofficial_currency_code: null
+					}
+				],
+				securities: [
+					{
+						security_id: 'security-equity',
+						name: 'Example Equity',
+						ticker_symbol: 'EXMPL',
+						type: 'equity'
+					}
+				]
+			}
 		});
 		await syncPlaidItem(itemId);
 		const refreshed = await listFinancialAccounts();
@@ -379,7 +449,8 @@ describe.sequential('Plaid transaction history', () => {
 		});
 		expect(refreshed.find((account) => account.accountType === 'brokerage')).toMatchObject({
 			currentBalanceCents: 890_000,
-			costBasisCents: 725_000
+			costBasisCents: 725_000,
+			holdings: [expect.objectContaining({ tickerSymbol: 'EXMPL', priceMicros: 181_250_000 })]
 		});
 		expect(await listCards()).toHaveLength(1);
 	});
@@ -400,6 +471,56 @@ describe.sequential('Plaid transaction history', () => {
 		expect(
 			(await listFinancialAccounts()).find((account) => account.accountType === 'brokerage')
 		).toMatchObject({ currentBalanceCents: 840_000, costBasisCents: null });
+	});
+
+	it('preserves the last successful holdings when Investments is temporarily unavailable', async () => {
+		const itemId = await savePlaidItem(
+			'provider-item-holdings-fallback',
+			'test-access-value',
+			'Synthetic Brokerage'
+		);
+		plaidMocks.accountsGet.mockResolvedValueOnce(mixedAccountsResponse());
+		plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
+		plaidMocks.investmentsHoldingsGet.mockResolvedValueOnce({
+			data: {
+				holdings: [
+					{
+						account_id: 'account-brokerage',
+						security_id: 'security-equity',
+						cost_basis: 6_800,
+						institution_price: 180,
+						institution_value: 7_200,
+						quantity: 40,
+						iso_currency_code: 'USD',
+						unofficial_currency_code: null
+					}
+				],
+				securities: [
+					{
+						security_id: 'security-equity',
+						name: 'Example Equity',
+						ticker_symbol: 'EXMPL',
+						type: 'equity'
+					}
+				]
+			}
+		});
+		await syncPlaidItem(itemId);
+
+		plaidMocks.accountsGet.mockResolvedValueOnce(mixedAccountsResponse(1_250, 8_500));
+		plaidMocks.investmentsHoldingsGet.mockRejectedValueOnce({
+			response: { data: { error_code: 'PRODUCT_NOT_READY' } }
+		});
+		await syncPlaidItem(itemId);
+
+		const brokerage = (await listFinancialAccounts()).find(
+			(account) => account.accountType === 'brokerage'
+		);
+		expect(brokerage).toMatchObject({
+			currentBalanceCents: 850_000,
+			costBasisCents: 680_000,
+			holdings: [expect.objectContaining({ tickerSymbol: 'EXMPL', priceMicros: 180_000_000 })]
+		});
 	});
 
 	it('keeps user-entered rewards when a Plaid card refreshes', async () => {

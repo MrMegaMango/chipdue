@@ -14,7 +14,7 @@ Choose one of two deployment modes:
 - Keep a private inventory of personal and business checking, savings, cash-management, and brokerage accounts.
 - Track signup bonuses from opening through requirements, qualification, payout, and safe-to-close dates.
 - Automatically refresh eligible bank and brokerage balances after a one-time Plaid connection and account-selection flow.
-- Record brokerage balances and use Plaid holding cost basis when available to see simple performance without turning ChipDue into a trading terminal.
+- See each Plaid-synced brokerage position, share count, current institution price, value, and holding cost basis while keeping simple account-level performance.
 - Track statement balance, minimum due, current balance, due date, statement date, and autopay status.
 - Track each card’s reward type, base earning rate, current cash-equivalent value, and bonus categories, with estimated points, miles, or cash back shown beside eligible Plaid transactions.
 - Optionally link one Google account for cloud sign-in without storing an email, profile, Google token, or refresh token.

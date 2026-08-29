@@ -12,6 +12,7 @@ import {
 import { Buffer } from 'node:buffer';
 import type { PlaidConnection } from '$lib/types';
 import type { TransactionHistoryStatus } from '$lib/types';
+import type { InvestmentHolding } from '$lib/types';
 import {
 	readPlaidTransactionState,
 	replacePlaidCards,
@@ -43,6 +44,7 @@ const MAX_TRANSACTION_SYNC_PAGES = 100;
 const MAX_TRANSACTION_SYNC_RESTARTS = 3;
 const MAX_STORED_TRANSACTIONS_PER_CARD = 10_000;
 const MAX_INSTITUTION_LOGO_BYTES = 256_000;
+const MAX_STORED_HOLDINGS_PER_ACCOUNT = 1_000;
 let cachedClient: { signature: string; client: PlaidApi } | undefined;
 
 function plaidConfiguration(): {
@@ -251,6 +253,16 @@ function amountToCents(value: number | null): number | null {
 	if (value === null || !Number.isFinite(value)) return null;
 	const cents = Math.round(value * 100);
 	return Number.isSafeInteger(cents) && Math.abs(cents) <= 100_000_000_000 ? cents : null;
+}
+
+function priceToMicros(value: number): number | null {
+	if (!Number.isFinite(value)) return null;
+	const micros = Math.round(value * 1_000_000);
+	return Number.isSafeInteger(micros) && Math.abs(micros) <= 100_000_000_000_000 ? micros : null;
+}
+
+function safeQuantity(value: number): number | null {
+	return Number.isFinite(value) && Math.abs(value) <= 1_000_000_000_000 ? value : null;
 }
 
 function safeCurrency(value: string | null): string {
@@ -488,11 +500,17 @@ export async function syncPlaidItem(
 		}
 
 		const investmentCostBasis = new Map<string, number>();
+		const investmentHoldings = new Map<string, InvestmentHolding[]>();
+		let investmentHoldingsAvailable = false;
 		if (plaidAccounts.some((account) => account.type === AccountType.Investment)) {
 			try {
 				const response = await client.investmentsHoldingsGet({
 					access_token: item.accessToken
 				});
+				investmentHoldingsAvailable = true;
+				const securities = new Map(
+					(response.data.securities ?? []).map((security) => [security.security_id, security])
+				);
 				const totals = new Map<string, { cents: number; complete: boolean; count: number }>();
 				for (const holding of response.data.holdings) {
 					const accountId = safeText(holding.account_id, 256);
@@ -503,6 +521,28 @@ export async function syncPlaidItem(
 					if (costBasis === null) total.complete = false;
 					else total.cents += costBasis;
 					totals.set(accountId, total);
+
+					const quantity = safeQuantity(holding.quantity);
+					const priceMicros = priceToMicros(holding.institution_price);
+					if (quantity === null || priceMicros === null) continue;
+					const security = securities.get(holding.security_id);
+					const tickerSymbol = safeText(security?.ticker_symbol, 32);
+					const priceDate = safeDate(holding.institution_price_as_of ?? null);
+					const priceDateTime = safeText(holding.institution_price_datetime, 40);
+					const position: InvestmentHolding = {
+						name: safeText(security?.name, 160) ?? tickerSymbol ?? 'Unlabeled holding',
+						tickerSymbol,
+						securityType: safeText(security?.type, 32),
+						quantity,
+						priceMicros,
+						valueCents: amountToCents(holding.institution_value),
+						costBasisCents: costBasis,
+						currency: safeCurrency(holding.iso_currency_code ?? holding.unofficial_currency_code),
+						priceAsOf: priceDate ?? safeDate(priceDateTime?.slice(0, 10) ?? null)
+					};
+					const positions = investmentHoldings.get(accountId) ?? [];
+					if (positions.length < MAX_STORED_HOLDINGS_PER_ACCOUNT) positions.push(position);
+					investmentHoldings.set(accountId, positions);
 				}
 				for (const [accountId, total] of totals) {
 					if (total.complete && total.count > 0 && Number.isSafeInteger(total.cents)) {
@@ -579,7 +619,15 @@ export async function syncPlaidItem(
 				),
 				currentBalanceCents: amountToCents(account.balances.current),
 				costBasisCents:
-					accountType === 'brokerage' ? (investmentCostBasis.get(account.account_id) ?? null) : null
+					accountType === 'brokerage'
+						? (investmentCostBasis.get(account.account_id) ?? null)
+						: null,
+				holdings:
+					accountType === 'brokerage' && investmentHoldingsAvailable
+						? (investmentHoldings.get(account.account_id) ?? []).sort(
+								(left, right) => (right.valueCents ?? 0) - (left.valueCents ?? 0)
+							)
+						: null
 			});
 		}
 

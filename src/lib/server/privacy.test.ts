@@ -189,7 +189,8 @@ describe.sequential('private local persistence', () => {
 					last4: '9876',
 					currency: 'USD',
 					currentBalanceCents: 1_234_500,
-					costBasisCents: 1_000_000
+					costBasisCents: 1_000_000,
+					holdings: []
 				}
 			],
 			'2026-08-28T12:00:00.000Z'
