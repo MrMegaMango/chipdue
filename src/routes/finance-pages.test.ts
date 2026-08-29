@@ -165,6 +165,11 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain('Enter a manual fallback if needed.');
 	});
 
+	it('only shows an account opening date when one is available', () => {
+		expect(accountsSource).toContain('{#if account.openedDate}');
+		expect(accountsSource).toContain('<dd>{formatDate(account.openedDate)}</dd>');
+	});
+
 	it('prioritizes automatic account updates over manual entry', () => {
 		const actionsSource = accountsSource.slice(
 			accountsSource.indexOf('class="account-toolbar-actions"'),

@@ -1384,10 +1384,12 @@
 																	</dd>
 																</div>
 															{/if}
-															<div>
-																<dt>Opened</dt>
-																<dd>{formatDate(account.openedDate)}</dd>
-															</div>
+															{#if account.openedDate}
+																<div>
+																	<dt>Opened</dt>
+																	<dd>{formatDate(account.openedDate)}</dd>
+																</div>
+															{/if}
 															<div>
 																<dt>Data source</dt>
 																<dd>
