@@ -198,6 +198,19 @@ describe('card activity preview', () => {
 		expect(source).toContain('rewardCategorySpendingByCard');
 	});
 
+	it('keeps the card reward preview compact and rate-first', () => {
+		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+		expect(source).toContain('const CARD_REWARD_PREVIEW_LIMIT = 4');
+		expect(source).toContain(
+			'card.rewardCategories.slice(0, CARD_REWARD_PREVIEW_LIMIT) as category'
+		);
+		expect(source).toContain('class="reward-base"');
+		expect(source).toContain(
+			'+{card.rewardCategories.length - CARD_REWARD_PREVIEW_LIMIT} more rates'
+		);
+		expect(source).not.toContain('class="reward-summary"');
+	});
+
 	it('keeps both activity header labels on one compact line', () => {
 		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
 		expect(source).toMatch(

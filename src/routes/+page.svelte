@@ -414,6 +414,7 @@
 		year: 'numeric'
 	});
 	const RECENT_ACTIVITY_LIMIT = 3;
+	const CARD_REWARD_PREVIEW_LIMIT = 4;
 	const REWARD_CATEGORY_MATCH_OPTIONS: Array<{
 		value: CardRewardCategoryMatch;
 		label: string;
@@ -2965,36 +2966,32 @@
 
 								{#if card.rewardProgramName || card.rewardValueCents !== null || card.rewardType || card.rewardBaseRate !== null || card.rewardCategories.length > 0}
 									<section class="card-rewards" aria-label={`Rewards for ${card.nickname}`}>
-										<header>
-											<div>
-												<span>Rewards</span>
+										<header class="reward-preview-header">
+											<div class="reward-program">
+												<span class="reward-kicker"
+													>Rewards <span class="reward-separator" aria-hidden="true"></span>
+													{rewardTypeLabel(card.rewardType)}</span
+												>
 												<strong>{card.rewardProgramName ?? 'Card rewards'}</strong>
+												{#if card.rewardValueCents !== null}
+													<small>Cash value {formatMoney(card.rewardValueCents)}</small>
+												{/if}
 											</div>
-											{#if card.rewardValueCents !== null}
-												<div class="reward-value">
-													<span>Cash value</span>
-													<strong>{formatMoney(card.rewardValueCents)}</strong>
+											{#if card.rewardBaseRate !== null}
+												<div class="reward-base">
+													<span>Base</span>
+													<strong>{formatRewardRate(card.rewardBaseRate, card.rewardType)}</strong>
 												</div>
 											{/if}
 										</header>
-										<div class="reward-summary">
-											<div>
-												<span>Reward type</span>
-												<strong>{rewardTypeLabel(card.rewardType)}</strong>
-											</div>
-											<div>
-												<span
-													>{card.rewardType === 'cash_back' ? 'Base rate' : 'Base multiplier'}</span
-												>
-												<strong>{formatRewardRate(card.rewardBaseRate, card.rewardType)}</strong>
-											</div>
-										</div>
 										{#if card.rewardCategories.length > 0}
 											<ul>
-												{#each card.rewardCategories as category (category.id)}
+												{#each card.rewardCategories.slice(0, CARD_REWARD_PREVIEW_LIMIT) as category (category.id)}
 													{@const categorySpending =
 														rewardCategorySpendingByCard[card.id]?.[category.id]}
 													<li>
+														<strong>{formatRewardRate(category.multiplier, card.rewardType)}</strong
+														>
 														<div>
 															<span>{category.name}</span>
 															{#if category.annualSpendCapCents}
@@ -3018,11 +3015,21 @@
 																{/if}
 															{/if}
 														</div>
-														<strong>{formatRewardRate(category.multiplier, card.rewardType)}</strong
-														>
 													</li>
 												{/each}
 											</ul>
+											{#if card.rewardCategories.length > CARD_REWARD_PREVIEW_LIMIT}
+												<button
+													class="reward-more-button"
+													type="button"
+													onclick={() => openRewardsDialog(card)}
+												>
+													+{card.rewardCategories.length - CARD_REWARD_PREVIEW_LIMIT} more rates
+													<svg aria-hidden="true" viewBox="0 0 16 16"
+														><path d="m6 3 5 5-5 5"></path></svg
+													>
+												</button>
+											{/if}
 										{/if}
 									</section>
 								{/if}
@@ -5435,99 +5442,103 @@
 	}
 
 	.card-rewards {
-		margin: 0 1.25rem 1rem;
-		padding: 0.8rem;
-		border: 1px solid #d9d2f0;
-		border-radius: 8px;
-		background: #f7f4ff;
+		margin: 0 1.25rem 1.05rem;
+		padding-top: 0.85rem;
+		border-top: 1px solid #e4ded3;
 	}
 
-	.card-rewards header {
+	.reward-preview-header {
 		display: flex;
-		gap: 0.75rem;
-		align-items: flex-start;
+		gap: 1rem;
+		align-items: center;
 		justify-content: space-between;
 	}
 
-	.card-rewards header > div {
+	.reward-program {
 		display: grid;
 		min-width: 0;
-		gap: 0.12rem;
+		gap: 0.15rem;
 	}
 
-	.card-rewards header span {
-		color: #756c8c;
-		font-size: 0.58rem;
-		font-weight: 720;
+	.reward-kicker {
+		display: inline-flex;
+		gap: 0.32rem;
+		align-items: center;
+		color: var(--faint);
+		font-size: 0.56rem;
+		font-weight: 740;
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
 	}
 
-	.card-rewards header strong {
+	.reward-separator {
+		width: 3px;
+		height: 3px;
+		border-radius: 50%;
+		background: #7585e8;
+	}
+
+	.reward-program > strong {
 		overflow: hidden;
-		font-size: 0.76rem;
-		font-weight: 720;
+		font-size: 0.8rem;
+		font-weight: 730;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
 
-	.card-rewards .reward-value {
-		align-items: end;
-		text-align: right;
-	}
-
-	.card-rewards .reward-value strong {
+	.reward-program > small {
 		color: var(--positive);
+		font-size: 0.6rem;
+		font-weight: 650;
 		font-variant-numeric: tabular-nums;
 	}
 
-	.reward-summary {
+	.reward-base {
 		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 0.55rem;
-		margin-top: 0.7rem;
-		padding-top: 0.65rem;
-		border-top: 1px solid #ded7f2;
+		min-width: 52px;
+		flex: 0 0 auto;
+		gap: 0.05rem;
+		padding: 0.36rem 0.5rem;
+		border-radius: 6px;
+		text-align: right;
+		background: #eef0ff;
 	}
 
-	.reward-summary > div {
-		display: grid;
-		gap: 0.12rem;
-	}
-
-	.reward-summary span {
-		color: #756c8c;
-		font-size: 0.57rem;
-		font-weight: 700;
+	.reward-base span {
+		color: #6c7393;
+		font-size: 0.5rem;
+		font-weight: 720;
 		letter-spacing: 0.06em;
 		text-transform: uppercase;
 	}
 
-	.reward-summary strong {
-		font-size: 0.72rem;
+	.reward-base strong {
+		color: var(--accent);
+		font-size: 0.78rem;
+		font-weight: 760;
 		font-variant-numeric: tabular-nums;
 	}
 
 	.card-rewards ul {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 0.42rem;
-		margin: 0.7rem 0 0;
+		gap: 0.36rem;
+		margin: 0.62rem 0 0;
 		padding: 0;
 		list-style: none;
 	}
 
 	.card-rewards li {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto;
-		gap: 0.5rem;
+		grid-template-columns: auto minmax(0, 1fr);
+		gap: 0.48rem;
 		align-items: center;
 		min-width: 0;
-		padding: 0.48rem 0.52rem;
-		border: 1px solid #ded7f2;
+		padding: 0.5rem 0.54rem;
+		border: 1px solid #e4ded3;
 		border-radius: 6px;
-		color: #544d67;
-		background: white;
+		color: #505766;
+		background: #faf9f6;
 	}
 
 	.card-rewards li > div {
@@ -5537,20 +5548,21 @@
 	}
 
 	.card-rewards li span {
-		font-size: 0.62rem;
+		font-size: 0.61rem;
 		font-weight: 650;
-		line-height: 1.25;
+		line-height: 1.3;
 	}
 
 	.card-rewards li small {
-		color: #817895;
+		color: var(--faint);
 		font-size: 0.53rem;
 		line-height: 1.2;
 	}
 
-	.card-rewards li strong {
+	.card-rewards li > strong {
 		color: var(--accent);
-		font-size: 0.67rem;
+		font-size: 0.76rem;
+		font-weight: 760;
 		font-variant-numeric: tabular-nums;
 	}
 
@@ -5561,7 +5573,7 @@
 		margin-top: 0.08rem;
 		overflow: hidden;
 		border-radius: 999px;
-		background: #e5def5;
+		background: #dedee8;
 	}
 
 	.reward-cap-meter > span {
@@ -5569,6 +5581,35 @@
 		height: 100%;
 		border-radius: inherit;
 		background: var(--accent);
+	}
+
+	.reward-more-button {
+		display: inline-flex;
+		gap: 0.18rem;
+		align-items: center;
+		margin-top: 0.45rem;
+		padding: 0.12rem 0;
+		border: 0;
+		color: var(--accent);
+		font: inherit;
+		font-size: 0.6rem;
+		font-weight: 690;
+		background: transparent;
+		cursor: pointer;
+	}
+
+	.reward-more-button:hover {
+		text-decoration: underline;
+		text-underline-offset: 2px;
+	}
+
+	.reward-more-button svg {
+		width: 10px;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.8;
+		stroke-linecap: round;
+		stroke-linejoin: round;
 	}
 
 	.card-activity-preview {
@@ -7530,10 +7571,6 @@
 	}
 
 	@media (max-width: 430px) {
-		.card-rewards ul {
-			grid-template-columns: 1fr;
-		}
-
 		.header-controls {
 			gap: 0.5rem;
 		}
