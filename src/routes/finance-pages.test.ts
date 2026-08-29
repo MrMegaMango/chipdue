@@ -132,6 +132,9 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain("account.ownerType === 'personal'");
 		expect(accountsSource).toContain("{#if account.accountType !== 'brokerage'}");
 		expect(accountsSource).toContain("{#if form.accountType !== 'brokerage'}");
+		expect(accountsSource.indexOf("id: 'personal'")).toBeLessThan(
+			accountsSource.indexOf("id: 'business'")
+		);
 	});
 
 	it('orders account cards by value within each ownership group', () => {

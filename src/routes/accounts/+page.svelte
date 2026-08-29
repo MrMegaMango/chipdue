@@ -200,17 +200,17 @@
 		}
 		return [
 			{
-				id: 'business',
-				title: 'Business',
-				accounts: sortAccountsByValue(
-					groupAccounts.filter((account) => account.ownerType === 'business')
-				)
-			},
-			{
 				id: 'personal',
 				title: 'Personal',
 				accounts: sortAccountsByValue(
 					groupAccounts.filter((account) => account.ownerType === 'personal')
+				)
+			},
+			{
+				id: 'business',
+				title: 'Business',
+				accounts: sortAccountsByValue(
+					groupAccounts.filter((account) => account.ownerType === 'business')
 				)
 			}
 		];
