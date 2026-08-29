@@ -211,6 +211,16 @@ describe('card activity preview', () => {
 		expect(source).not.toContain('class="reward-summary"');
 	});
 
+	it('places live card activity before static reward reference', () => {
+		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+		const activityIndex = source.indexOf('class="card-activity-preview"');
+		const rewardsIndex = source.indexOf('class="card-rewards"');
+
+		expect(activityIndex).toBeGreaterThan(-1);
+		expect(rewardsIndex).toBeGreaterThan(-1);
+		expect(activityIndex).toBeLessThan(rewardsIndex);
+	});
+
 	it('keeps both activity header labels on one compact line', () => {
 		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
 		expect(source).toMatch(

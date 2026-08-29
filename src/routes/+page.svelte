@@ -2622,7 +2622,7 @@
 						{:else if currentSection === 'cards'}
 							<p class="section-kicker">Credit cards</p>
 							<h1 id="page-title">Cards</h1>
-							<p class="toolbar-description">Payments, rewards, activity, and due dates.</p>
+							<p class="toolbar-description">Payments, due dates, activity, and rewards.</p>
 						{:else}
 							<p class="section-kicker">Workspace</p>
 							<h1 id="page-title">Settings</h1>
@@ -2834,8 +2834,8 @@
 						<strong>Cards</strong>
 						<small
 							>{hasLoadedCards
-								? `${cards.length} tracked · payments, rewards, and activity`
-								: 'Payments, rewards, activity, and due dates'}</small
+								? `${cards.length} tracked · payments, activity, and rewards`
+								: 'Payments, due dates, activity, and rewards'}</small
 						>
 					</span>
 					<svg class="module-arrow" aria-hidden="true" viewBox="0 0 20 20"
@@ -2990,76 +2990,6 @@
 									{/if}
 								</div>
 
-								{#if card.rewardProgramName || card.rewardValueCents !== null || card.rewardType || card.rewardBaseRate !== null || card.rewardCategories.length > 0}
-									<section class="card-rewards" aria-label={`Rewards for ${card.nickname}`}>
-										<header class="reward-preview-header">
-											<div class="reward-program">
-												<span class="reward-kicker"
-													>Rewards <span class="reward-separator" aria-hidden="true"></span>
-													{rewardTypeLabel(card.rewardType)}</span
-												>
-												<strong>{card.rewardProgramName ?? 'Card rewards'}</strong>
-												{#if card.rewardValueCents !== null}
-													<small>Cash value {formatMoney(card.rewardValueCents)}</small>
-												{/if}
-											</div>
-											{#if card.rewardBaseRate !== null}
-												<div class="reward-base">
-													<span>Base</span>
-													<strong>{formatRewardRate(card.rewardBaseRate, card.rewardType)}</strong>
-												</div>
-											{/if}
-										</header>
-										{#if card.rewardCategories.length > 0}
-											<ul>
-												{#each card.rewardCategories.slice(0, CARD_REWARD_PREVIEW_LIMIT) as category (category.id)}
-													{@const categorySpending =
-														rewardCategorySpendingByCard[card.id]?.[category.id]}
-													<li>
-														<strong>{formatRewardRate(category.multiplier, card.rewardType)}</strong
-														>
-														<div>
-															<span>{category.name}</span>
-															{#if category.annualSpendCapCents}
-																{#if categorySpending}
-																	<small>{formatRewardCategorySpending(categorySpending)}</small>
-																	<span
-																		class="reward-cap-meter"
-																		role="progressbar"
-																		aria-label={`${category.name}: ${formatRewardCategorySpending(categorySpending)}`}
-																		aria-valuemin="0"
-																		aria-valuemax="100"
-																		aria-valuenow={rewardCategorySpendPercent(categorySpending)}
-																	>
-																		<span
-																			style:width={`${rewardCategorySpendPercent(categorySpending)}%`}
-																		></span>
-																	</span>
-																{:else}
-																	<small>{formatAnnualSpendCap(category.annualSpendCapCents)}</small
-																	>
-																{/if}
-															{/if}
-														</div>
-													</li>
-												{/each}
-											</ul>
-											{#if card.rewardCategories.length > CARD_REWARD_PREVIEW_LIMIT}
-												<button
-													class="reward-more-button"
-													type="button"
-													onclick={() => openRewardsDialog(card)}
-												>
-													+{card.rewardCategories.length - CARD_REWARD_PREVIEW_LIMIT} more rates
-													<svg aria-hidden="true" viewBox="0 0 16 16"
-														><path d="m6 3 5 5-5 5"></path></svg
-													>
-												</button>
-											{/if}
-										{/if}
-									</section>
-								{/if}
-
 								{#if card.source === 'connected' && card.transactionHistoryEnabled}
 									<section
 										class="card-activity-preview"
@@ -3127,6 +3057,76 @@
 											</ul>
 										{:else}
 											<p class="activity-preview-message">No recent activity yet.</p>
+										{/if}
+									</section>
+								{/if}
+
+								{#if card.rewardProgramName || card.rewardValueCents !== null || card.rewardType || card.rewardBaseRate !== null || card.rewardCategories.length > 0}
+									<section class="card-rewards" aria-label={`Rewards for ${card.nickname}`}>
+										<header class="reward-preview-header">
+											<div class="reward-program">
+												<span class="reward-kicker"
+													>Rewards <span class="reward-separator" aria-hidden="true"></span>
+													{rewardTypeLabel(card.rewardType)}</span
+												>
+												<strong>{card.rewardProgramName ?? 'Card rewards'}</strong>
+												{#if card.rewardValueCents !== null}
+													<small>Cash value {formatMoney(card.rewardValueCents)}</small>
+												{/if}
+											</div>
+											{#if card.rewardBaseRate !== null}
+												<div class="reward-base">
+													<span>Base</span>
+													<strong>{formatRewardRate(card.rewardBaseRate, card.rewardType)}</strong>
+												</div>
+											{/if}
+										</header>
+										{#if card.rewardCategories.length > 0}
+											<ul>
+												{#each card.rewardCategories.slice(0, CARD_REWARD_PREVIEW_LIMIT) as category (category.id)}
+													{@const categorySpending =
+														rewardCategorySpendingByCard[card.id]?.[category.id]}
+													<li>
+														<strong>{formatRewardRate(category.multiplier, card.rewardType)}</strong
+														>
+														<div>
+															<span>{category.name}</span>
+															{#if category.annualSpendCapCents}
+																{#if categorySpending}
+																	<small>{formatRewardCategorySpending(categorySpending)}</small>
+																	<span
+																		class="reward-cap-meter"
+																		role="progressbar"
+																		aria-label={`${category.name}: ${formatRewardCategorySpending(categorySpending)}`}
+																		aria-valuemin="0"
+																		aria-valuemax="100"
+																		aria-valuenow={rewardCategorySpendPercent(categorySpending)}
+																	>
+																		<span
+																			style:width={`${rewardCategorySpendPercent(categorySpending)}%`}
+																		></span>
+																	</span>
+																{:else}
+																	<small>{formatAnnualSpendCap(category.annualSpendCapCents)}</small
+																	>
+																{/if}
+															{/if}
+														</div>
+													</li>
+												{/each}
+											</ul>
+											{#if card.rewardCategories.length > CARD_REWARD_PREVIEW_LIMIT}
+												<button
+													class="reward-more-button"
+													type="button"
+													onclick={() => openRewardsDialog(card)}
+												>
+													+{card.rewardCategories.length - CARD_REWARD_PREVIEW_LIMIT} more rates
+													<svg aria-hidden="true" viewBox="0 0 16 16"
+														><path d="m6 3 5 5-5 5"></path></svg
+													>
+												</button>
+											{/if}
 										{/if}
 									</section>
 								{/if}
