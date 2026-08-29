@@ -3,6 +3,8 @@ import type { AccountBalanceHistoryPoint, FinancialAccount } from '$lib/types';
 export type NetWorthAccount = Pick<
 	FinancialAccount,
 	| 'id'
+	| 'nickname'
+	| 'accountType'
 	| 'status'
 	| 'hidden'
 	| 'currency'
@@ -12,10 +14,24 @@ export type NetWorthAccount = Pick<
 	| 'updatedAt'
 >;
 
+export type NetWorthAccountBreakdown = {
+	accountId: string;
+	nickname: string;
+	accountType: FinancialAccount['accountType'];
+	balanceCents: number;
+	changeCents: number | null;
+	estimated: boolean;
+	backfilled: boolean;
+	sourceRecordedAt: string;
+};
+
 export type NetWorthHistoryPoint = {
 	recordedAt: string;
 	netWorthCents: number;
+	assetCents: number;
+	changeCents: number | null;
 	estimated: boolean;
+	accounts: NetWorthAccountBreakdown[];
 };
 
 export type NetWorthHistory = {
@@ -80,21 +96,42 @@ export function buildNetWorthHistory(
 	const days = [
 		...new Set(accountSnapshots.flatMap(({ snapshots }) => snapshots.map((point) => point.day)))
 	].sort();
+	const previousBalances = new Map<string, number>();
+	let previousNetWorthCents: number | null = null;
 
 	const points = days.map<NetWorthHistoryPoint>((day) => {
 		let estimated = false;
-		let assetCents = 0;
-		for (const { snapshots } of accountSnapshots) {
+		const accountBalances = accountSnapshots.map(({ account, snapshots }) => {
 			const knownSnapshot = snapshots.findLast((snapshot) => snapshot.day <= day);
 			const snapshot = knownSnapshot ?? snapshots[0];
-			if (!knownSnapshot || snapshot.source === 'estimated') estimated = true;
-			assetCents += snapshot.balanceCents;
-		}
-		return {
+			const accountEstimated = !knownSnapshot || snapshot.source === 'estimated';
+			if (accountEstimated) estimated = true;
+			const previousBalance = previousBalances.get(account.id);
+			const balance: NetWorthAccountBreakdown = {
+				accountId: account.id,
+				nickname: account.nickname,
+				accountType: account.accountType,
+				balanceCents: snapshot.balanceCents,
+				changeCents: previousBalance === undefined ? null : snapshot.balanceCents - previousBalance,
+				estimated: accountEstimated,
+				backfilled: !knownSnapshot,
+				sourceRecordedAt: snapshot.recordedAt
+			};
+			previousBalances.set(account.id, snapshot.balanceCents);
+			return balance;
+		});
+		const assetCents = accountBalances.reduce((total, account) => total + account.balanceCents, 0);
+		const netWorthCents = assetCents - cardBalanceCents;
+		const point: NetWorthHistoryPoint = {
 			recordedAt: `${day}T12:00:00.000Z`,
-			netWorthCents: assetCents - cardBalanceCents,
-			estimated
+			netWorthCents,
+			assetCents,
+			changeCents: previousNetWorthCents === null ? null : netWorthCents - previousNetWorthCents,
+			estimated,
+			accounts: accountBalances
 		};
+		previousNetWorthCents = netWorthCents;
+		return point;
 	});
 	const currentAssetCents =
 		supportedAccounts.length > 0

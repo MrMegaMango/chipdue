@@ -1,12 +1,14 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { buildNetWorthHistory, type NetWorthAccount } from '$lib/net-worth';
+	import {
+		buildNetWorthHistory,
+		type NetWorthAccount,
+		type NetWorthAccountBreakdown,
+		type NetWorthHistoryPoint
+	} from '$lib/net-worth';
 
 	type HistoryRange = '1M' | '3M' | '1Y' | 'ALL';
-	type ChartPoint = {
-		recordedAt: string;
-		netWorthCents: number;
-		estimated: boolean;
+	type ChartPoint = NetWorthHistoryPoint & {
 		x: number;
 		y: number;
 	};
@@ -38,6 +40,12 @@
 		currency: 'USD',
 		maximumFractionDigits: 0
 	});
+	const detailedMoney = new Intl.NumberFormat('en-US', {
+		style: 'currency',
+		currency: 'USD',
+		minimumFractionDigits: 2,
+		maximumFractionDigits: 2
+	});
 	const compactMoney = new Intl.NumberFormat('en-US', {
 		style: 'currency',
 		currency: 'USD',
@@ -53,6 +61,7 @@
 
 	let selectedRange = $state<HistoryRange>('1Y');
 	let hoveredIndex = $state<number | null>(null);
+	let selectedRecordedAt = $state<string | null>(null);
 	const history = $derived(buildNetWorthHistory(accounts, cardBalanceCents));
 	const visibleHistory = $derived(pointsForRange(history.points, selectedRange));
 	const chart = $derived(chartFor(visibleHistory));
@@ -68,6 +77,14 @@
 	);
 	const hoveredPoint = $derived(
 		hoveredIndex === null ? null : (chart.points[hoveredIndex] ?? null)
+	);
+	const selectedPoint = $derived(
+		selectedRecordedAt === null
+			? null
+			: (history.points.find((point) => point.recordedAt === selectedRecordedAt) ?? null)
+	);
+	const selectedBreakdown = $derived(
+		selectedPoint === null ? [] : sortBreakdown(selectedPoint.accounts)
 	);
 
 	function pointsForRange(
@@ -150,21 +167,85 @@
 		return compactMoney.format(value / 100);
 	}
 
+	function formatDetailedMoney(value: number): string {
+		return detailedMoney.format(value / 100);
+	}
+
+	function formatSignedMoney(value: number | null): string {
+		if (value === null) return '—';
+		return `${value >= 0 ? '+' : '−'}${formatDetailedMoney(Math.abs(value))}`;
+	}
+
+	function formatCardDeduction(value: number): string {
+		return value === 0 ? formatDetailedMoney(value) : `−${formatDetailedMoney(value)}`;
+	}
+
 	function formatDate(value: string, full = false): string {
 		return (full ? fullDateLabel : dateLabel).format(new Date(value));
 	}
 
-	function handlePointerMove(event: PointerEvent): void {
-		if (chart.points.length === 0) return;
-		const bounds = (event.currentTarget as SVGSVGElement).getBoundingClientRect();
-		const x = ((event.clientX - bounds.left) / bounds.width) * WIDTH;
+	function accountTypeLabel(value: NetWorthAccountBreakdown['accountType']): string {
+		return value === 'cash_management'
+			? 'Cash management'
+			: `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
+	}
+
+	function sourceLabel(account: NetWorthAccountBreakdown): string {
+		if (account.backfilled) return 'Earliest known';
+		return account.estimated ? 'Estimated' : 'Observed';
+	}
+
+	function sortBreakdown(accountsForDate: NetWorthAccountBreakdown[]): NetWorthAccountBreakdown[] {
+		return accountsForDate.slice().sort((left, right) => {
+			const changeDifference = Math.abs(right.changeCents ?? 0) - Math.abs(left.changeCents ?? 0);
+			return changeDifference || right.balanceCents - left.balanceCents;
+		});
+	}
+
+	function nearestPointIndex(clientX: number, target: SVGSVGElement): number {
+		const bounds = target.getBoundingClientRect();
+		const x = ((clientX - bounds.left) / bounds.width) * WIDTH;
 		let nearest = 0;
 		for (let index = 1; index < chart.points.length; index += 1) {
 			if (Math.abs(chart.points[index].x - x) < Math.abs(chart.points[nearest].x - x)) {
 				nearest = index;
 			}
 		}
-		hoveredIndex = nearest;
+		return nearest;
+	}
+
+	function handlePointerMove(event: PointerEvent): void {
+		if (chart.points.length === 0) return;
+		hoveredIndex = nearestPointIndex(event.clientX, event.currentTarget as SVGSVGElement);
+	}
+
+	function selectPoint(index: number): void {
+		const point = chart.points[index];
+		if (!point) return;
+		selectedRecordedAt = point.recordedAt;
+		hoveredIndex = index;
+	}
+
+	function handleChartClick(event: MouseEvent): void {
+		if (chart.points.length === 0) return;
+		selectPoint(nearestPointIndex(event.clientX, event.currentTarget as SVGSVGElement));
+	}
+
+	function handleChartKeydown(event: KeyboardEvent): void {
+		if (
+			!['ArrowLeft', 'ArrowRight', 'Enter', ' '].includes(event.key) ||
+			chart.points.length === 0
+		) {
+			return;
+		}
+		event.preventDefault();
+		let index = selectedRecordedAt
+			? chart.points.findIndex((point) => point.recordedAt === selectedRecordedAt)
+			: chart.points.length - 1;
+		if (index < 0) index = chart.points.length - 1;
+		if (event.key === 'ArrowLeft') index = Math.max(0, index - 1);
+		if (event.key === 'ArrowRight') index = Math.min(chart.points.length - 1, index + 1);
+		selectPoint(index);
 	}
 </script>
 
@@ -219,7 +300,10 @@
 		</div>
 
 		<div class="chart-toolbar">
-			<p>Active, visible USD account balances minus current credit-card balances.</p>
+			<p id="net-worth-chart-help">
+				Active, visible USD account balances minus current credit-card balances. Click a date for
+				details.
+			</p>
 			<div class="range-controls" aria-label="Net worth history range">
 				{#each ranges as range (range.id)}
 					<button
@@ -228,6 +312,7 @@
 						onclick={() => {
 							selectedRange = range.id;
 							hoveredIndex = null;
+							selectedRecordedAt = null;
 						}}
 					>
 						{range.label}
@@ -240,12 +325,16 @@
 			<svg
 				class="net-worth-chart"
 				viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-				role="img"
+				role="button"
+				tabindex="0"
+				aria-describedby="net-worth-chart-help"
 				aria-label={firstPoint && latestPoint
-					? `Net worth from ${formatDate(firstPoint.recordedAt, true)} to ${formatDate(latestPoint.recordedAt, true)}`
+					? `Select a net worth date from ${formatDate(firstPoint.recordedAt, true)} to ${formatDate(latestPoint.recordedAt, true)}`
 					: 'Current net worth'}
 				onpointermove={handlePointerMove}
 				onpointerleave={() => (hoveredIndex = null)}
+				onclick={handleChartClick}
+				onkeydown={handleChartKeydown}
 			>
 				<defs>
 					<linearGradient id="net-worth-fill" x1="0" x2="0" y1="0" y2="1">
@@ -275,8 +364,13 @@
 					<path d={chart.linePath} class="value-line"></path>
 				{/if}
 				{#each chart.points as point, index (point.recordedAt)}
-					{#if index === chart.points.length - 1 || index === hoveredIndex}
-						<circle cx={point.x} cy={point.y} r={index === hoveredIndex ? 6 : 4.5} class="value-dot"
+					{#if index === chart.points.length - 1 || index === hoveredIndex || point.recordedAt === selectedRecordedAt}
+						<circle
+							cx={point.x}
+							cy={point.y}
+							r={index === hoveredIndex || point.recordedAt === selectedRecordedAt ? 6 : 4.5}
+							class:selected={point.recordedAt === selectedRecordedAt}
+							class="value-dot"
 						></circle>
 					{/if}
 				{/each}
@@ -299,6 +393,89 @@
 				</div>
 			{/if}
 		</div>
+
+		{#if selectedPoint}
+			<section class="date-breakdown" aria-labelledby="date-breakdown-title" aria-live="polite">
+				<header>
+					<div>
+						<p>Selected date</p>
+						<h3 id="date-breakdown-title">{formatDate(selectedPoint.recordedAt, true)}</h3>
+					</div>
+					<div
+						class:negative={selectedPoint.changeCents !== null && selectedPoint.changeCents < 0}
+						class="selected-total"
+					>
+						<span>Net worth</span>
+						<strong>{formatDetailedMoney(selectedPoint.netWorthCents)}</strong>
+						<small>{formatSignedMoney(selectedPoint.changeCents)} from previous date</small>
+					</div>
+					<button
+						type="button"
+						aria-label="Close date breakdown"
+						onclick={() => (selectedRecordedAt = null)}>×</button
+					>
+				</header>
+
+				<div class="breakdown-summary">
+					<div>
+						<span>Account assets</span>
+						<strong>{formatDetailedMoney(selectedPoint.assetCents)}</strong>
+					</div>
+					<div class="negative">
+						<span>Current card balances</span>
+						<strong>{formatCardDeduction(history.cardBalanceCents)}</strong>
+					</div>
+					<div>
+						<span>Net worth</span>
+						<strong>{formatDetailedMoney(selectedPoint.netWorthCents)}</strong>
+					</div>
+				</div>
+
+				<div class="breakdown-table-wrap">
+					<table>
+						<caption>Account breakdown for {formatDate(selectedPoint.recordedAt, true)}</caption>
+						<thead>
+							<tr>
+								<th scope="col">Account</th>
+								<th scope="col">Balance</th>
+								<th scope="col">Change</th>
+								<th scope="col">Source</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each selectedBreakdown as account (account.accountId)}
+								<tr>
+									<th scope="row">
+										<strong>{account.nickname}</strong>
+										<small>{accountTypeLabel(account.accountType)}</small>
+									</th>
+									<td>{formatDetailedMoney(account.balanceCents)}</td>
+									<td
+										class:positive={account.changeCents !== null && account.changeCents > 0}
+										class:negative={account.changeCents !== null && account.changeCents < 0}
+									>
+										{formatSignedMoney(account.changeCents)}
+									</td>
+									<td>
+										<span
+											class:estimated={account.estimated}
+											class:backfilled={account.backfilled}
+											class="source-pill"
+										>
+											{sourceLabel(account)}
+										</span>
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+				<p class="breakdown-note">
+					Changes compare with the previous available date. Current card balances are applied to
+					every historical date.
+				</p>
+			</section>
+		{/if}
 
 		<footer>
 			<span class="legend"><i></i>Net worth</span>
@@ -445,6 +622,13 @@
 		width: 100%;
 		height: auto;
 		overflow: visible;
+		cursor: crosshair;
+	}
+
+	.net-worth-chart:focus-visible {
+		border-radius: 8px;
+		outline: 3px solid color-mix(in srgb, var(--accent) 35%, transparent);
+		outline-offset: 2px;
 	}
 
 	.grid-line {
@@ -464,6 +648,12 @@
 		fill: white;
 		stroke: var(--accent);
 		stroke-width: 3;
+	}
+
+	.value-dot.selected {
+		fill: var(--accent);
+		stroke: white;
+		stroke-width: 2.5;
 	}
 
 	.net-worth-chart text {
@@ -495,6 +685,188 @@
 	.chart-tooltip strong {
 		font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 		font-size: 0.75rem;
+	}
+
+	.date-breakdown {
+		margin-top: 0.9rem;
+		border: 1px solid var(--line);
+		border-radius: 10px;
+		background: rgba(246, 243, 236, 0.52);
+		overflow: hidden;
+	}
+
+	.date-breakdown > header {
+		display: grid;
+		grid-template-columns: 1fr auto auto;
+		gap: 1rem;
+		align-items: center;
+		padding: 0.8rem 0.9rem;
+		border-bottom: 1px solid var(--line);
+		background: rgba(255, 253, 249, 0.82);
+	}
+
+	.date-breakdown header p,
+	.date-breakdown header h3,
+	.date-breakdown p {
+		margin: 0;
+	}
+
+	.date-breakdown header p,
+	.selected-total span,
+	.selected-total small,
+	.breakdown-summary span {
+		color: var(--faint);
+		font-size: 0.58rem;
+	}
+
+	.date-breakdown header p {
+		font-weight: 760;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+
+	.date-breakdown h3 {
+		margin-top: 0.15rem;
+		font-size: 0.86rem;
+	}
+
+	.selected-total {
+		display: grid;
+		gap: 0.1rem;
+		text-align: right;
+	}
+
+	.selected-total strong,
+	.breakdown-summary strong,
+	.date-breakdown td:nth-child(2),
+	.date-breakdown td:nth-child(3) {
+		font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.selected-total strong {
+		font-size: 0.86rem;
+	}
+
+	.selected-total.negative strong,
+	.selected-total.negative small,
+	.breakdown-summary .negative strong,
+	.date-breakdown td.negative {
+		color: var(--red);
+	}
+
+	.date-breakdown td.positive {
+		color: var(--positive);
+	}
+
+	.date-breakdown > header button {
+		width: 28px;
+		height: 28px;
+		border: 1px solid var(--line);
+		border-radius: 7px;
+		color: var(--muted);
+		font-size: 1rem;
+		line-height: 1;
+		background: white;
+		cursor: pointer;
+	}
+
+	.breakdown-summary {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		border-bottom: 1px solid var(--line);
+	}
+
+	.breakdown-summary > div {
+		display: grid;
+		gap: 0.15rem;
+		padding: 0.65rem 0.9rem;
+	}
+
+	.breakdown-summary > div + div {
+		border-left: 1px solid var(--line);
+	}
+
+	.breakdown-summary strong {
+		font-size: 0.74rem;
+	}
+
+	.breakdown-table-wrap {
+		overflow-x: auto;
+	}
+
+	.date-breakdown table {
+		width: 100%;
+		border-collapse: collapse;
+	}
+
+	.date-breakdown caption {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		padding: 0;
+		margin: -1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		border: 0;
+	}
+
+	.date-breakdown th,
+	.date-breakdown td {
+		padding: 0.58rem 0.9rem;
+		border-bottom: 1px solid rgba(214, 207, 196, 0.72);
+		text-align: left;
+	}
+
+	.date-breakdown thead th {
+		color: var(--faint);
+		font-size: 0.55rem;
+		font-weight: 740;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+	}
+
+	.date-breakdown tbody th {
+		display: grid;
+		gap: 0.08rem;
+		font-size: 0.64rem;
+	}
+
+	.date-breakdown tbody th small {
+		color: var(--faint);
+		font-size: 0.54rem;
+		font-weight: 500;
+	}
+
+	.date-breakdown td {
+		font-size: 0.63rem;
+	}
+
+	.source-pill {
+		display: inline-flex;
+		padding: 0.2rem 0.36rem;
+		border-radius: 999px;
+		color: var(--muted);
+		font-size: 0.52rem;
+		font-weight: 720;
+		background: #e9e5dc;
+	}
+
+	.source-pill.estimated {
+		color: #6b4c13;
+		background: #fff0cf;
+	}
+
+	.source-pill.backfilled {
+		color: #4d5672;
+		background: #e7eafa;
+	}
+
+	.breakdown-note {
+		padding: 0.6rem 0.9rem 0.7rem;
+		color: var(--faint);
+		font-size: 0.56rem;
 	}
 
 	.net-worth-panel footer {
@@ -607,6 +979,25 @@
 			overflow-x: auto;
 			padding-bottom: 0.25rem;
 		}
+
+		.date-breakdown > header {
+			grid-template-columns: 1fr auto;
+		}
+
+		.selected-total {
+			grid-column: 1 / -1;
+			grid-row: 2;
+			text-align: left;
+		}
+
+		.date-breakdown > header button {
+			grid-column: 2;
+			grid-row: 1;
+		}
+
+		.date-breakdown table {
+			min-width: 560px;
+		}
 	}
 
 	@media (max-width: 430px) {
@@ -629,6 +1020,15 @@
 		.net-worth-empty {
 			align-items: flex-start;
 			flex-wrap: wrap;
+		}
+
+		.breakdown-summary {
+			grid-template-columns: 1fr;
+		}
+
+		.breakdown-summary > div + div {
+			border-top: 1px solid var(--line);
+			border-left: 0;
 		}
 	}
 </style>
