@@ -185,6 +185,7 @@ describe('card activity preview', () => {
 
 	it('shows three recent transactions and keeps full history behind a button', () => {
 		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+		expect(source).not.toContain('Auto-detected');
 		expect(source).toContain('const RECENT_ACTIVITY_LIMIT = 3');
 		expect(source).toContain('Recent activity');
 		expect(source).toContain('View all activity');

@@ -2832,11 +2832,7 @@
 									<section class="card-rewards" aria-label={`Rewards for ${card.nickname}`}>
 										<header>
 											<div>
-												<span
-													>Rewards{card.rewardSource === 'automatic'
-														? ' · Auto-detected'
-														: ''}</span
-												>
+												<span>Rewards</span>
 												<strong>{card.rewardProgramName ?? 'Card rewards'}</strong>
 											</div>
 											{#if card.rewardValueCents !== null}
