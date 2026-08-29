@@ -72,6 +72,7 @@ export interface StoredPlaidTransaction {
 
 export interface StoredTransactionHistory {
 	enabled: true;
+	accountReference?: string;
 	cursor: string | null;
 	status: TransactionHistoryStatus;
 	transactions: StoredPlaidTransaction[];
@@ -173,6 +174,9 @@ function isStoredTransactionHistory(value: unknown): value is StoredTransactionH
 	const history = value as Partial<StoredTransactionHistory>;
 	return (
 		history.enabled === true &&
+		(history.accountReference === undefined ||
+			(typeof history.accountReference === 'string' &&
+				/^[A-Za-z0-9_-]{43}$/.test(history.accountReference))) &&
 		(history.cursor === null ||
 			(typeof history.cursor === 'string' && history.cursor.length <= 256)) &&
 		typeof history.status === 'string' &&
@@ -181,6 +185,20 @@ function isStoredTransactionHistory(value: unknown): value is StoredTransactionH
 		history.transactions.length <= MAX_STORED_TRANSACTIONS &&
 		history.transactions.every(isStoredPlaidTransaction)
 	);
+}
+
+function transactionHistoryFromRow(row: CardRow): StoredTransactionHistory | undefined {
+	const value = decryptJson<unknown>(row.payload_enc, `card:${row.id}`);
+	if (value && typeof value === 'object' && 'recordType' in value) {
+		const record = value as { recordType?: unknown; transactionHistory?: unknown };
+		if (record.recordType !== 'account' || record.transactionHistory === undefined)
+			return undefined;
+		if (!isStoredTransactionHistory(record.transactionHistory)) {
+			throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
+		}
+		return record.transactionHistory;
+	}
+	return decodePayload(row)?.transactionHistory;
 }
 
 function isStoredIssuerLogo(value: unknown): value is string | null | undefined {
@@ -807,7 +825,7 @@ export async function readPlaidTransactionState(
 					)
 					.all(plaidItemId) as CardRow[]);
 	const enabledRows = rows
-		.map((row) => ({ row, history: decodePayload(row)?.transactionHistory }))
+		.map((row) => ({ row, history: transactionHistoryFromRow(row) }))
 		.filter(
 			(value): value is { row: CardRow; history: StoredTransactionHistory } =>
 				value.history !== undefined
@@ -832,7 +850,9 @@ export async function readPlaidTransactionState(
 		status,
 		byAccountReference: new Map(
 			enabledRows.flatMap(({ row, history }) =>
-				row.external_account_ref ? [[row.external_account_ref, history.transactions] as const] : []
+				history.accountReference || row.external_account_ref
+					? [[history.accountReference ?? row.external_account_ref!, history.transactions] as const]
+					: []
 			)
 		)
 	};

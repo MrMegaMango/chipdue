@@ -61,7 +61,11 @@ import {
 } from './plaid';
 import { savePlaidItem } from './plaid-store';
 import { updateCardRewardsSchema } from './schemas';
-import { listFinancialAccounts, updateFinancialAccount } from './financial-records';
+import {
+	listFinancialAccounts,
+	listFinancialAccountTransactions,
+	updateFinancialAccount
+} from './financial-records';
 
 function liabilityResponse() {
 	return {
@@ -148,11 +152,12 @@ function transaction(
 	id: string,
 	amount: number,
 	name: string,
-	date: string
+	date: string,
+	accountId = 'account-alpha'
 ): Record<string, unknown> {
 	return {
 		transaction_id: id,
-		account_id: 'account-alpha',
+		account_id: accountId,
 		amount,
 		name,
 		merchant_name: name,
@@ -676,6 +681,94 @@ describe.sequential('Plaid transaction history', () => {
 		expect(history.transactions).toHaveLength(1);
 		expect(history.transactions[0]).toMatchObject({
 			name: 'Merchant alpha',
+			amountCents: 2_150
+		});
+	});
+
+	it('persists and incrementally refreshes activity for a linked checking account', async () => {
+		const itemId = await savePlaidItem(
+			'provider-item-checking-history',
+			'test-access-value',
+			'Synthetic Bank'
+		);
+		plaidMocks.accountsGet.mockResolvedValue({
+			data: {
+				accounts: [
+					{
+						account_id: 'account-checking',
+						name: 'Business checking',
+						mask: '1212',
+						type: 'depository',
+						subtype: 'checking',
+						balances: {
+							current: 2_500,
+							iso_currency_code: 'USD',
+							unofficial_currency_code: null
+						}
+					}
+				]
+			}
+		});
+		plaidMocks.transactionsSync.mockResolvedValueOnce({
+			data: {
+				added: [
+					transaction(
+						'transaction-checking',
+						12.34,
+						'Synthetic purchase',
+						'2026-08-28',
+						'account-checking'
+					)
+				],
+				modified: [],
+				removed: [],
+				next_cursor: 'cursor-checking-one',
+				has_more: false,
+				transactions_update_status: 'HISTORICAL_UPDATE_COMPLETE'
+			}
+		});
+
+		const firstSync = await syncPlaidItem(itemId, { enableTransactions: true });
+		expect(firstSync).toMatchObject({ count: 0, accountCount: 1, transactionCount: 1 });
+		const [checking] = await listFinancialAccounts();
+		expect(checking).toMatchObject({
+			transactionHistoryEnabled: true,
+			transactionHistoryStatus: 'HISTORICAL_UPDATE_COMPLETE'
+		});
+		expect((await listFinancialAccountTransactions(checking.id)).transactions).toMatchObject([
+			{ name: 'Synthetic purchase', amountCents: 1_234 }
+		]);
+		await updateFinancialAccount(checking.id, {
+			ownerType: 'business',
+			openedDate: '2026-08-27'
+		});
+
+		plaidMocks.transactionsSync.mockResolvedValueOnce({
+			data: {
+				added: [],
+				modified: [
+					transaction(
+						'transaction-checking',
+						21.5,
+						'Synthetic purchase',
+						'2026-08-28',
+						'account-checking'
+					)
+				],
+				removed: [],
+				next_cursor: 'cursor-checking-two',
+				has_more: false,
+				transactions_update_status: 'HISTORICAL_UPDATE_COMPLETE'
+			}
+		});
+		await syncPlaidItem(itemId);
+		expect(plaidMocks.transactionsSync).toHaveBeenLastCalledWith(
+			expect.objectContaining({ cursor: 'cursor-checking-one' })
+		);
+		const [refreshed] = await listFinancialAccounts();
+		expect(refreshed).toMatchObject({ ownerType: 'business', openedDate: '2026-08-27' });
+		expect((await listFinancialAccountTransactions(refreshed.id)).transactions[0]).toMatchObject({
+			name: 'Synthetic purchase',
 			amountCents: 2_150
 		});
 	});

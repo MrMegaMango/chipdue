@@ -42,6 +42,18 @@ describe('financial workspace navigation', () => {
 		}
 	});
 
+	it('shows a live Wells Fargo tracker for the linked business checking offer', () => {
+		for (const marker of [
+			'Linked Wells Fargo tracker',
+			'Current synced balance',
+			'Likely qualifying activity',
+			'Check Wells Fargo now',
+			'WELLS_FARGO_BUSINESS_BONUS_TIERS'
+		]) {
+			expect(bonusesSource).toContain(marker);
+		}
+	});
+
 	it('keeps new financial data out of persistent browser storage', () => {
 		for (const source of [accountsSource, bonusesSource]) {
 			expect(source).not.toContain('localStorage');

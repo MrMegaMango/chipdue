@@ -575,16 +575,17 @@ export async function syncPlaidItem(
 
 		for (const account of plaidAccounts) {
 			const liability = liabilities.get(account.account_id);
+			const transactionReference = privateFingerprint(account.account_id, 'plaid-account');
+			const transactionHistory: StoredTransactionHistory | undefined = transactionState.enabled
+				? {
+						enabled: true,
+						accountReference: transactionReference,
+						cursor: transactionState.cursor,
+						status: transactionState.status,
+						transactions: transactionState.byAccountReference.get(transactionReference) ?? []
+					}
+				: undefined;
 			if (account.type === AccountType.Credit) {
-				const accountReference = privateFingerprint(account.account_id, 'plaid-account');
-				const transactionHistory: StoredTransactionHistory | undefined = transactionState.enabled
-					? {
-							enabled: true,
-							cursor: transactionState.cursor,
-							status: transactionState.status,
-							transactions: transactionState.byAccountReference.get(accountReference) ?? []
-						}
-					: undefined;
 				snapshots.push({
 					accountId: account.account_id,
 					nickname: account.name.trim().slice(0, 80) || 'Credit card',
@@ -627,7 +628,8 @@ export async function syncPlaidItem(
 						? (investmentHoldings.get(account.account_id) ?? []).sort(
 								(left, right) => (right.valueCents ?? 0) - (left.valueCents ?? 0)
 							)
-						: null
+						: null,
+				...(transactionHistory ? { transactionHistory } : {})
 			});
 		}
 

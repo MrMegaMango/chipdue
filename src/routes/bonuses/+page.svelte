@@ -1,12 +1,28 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
+	import {
+		buildWellsFargoBusinessTracker,
+		WELLS_FARGO_BUSINESS_BONUS_TIERS,
+		type WellsFargoBusinessTracker
+	} from '$lib/bonus-tracker';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
-	import type { AccountBonus, BonusStatus, FinancialAccount } from '$lib/types';
+	import type {
+		AccountBonus,
+		BonusStatus,
+		FinancialAccount,
+		FinancialAccountTransaction,
+		TransactionHistoryStatus
+	} from '$lib/types';
 	import '$lib/finance-pages.css';
 
 	type RuntimeMode = 'local' | 'cloud';
 	type SessionResponse = { mode: RuntimeMode; authenticated: boolean };
+	type AccountActivity = {
+		transactions: FinancialAccountTransaction[];
+		status: TransactionHistoryStatus;
+		lastSyncedAt: string | null;
+	};
 	type BonusForm = {
 		name: string;
 		institution: string;
@@ -46,6 +62,9 @@
 	let busy = $state(false);
 	let deletingId = $state<string | null>(null);
 	let requirementBusy = $state<string | null>(null);
+	let activityByAccount = $state<Record<string, AccountActivity>>({});
+	let activityErrors = $state<Record<string, string>>({});
+	let syncingAccountId = $state<string | null>(null);
 	let loggingOut = $state(false);
 	let toast = $state('');
 	let toastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -107,6 +126,7 @@
 			]);
 			bonuses = bonusResponse.bonuses;
 			accounts = accountResponse.accounts;
+			await loadLinkedAccountActivity(bonusResponse.bonuses, accountResponse.accounts);
 		} catch (error) {
 			pageError = readableError(error, 'Your bonuses could not be loaded.');
 		} finally {
@@ -146,6 +166,16 @@
 
 	function formatDate(value: string | null): string {
 		return value ? fullDate.format(new Date(`${value}T12:00:00`)) : 'Not entered';
+	}
+
+	function formatSyncTime(value: string | null): string {
+		if (!value) return 'Not checked yet';
+		return new Intl.DateTimeFormat('en-US', {
+			month: 'short',
+			day: 'numeric',
+			hour: 'numeric',
+			minute: '2-digit'
+		}).format(new Date(value));
 	}
 
 	function daysUntil(value: string | null): number {
@@ -191,6 +221,70 @@
 
 	function linkedAccount(bonus: AccountBonus): FinancialAccount | null {
 		return accounts.find((account) => account.id === bonus.accountId) ?? null;
+	}
+
+	function trackerFor(bonus: AccountBonus): WellsFargoBusinessTracker | null {
+		const account = linkedAccount(bonus);
+		return buildWellsFargoBusinessTracker(
+			bonus,
+			account,
+			account ? (activityByAccount[account.id]?.transactions ?? []) : []
+		);
+	}
+
+	async function loadAccountActivity(account: FinancialAccount): Promise<void> {
+		if (account.source !== 'plaid' || !account.transactionHistoryEnabled) return;
+		try {
+			const activity = await requestJson<AccountActivity>(
+				resolve('/api/accounts/[id]/transactions', { id: account.id })
+			);
+			activityByAccount = { ...activityByAccount, [account.id]: activity };
+			activityErrors = { ...activityErrors, [account.id]: '' };
+		} catch (error) {
+			activityErrors = {
+				...activityErrors,
+				[account.id]: readableError(error, 'Linked account activity could not be loaded.')
+			};
+		}
+	}
+
+	async function loadLinkedAccountActivity(
+		loadedBonuses: AccountBonus[],
+		loadedAccounts: FinancialAccount[]
+	): Promise<void> {
+		const linkedIds = new Set(loadedBonuses.map((bonus) => bonus.accountId).filter(Boolean));
+		await Promise.all(
+			loadedAccounts
+				.filter((account) => linkedIds.has(account.id))
+				.map((account) => loadAccountActivity(account))
+		);
+	}
+
+	async function checkLinkedAccount(bonus: AccountBonus): Promise<void> {
+		const account = linkedAccount(bonus);
+		if (!account?.plaidConnectionId || syncingAccountId) return;
+		syncingAccountId = account.id;
+		activityErrors = { ...activityErrors, [account.id]: '' };
+		try {
+			await requestJson(
+				resolve('/api/plaid/items/[id]/transactions/sync', { id: account.plaidConnectionId }),
+				{ method: 'POST' }
+			);
+			const response = await requestJson<{ accounts: FinancialAccount[] }>(
+				resolve('/api/accounts')
+			);
+			accounts = response.accounts;
+			const refreshed = response.accounts.find((candidate) => candidate.id === account.id);
+			if (refreshed) await loadAccountActivity(refreshed);
+			showToast('Wells Fargo tracker updated.');
+		} catch (error) {
+			activityErrors = {
+				...activityErrors,
+				[account.id]: readableError(error, 'Wells Fargo could not be checked right now.')
+			};
+		} finally {
+			syncingAccountId = null;
+		}
 	}
 
 	function completedCount(bonus: AccountBonus): number {
@@ -427,7 +521,8 @@
 				</div>
 				<div class="finance-grid bonus-grid">
 					{#each bonuses as bonus (bonus.id)}
-						<article class="finance-card bonus-card">
+						{@const tracker = trackerFor(bonus)}
+						<article class="finance-card bonus-card" class:has-tracker={tracker !== null}>
 							<header>
 								<div>
 									<h3>{bonus.name}</h3>
@@ -450,6 +545,115 @@
 								</span>
 								<strong>{formatDate(bonus.requirementDeadline)}</strong>
 							</div>
+
+							{#if tracker}
+								<section class="linked-tracker" aria-label="Linked Wells Fargo tracker">
+									<header class="tracker-heading">
+										<div>
+											<span>Linked Wells Fargo tracker</span>
+											<strong>Balance and posted activity</strong>
+										</div>
+										<span class="finance-pill good">Live account</span>
+									</header>
+
+									<div class="tracker-metrics">
+										<div>
+											<span>Current synced balance</span>
+											<strong>{formatMoney(tracker.balanceCents)}</strong>
+											<small>
+												{#if tracker.currentTier}
+													Currently tracking the {formatMoney(tracker.currentTier.rewardCents)} tier
+												{:else if tracker.amountToNextTierCents !== null}
+													{formatMoney(tracker.amountToNextTierCents)} to the first tier
+												{:else}
+													Waiting for a synced balance
+												{/if}
+											</small>
+										</div>
+										<div>
+											<span>Likely qualifying activity</span>
+											<strong>{tracker.likelyQualifyingTransactions.length} / 5</strong>
+											<small>
+												{#if tracker.account.transactionHistoryStatus === 'NOT_READY'}
+													Plaid is still preparing older activity
+												{:else if tracker.account.transactionHistoryEnabled}
+													Posted since {formatDate(bonus.openedDate)}
+												{:else}
+													Check now to load posted activity
+												{/if}
+											</small>
+										</div>
+									</div>
+
+									<progress
+										class="balance-progress"
+										max={WELLS_FARGO_BUSINESS_BONUS_TIERS.at(-1)?.thresholdCents ?? 2_500_000}
+										value={Math.max(0, tracker.balanceCents ?? 0)}
+										aria-label="Balance progress toward the $825 tier"
+									></progress>
+
+									<div class="tier-rail" aria-label="Wells Fargo bonus tiers">
+										{#each WELLS_FARGO_BUSINESS_BONUS_TIERS as tier (tier.thresholdCents)}
+											<div class:reached={(tracker.balanceCents ?? 0) >= tier.thresholdCents}>
+												<strong>{formatMoney(tier.rewardCents)}</strong>
+												<span>{tier.label}</span>
+											</div>
+										{/each}
+									</div>
+
+									<dl class="tracker-dates">
+										<div>
+											<dt>Fund by</dt>
+											<dd>{formatDate(tracker.fundingDeadline)}</dd>
+										</div>
+										<div>
+											<dt>Maintain through</dt>
+											<dd>{formatDate(tracker.qualificationDeadline)}</dd>
+										</div>
+										<div>
+											<dt>Payout by</dt>
+											<dd>{formatDate(tracker.latestPayoutDate)}</dd>
+										</div>
+									</dl>
+
+									{#if tracker.likelyQualifyingTransactions.length > 0}
+										<ul class="tracker-activity" aria-label="Likely qualifying posted activity">
+											{#each tracker.likelyQualifyingTransactions.slice(0, 5) as transaction (transaction.id)}
+												<li>
+													<strong>{transaction.merchantName ?? transaction.name}</strong>
+													<span>{formatDate(transaction.date)}</span>
+												</li>
+											{/each}
+										</ul>
+									{/if}
+
+									{#if activityErrors[tracker.account.id]}
+										<p class="tracker-error" role="alert">{activityErrors[tracker.account.id]}</p>
+									{/if}
+									<div class="tracker-actions">
+										<button
+											type="button"
+											disabled={syncingAccountId !== null}
+											onclick={() => checkLinkedAccount(bonus)}
+										>
+											{syncingAccountId === tracker.account.id
+												? 'Checking Wells Fargo…'
+												: 'Check Wells Fargo now'}
+										</button>
+										<small>
+											Last checked {formatSyncTime(
+												activityByAccount[tracker.account.id]?.lastSyncedAt ??
+													tracker.account.lastSyncedAt
+											)}
+										</small>
+									</div>
+									<p class="tracker-note">
+										Activity is a conservative estimate from posted Plaid transactions. Verify the
+										five qualifying transactions in Wells Fargo; Zelle, withdrawals, internal
+										transfers, RTP/FedNow, and original credits do not count.
+									</p>
+								</section>
+							{/if}
 
 							{#if bonus.requirements.length > 0}
 								<section class="requirement-list" aria-label={`Requirements for ${bonus.name}`}>
@@ -624,6 +828,10 @@
 		min-height: 390px;
 	}
 
+	.bonus-card.has-tracker {
+		grid-column: span 2;
+	}
+
 	.bonus-deadline {
 		display: flex;
 		gap: 0.6rem;
@@ -636,6 +844,173 @@
 
 	.bonus-deadline > strong {
 		font-size: 0.68rem;
+	}
+
+	.linked-tracker {
+		display: grid;
+		gap: 0.75rem;
+		margin-top: 0.85rem;
+		padding: 0.9rem;
+		border: 1px solid rgba(61, 90, 254, 0.22);
+		border-radius: 12px;
+		background: linear-gradient(145deg, rgba(61, 90, 254, 0.075), rgba(255, 253, 249, 0.82));
+	}
+
+	.tracker-heading,
+	.tracker-actions,
+	.tracker-activity li {
+		display: flex;
+		gap: 0.7rem;
+		align-items: center;
+		justify-content: space-between;
+	}
+
+	.tracker-heading > div {
+		display: grid;
+		gap: 0.16rem;
+	}
+
+	.tracker-heading > div > span,
+	.tracker-metrics span,
+	.tracker-dates dt {
+		color: var(--faint);
+		font-size: 0.58rem;
+		font-weight: 740;
+		letter-spacing: 0.045em;
+		text-transform: uppercase;
+	}
+
+	.tracker-heading > div > strong {
+		font-size: 0.82rem;
+	}
+
+	.tracker-metrics {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.55rem;
+	}
+
+	.tracker-metrics > div {
+		display: grid;
+		gap: 0.18rem;
+		padding: 0.62rem;
+		border: 1px solid var(--line);
+		border-radius: 9px;
+		background: rgba(255, 255, 255, 0.7);
+	}
+
+	.tracker-metrics strong {
+		font-size: 1rem;
+	}
+
+	.tracker-metrics small,
+	.tracker-actions small {
+		color: var(--muted);
+		font-size: 0.59rem;
+		line-height: 1.35;
+	}
+
+	.balance-progress {
+		width: 100%;
+		height: 8px;
+		border: 0;
+		border-radius: 999px;
+		overflow: hidden;
+		background: rgba(61, 90, 254, 0.12);
+	}
+
+	.balance-progress::-webkit-progress-bar {
+		background: rgba(61, 90, 254, 0.12);
+	}
+
+	.balance-progress::-webkit-progress-value,
+	.balance-progress::-moz-progress-bar {
+		border-radius: 999px;
+		background: var(--accent);
+	}
+
+	.tier-rail,
+	.tracker-dates {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 0.45rem;
+	}
+
+	.tier-rail > div,
+	.tracker-dates > div {
+		display: grid;
+		gap: 0.14rem;
+		padding: 0.5rem;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		background: rgba(255, 255, 255, 0.58);
+	}
+
+	.tier-rail > div.reached {
+		border-color: rgba(34, 139, 94, 0.35);
+		background: rgba(34, 139, 94, 0.09);
+	}
+
+	.tier-rail strong {
+		font-size: 0.72rem;
+	}
+
+	.tier-rail span,
+	.tracker-dates dd,
+	.tracker-activity li {
+		margin: 0;
+		color: var(--ink-soft);
+		font-size: 0.61rem;
+	}
+
+	.tracker-activity {
+		display: grid;
+		gap: 0.25rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	.tracker-activity li {
+		padding: 0.34rem 0.45rem;
+		border-radius: 7px;
+		background: rgba(255, 255, 255, 0.56);
+	}
+
+	.tracker-activity li span {
+		color: var(--faint);
+		white-space: nowrap;
+	}
+
+	.tracker-actions button {
+		padding: 0.5rem 0.7rem;
+		border: 1px solid var(--accent);
+		border-radius: 7px;
+		color: var(--accent-dark);
+		font-size: 0.62rem;
+		font-weight: 740;
+		background: white;
+		cursor: pointer;
+	}
+
+	.tracker-actions button:disabled {
+		opacity: 0.55;
+		cursor: wait;
+	}
+
+	.tracker-error,
+	.tracker-note {
+		margin: 0;
+		font-size: 0.59rem;
+		line-height: 1.45;
+	}
+
+	.tracker-error {
+		color: var(--red);
+	}
+
+	.tracker-note {
+		color: var(--muted);
 	}
 
 	.requirement-list {
@@ -691,6 +1066,21 @@
 	@media (max-width: 620px) {
 		.bonus-grid {
 			grid-template-columns: 1fr;
+		}
+
+		.bonus-card.has-tracker {
+			grid-column: span 1;
+		}
+
+		.tracker-metrics,
+		.tier-rail,
+		.tracker-dates {
+			grid-template-columns: 1fr;
+		}
+
+		.tracker-actions {
+			align-items: flex-start;
+			flex-direction: column;
 		}
 	}
 </style>

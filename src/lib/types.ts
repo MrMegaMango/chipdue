@@ -137,6 +137,8 @@ export interface FinancialAccount {
 	currentBalanceCents: number | null;
 	costBasisCents: number | null;
 	holdings: InvestmentHolding[];
+	transactionHistoryEnabled: boolean;
+	transactionHistoryStatus: TransactionHistoryStatus | null;
 	openedDate: string | null;
 	notes: string | null;
 	plaidConnectionId: string | null;
@@ -144,6 +146,8 @@ export interface FinancialAccount {
 	createdAt: string;
 	updatedAt: string;
 }
+
+export type FinancialAccountTransaction = Omit<CardTransaction, 'rewardEstimate'>;
 
 export type BonusStatus =
 	'planned' | 'active' | 'qualified' | 'pending' | 'paid' | 'closed' | 'abandoned';

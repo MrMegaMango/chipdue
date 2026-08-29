@@ -4,8 +4,11 @@ import type {
 	AccountBonus,
 	BonusRequirement,
 	FinancialAccount,
-	InvestmentHolding
+	FinancialAccountTransaction,
+	InvestmentHolding,
+	TransactionHistoryStatus
 } from '$lib/types';
+import type { StoredTransactionHistory } from './cards';
 import { cloudQuery, cloudTransaction, type CloudStatement } from './cloud-database';
 import { decryptJson, encryptJson, privateFingerprint, privateUuid } from './crypto';
 import { getDatabase } from './database';
@@ -49,6 +52,7 @@ export interface PlaidFinancialAccountSnapshot {
 	currentBalanceCents: number | null;
 	costBasisCents: number | null;
 	holdings: InvestmentHolding[] | null;
+	transactionHistory?: StoredTransactionHistory;
 }
 
 const dateSchema = z
@@ -68,6 +72,37 @@ const investmentHoldingSchema = z.object({
 	currency: z.string(),
 	priceAsOf: dateSchema
 });
+const transactionHistoryStatusSchema = z.enum([
+	'TRANSACTIONS_UPDATE_STATUS_UNKNOWN',
+	'NOT_READY',
+	'INITIAL_UPDATE_COMPLETE',
+	'HISTORICAL_UPDATE_COMPLETE'
+]);
+const storedTransactionSchema = z.object({
+	transactionId: z.string().min(1).max(256),
+	name: z.string().min(1).max(160),
+	merchantName: z.string().max(120).nullable(),
+	amountCents: z.number().int().min(-100_000_000_000).max(100_000_000_000),
+	currency: z.string().regex(/^[A-Z]{3}$/),
+	date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+	authorizedDate: z
+		.string()
+		.regex(/^\d{4}-\d{2}-\d{2}$/)
+		.nullable(),
+	pending: z.boolean(),
+	categoryPrimary: z.string().max(80).nullable(),
+	categoryDetailed: z.string().max(120).nullable()
+});
+const storedTransactionHistorySchema = z.object({
+	enabled: z.literal(true),
+	accountReference: z
+		.string()
+		.regex(/^[A-Za-z0-9_-]{43}$/)
+		.optional(),
+	cursor: z.string().max(256).nullable(),
+	status: transactionHistoryStatusSchema,
+	transactions: z.array(storedTransactionSchema).max(10_000)
+});
 
 const accountPayloadSchema = z.object({
 	recordType: z.literal('account'),
@@ -81,6 +116,7 @@ const accountPayloadSchema = z.object({
 	currentBalanceCents: nullableCentsSchema,
 	costBasisCents: nullableCentsSchema,
 	holdings: z.array(investmentHoldingSchema).default([]),
+	transactionHistory: storedTransactionHistorySchema.optional(),
 	openedDate: dateSchema,
 	notes: nullableTextSchema
 });
@@ -139,6 +175,8 @@ function rowToAccount(row: PrivateRecordRow, payload: AccountPayload): Financial
 		currentBalanceCents: payload.currentBalanceCents,
 		costBasisCents: payload.costBasisCents,
 		holdings: payload.holdings,
+		transactionHistoryEnabled: payload.transactionHistory?.enabled === true,
+		transactionHistoryStatus: payload.transactionHistory?.status ?? null,
 		openedDate: payload.openedDate,
 		notes: payload.notes,
 		plaidConnectionId: row.source === 'plaid' ? row.plaid_item_id : null,
@@ -290,7 +328,12 @@ export async function updateFinancialAccount(
 	id: string,
 	changes: UpdateFinancialAccountData
 ): Promise<FinancialAccount> {
-	const existing = await getFinancialAccount(id);
+	const row = await getRow(id);
+	const existingPayload = row ? decodeRecord(row) : null;
+	if (!row || existingPayload?.recordType !== 'account') {
+		throw new AppError('ACCOUNT_NOT_FOUND', 'Account not found.', 404);
+	}
+	const existing = rowToAccount(row, existingPayload);
 	if (
 		existing.source === 'plaid' &&
 		(changes.institution !== undefined ||
@@ -322,6 +365,7 @@ export async function updateFinancialAccount(
 		costBasisCents:
 			changes.costBasisCents === undefined ? existing.costBasisCents : changes.costBasisCents,
 		holdings: existing.holdings,
+		transactionHistory: existingPayload.transactionHistory,
 		openedDate: changes.openedDate === undefined ? existing.openedDate : changes.openedDate,
 		notes: changes.notes === undefined ? existing.notes : changes.notes
 	};
@@ -357,6 +401,7 @@ function plaidAccountPayload(
 		currentBalanceCents: snapshot.currentBalanceCents,
 		costBasisCents: snapshot.costBasisCents ?? existing?.costBasisCents ?? null,
 		holdings: snapshot.holdings ?? existing?.holdings ?? [],
+		transactionHistory: snapshot.transactionHistory ?? existing?.transactionHistory,
 		openedDate: existing?.openedDate ?? null,
 		notes: existing?.notes ?? null
 	};
@@ -489,6 +534,57 @@ export async function replacePlaidFinancialAccounts(
 	} else {
 		replaceLocalPlaidAccounts(plaidItemId, snapshots, syncedAt);
 	}
+}
+
+export async function listFinancialAccountTransactions(
+	accountId: string,
+	limit = 500
+): Promise<{
+	transactions: FinancialAccountTransaction[];
+	status: TransactionHistoryStatus;
+	lastSyncedAt: string | null;
+}> {
+	if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+		throw new AppError('INVALID_REQUEST', 'The request is invalid.', 400);
+	}
+	const row = await getRow(accountId);
+	const payload = row ? decodeRecord(row) : null;
+	if (!row || payload?.recordType !== 'account') {
+		throw new AppError('ACCOUNT_NOT_FOUND', 'Account not found.', 404);
+	}
+	if (row.source !== 'plaid') {
+		throw new AppError(
+			'TRANSACTION_HISTORY_UNAVAILABLE',
+			'Transaction history is available for linked accounts only.',
+			409
+		);
+	}
+	const history = payload.transactionHistory;
+	if (!history) {
+		throw new AppError(
+			'TRANSACTION_HISTORY_NOT_ENABLED',
+			'Account activity has not been synced for this connection.',
+			409
+		);
+	}
+	const transactions = history.transactions
+		.map<FinancialAccountTransaction>((transaction) => ({
+			id: privateUuid(transaction.transactionId, `plaid-transaction:${accountId}`),
+			name: transaction.name,
+			merchantName: transaction.merchantName,
+			amountCents: transaction.amountCents,
+			currency: transaction.currency,
+			date: transaction.date,
+			authorizedDate: transaction.authorizedDate,
+			pending: transaction.pending,
+			categoryPrimary: transaction.categoryPrimary,
+			categoryDetailed: transaction.categoryDetailed
+		}))
+		.sort(
+			(left, right) => right.date.localeCompare(left.date) || left.name.localeCompare(right.name)
+		)
+		.slice(0, limit);
+	return { transactions, status: history.status, lastSyncedAt: row.last_synced_at };
 }
 
 export async function listBonuses(): Promise<AccountBonus[]> {
