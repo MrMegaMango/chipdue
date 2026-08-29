@@ -152,6 +152,16 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain('Leave blank if this account does not earn interest.');
 	});
 
+	it('prioritizes automatic account updates over manual entry', () => {
+		expect(accountsSource).toContain('class:secondary={connections.length > 0}');
+		expect(accountsSource).toContain(
+			'class="finance-button"\n\t\t\t\t\t\ttype="button"\n\t\t\t\t\t\tonclick={syncConnectedAccounts}'
+		);
+		expect(accountsSource).toContain(
+			'class="finance-button secondary" type="button" onclick={openAdd}'
+		);
+	});
+
 	it('shows provider activity and explains the open-order limitation', () => {
 		expect(accountsSource).toContain("'Recent activity'");
 		expect(accountsSource).toContain("'Investment activity'");

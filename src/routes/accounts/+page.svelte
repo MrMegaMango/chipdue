@@ -971,13 +971,17 @@
 			</div>
 			<div class="account-toolbar-actions">
 				{#if plaidConfigured}
-					<a class="finance-button secondary" href={resolve('/settings#plaid-connections')}>
+					<a
+						class="finance-button"
+						class:secondary={connections.length > 0}
+						href={resolve('/settings#plaid-connections')}
+					>
 						{connections.length > 0 ? 'Manage connections' : 'Connect a provider'}
 					</a>
 				{/if}
 				{#if connections.length > 0}
 					<button
-						class="finance-button secondary"
+						class="finance-button"
 						type="button"
 						onclick={syncConnectedAccounts}
 						disabled={syncing}
@@ -985,7 +989,9 @@
 						{syncing ? 'Syncing…' : 'Sync accounts'}
 					</button>
 				{/if}
-				<button class="finance-button" type="button" onclick={openAdd}>+ Add manually</button>
+				<button class="finance-button secondary" type="button" onclick={openAdd}
+					>+ Add manually</button
+				>
 			</div>
 		</section>
 
