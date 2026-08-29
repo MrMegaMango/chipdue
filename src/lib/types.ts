@@ -161,6 +161,7 @@ export interface BonusRequirement {
 export interface AccountBonus {
 	id: string;
 	accountId: string | null;
+	offerTemplateId: string | null;
 	name: string;
 	institution: string | null;
 	rewardCents: number | null;

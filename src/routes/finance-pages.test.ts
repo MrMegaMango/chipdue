@@ -42,16 +42,19 @@ describe('financial workspace navigation', () => {
 		}
 	});
 
-	it('shows a live Wells Fargo tracker for the linked business checking offer', () => {
+	it('shows generic live trackers backed by verified offer templates', () => {
 		for (const marker of [
-			'Linked Wells Fargo tracker',
+			'Verified offer',
+			'Verified rules',
 			'Current synced balance',
 			'Likely qualifying activity',
-			'Check Wells Fargo now',
-			'WELLS_FARGO_BUSINESS_BONUS_TIERS'
+			'Official terms',
+			'form.offerTemplateId'
 		]) {
 			expect(bonusesSource).toContain(marker);
 		}
+		expect(accountsSource).toContain('Verified bonus catalog');
+		expect(accountsSource).toContain('Choose your offer');
 	});
 
 	it('keeps new financial data out of persistent browser storage', () => {

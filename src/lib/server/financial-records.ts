@@ -124,6 +124,7 @@ const accountPayloadSchema = z.object({
 const bonusPayloadSchema = z.object({
 	recordType: z.literal('bonus'),
 	accountId: z.string().uuid().nullable(),
+	offerTemplateId: z.string().max(100).nullable().optional().default(null),
 	name: z.string(),
 	institution: nullableTextSchema,
 	rewardCents: nullableCentsSchema,
@@ -190,6 +191,7 @@ function rowToBonus(row: PrivateRecordRow, payload: BonusPayload): AccountBonus 
 	return {
 		id: row.id,
 		accountId: payload.accountId,
+		offerTemplateId: payload.offerTemplateId,
 		name: payload.name,
 		institution: payload.institution,
 		rewardCents: payload.rewardCents,
@@ -629,6 +631,8 @@ export async function updateBonus(id: string, changes: UpdateBonusData): Promise
 	const payload: BonusPayload = {
 		recordType: 'bonus',
 		accountId: changes.accountId === undefined ? existing.accountId : changes.accountId,
+		offerTemplateId:
+			changes.offerTemplateId === undefined ? existing.offerTemplateId : changes.offerTemplateId,
 		name: changes.name ?? existing.name,
 		institution: changes.institution === undefined ? existing.institution : changes.institution,
 		rewardCents: changes.rewardCents === undefined ? existing.rewardCents : changes.rewardCents,

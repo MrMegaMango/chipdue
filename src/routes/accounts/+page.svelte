@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
+	import { getCompatibleBonusOffers } from '$lib/bonus-offers';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
 	import type {
 		FinancialAccount,
@@ -59,6 +60,7 @@
 	let loggingOut = $state(false);
 	let plaidConfigured = $state(false);
 	let plaidConnections = $state<PlaidConnection[]>([]);
+	let trackedBonusAccountIds = $state<string[]>([]);
 	let syncing = $state(false);
 	let toast = $state('');
 	let toastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -142,13 +144,17 @@
 				window.location.assign(resolve('/'));
 				return;
 			}
-			const [accountResponse, plaidResponse] = await Promise.all([
+			const [accountResponse, plaidResponse, bonusResponse] = await Promise.all([
 				requestJson<{ accounts: FinancialAccount[] }>(resolve('/api/accounts')),
-				requestJson<PlaidStatusResponse>(resolve('/api/plaid/status'))
+				requestJson<PlaidStatusResponse>(resolve('/api/plaid/status')),
+				requestJson<{ bonuses: Array<{ accountId: string | null }> }>(resolve('/api/bonuses'))
 			]);
 			accounts = accountResponse.accounts;
 			plaidConfigured = plaidResponse.configured;
 			plaidConnections = plaidResponse.connections;
+			trackedBonusAccountIds = bonusResponse.bonuses
+				.map((bonus) => bonus.accountId)
+				.filter((accountId): accountId is string => Boolean(accountId));
 		} catch (error) {
 			pageError = readableError(error, 'Your accounts could not be loaded.');
 		} finally {
@@ -250,6 +256,15 @@
 		}
 		const percent = (gain / account.costBasisCents) * 100;
 		return `${gain >= 0 ? '+' : ''}${money.format(gain / 100)} · ${percent >= 0 ? '+' : ''}${percent.toFixed(1)}%`;
+	}
+
+	function availableBonusOffers(account: FinancialAccount) {
+		if (account.source !== 'plaid' || trackedBonusAccountIds.includes(account.id)) return [];
+		return getCompatibleBonusOffers(account, account.openedDate);
+	}
+
+	function bonusSetupHref(account: FinancialAccount): string {
+		return `${resolve('/bonuses')}?accountId=${encodeURIComponent(account.id)}`;
 	}
 
 	function openAdd(): void {
@@ -516,6 +531,7 @@
 								</div>
 								<div class="finance-grid">
 									{#each accountGroup.accounts as account (account.id)}
+										{@const bonusOffers = availableBonusOffers(account)}
 										<article
 											class:brokerage-with-holdings={account.accountType === 'brokerage' &&
 												account.holdings.length > 0}
@@ -585,6 +601,19 @@
 													</div>
 												{/if}
 											</dl>
+											{#if bonusOffers.length > 0}
+												<section class="bonus-offer-callout" aria-label="Verified bonus offers">
+													<div>
+														<span>Verified bonus catalog</span>
+														<strong>
+															{bonusOffers.length} matching {bonusOffers.length === 1
+																? 'offer'
+																: 'offers'}
+														</strong>
+													</div>
+													<a href={bonusSetupHref(account)}>Choose your offer</a>
+												</section>
+											{/if}
 											{#if account.accountType === 'brokerage' && account.source === 'plaid'}
 												<section class="holding-list" aria-label={`${account.nickname} holdings`}>
 													<div class="holding-list-heading">
@@ -874,6 +903,42 @@
 
 	.finance-card.brokerage-with-holdings {
 		grid-column: span 2;
+	}
+
+	.bonus-offer-callout {
+		display: flex;
+		gap: 0.8rem;
+		align-items: center;
+		justify-content: space-between;
+		margin-top: 0.8rem;
+		padding: 0.65rem 0.7rem;
+		border: 1px solid rgba(61, 90, 254, 0.22);
+		border-radius: 9px;
+		background: rgba(61, 90, 254, 0.065);
+	}
+
+	.bonus-offer-callout div {
+		display: grid;
+		gap: 0.14rem;
+	}
+
+	.bonus-offer-callout span {
+		color: var(--faint);
+		font-size: 0.56rem;
+		font-weight: 740;
+		letter-spacing: 0.045em;
+		text-transform: uppercase;
+	}
+
+	.bonus-offer-callout strong {
+		font-size: 0.7rem;
+	}
+
+	.bonus-offer-callout a {
+		color: var(--accent-dark);
+		font-size: 0.62rem;
+		font-weight: 760;
+		white-space: nowrap;
 	}
 
 	.holding-list {

@@ -167,6 +167,7 @@ export const updateFinancialAccountSchema = z
 export const createBonusSchema = z
 	.object({
 		accountId: z.uuid().nullable().optional().default(null),
+		offerTemplateId: z.string().trim().min(1).max(100).nullable().optional().default(null),
 		name: labelSchema,
 		institution: optionalNameSchema.optional().default(null),
 		rewardCents: nonnegativeCentsSchema.optional().default(null),
@@ -185,6 +186,7 @@ export const createBonusSchema = z
 export const updateBonusSchema = z
 	.object({
 		accountId: z.uuid().nullable().optional(),
+		offerTemplateId: z.string().trim().min(1).max(100).nullable().optional(),
 		name: labelSchema.optional(),
 		institution: optionalNameSchema.optional(),
 		rewardCents: nonnegativeCentsSchema.optional(),

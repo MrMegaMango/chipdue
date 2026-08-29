@@ -2,10 +2,14 @@
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import {
-		buildWellsFargoBusinessTracker,
-		WELLS_FARGO_BUSINESS_BONUS_TIERS,
-		type WellsFargoBusinessTracker
-	} from '$lib/bonus-tracker';
+		buildBonusOfferDraft,
+		buildBonusTracker,
+		getBonusOfferTemplate,
+		getCompatibleBonusOffers,
+		isOfferDateEligible,
+		resolveBonusOffer,
+		type BonusTracker
+	} from '$lib/bonus-offers';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
 	import type {
 		AccountBonus,
@@ -24,6 +28,7 @@
 		lastSyncedAt: string | null;
 	};
 	type BonusForm = {
+		offerTemplateId: string;
 		name: string;
 		institution: string;
 		accountId: string;
@@ -68,6 +73,7 @@
 	let loggingOut = $state(false);
 	let toast = $state('');
 	let toastTimer: ReturnType<typeof setTimeout> | undefined;
+	let queryPrefillHandled = false;
 
 	const activeBonuses = $derived(bonuses.filter((bonus) => activeStatuses.has(bonus.status)));
 	const pendingValueCents = $derived(
@@ -88,6 +94,21 @@
 		upcomingBonuses.filter((bonus) => daysUntil(bonus.requirementDeadline) <= 30).length
 	);
 	const nextBonus = $derived(upcomingBonuses[0] ?? null);
+	const formAccount = $derived(accounts.find((account) => account.id === form.accountId) ?? null);
+	const compatibleOffers = $derived(
+		getCompatibleBonusOffers(formAccount, form.openedDate || formAccount?.openedDate || null)
+	);
+	const selectedOffer = $derived(getBonusOfferTemplate(form.offerTemplateId || null));
+	const selectableOffers = $derived(
+		selectedOffer && !compatibleOffers.some((offer) => offer.id === selectedOffer.id)
+			? [selectedOffer, ...compatibleOffers]
+			: compatibleOffers
+	);
+	const selectedOfferDateWarning = $derived(
+		selectedOffer && form.openedDate && !isOfferDateEligible(selectedOffer, form.openedDate)
+			? `This version was available ${selectedOffer.validFrom ? `from ${formatDate(selectedOffer.validFrom)} ` : ''}through ${formatDate(selectedOffer.validThrough)}.`
+			: ''
+	);
 
 	onMount(() => {
 		void initialize();
@@ -95,6 +116,7 @@
 
 	function blankForm(): BonusForm {
 		return {
+			offerTemplateId: '',
 			name: '',
 			institution: '',
 			accountId: '',
@@ -127,6 +149,13 @@
 			bonuses = bonusResponse.bonuses;
 			accounts = accountResponse.accounts;
 			await loadLinkedAccountActivity(bonusResponse.bonuses, accountResponse.accounts);
+			if (!queryPrefillHandled) {
+				queryPrefillHandled = true;
+				const accountId = new URL(window.location.href).searchParams.get('accountId');
+				if (accountId && accountResponse.accounts.some((account) => account.id === accountId)) {
+					openAddForAccount(accountId);
+				}
+			}
 		} catch (error) {
 			pageError = readableError(error, 'Your bonuses could not be loaded.');
 		} finally {
@@ -223,9 +252,9 @@
 		return accounts.find((account) => account.id === bonus.accountId) ?? null;
 	}
 
-	function trackerFor(bonus: AccountBonus): WellsFargoBusinessTracker | null {
+	function trackerFor(bonus: AccountBonus): BonusTracker | null {
 		const account = linkedAccount(bonus);
-		return buildWellsFargoBusinessTracker(
+		return buildBonusTracker(
 			bonus,
 			account,
 			account ? (activityByAccount[account.id]?.transactions ?? []) : []
@@ -263,6 +292,7 @@
 	async function checkLinkedAccount(bonus: AccountBonus): Promise<void> {
 		const account = linkedAccount(bonus);
 		if (!account?.plaidConnectionId || syncingAccountId) return;
+		const offer = resolveBonusOffer(bonus, account);
 		syncingAccountId = account.id;
 		activityErrors = { ...activityErrors, [account.id]: '' };
 		try {
@@ -276,11 +306,11 @@
 			accounts = response.accounts;
 			const refreshed = response.accounts.find((candidate) => candidate.id === account.id);
 			if (refreshed) await loadAccountActivity(refreshed);
-			showToast('Wells Fargo tracker updated.');
+			showToast(`${offer?.institution ?? 'Linked account'} tracker updated.`);
 		} catch (error) {
 			activityErrors = {
 				...activityErrors,
-				[account.id]: readableError(error, 'Wells Fargo could not be checked right now.')
+				[account.id]: readableError(error, 'The linked account could not be checked right now.')
 			};
 		} finally {
 			syncingAccountId = null;
@@ -298,9 +328,20 @@
 		dialogOpen = true;
 	}
 
+	function openAddForAccount(accountId: string): void {
+		openAdd();
+		const account = accounts.find((candidate) => candidate.id === accountId);
+		if (!account) return;
+		form.accountId = account.id;
+		form.institution = account.institution ?? '';
+		form.openedDate = account.openedDate ?? '';
+	}
+
 	function openEdit(bonus: AccountBonus): void {
 		editingId = bonus.id;
+		const account = linkedAccount(bonus);
 		form = {
+			offerTemplateId: bonus.offerTemplateId ?? resolveBonusOffer(bonus, account)?.id ?? '',
 			name: bonus.name,
 			institution: bonus.institution ?? '',
 			accountId: bonus.accountId ?? '',
@@ -316,6 +357,60 @@
 		};
 		formError = '';
 		dialogOpen = true;
+	}
+
+	function handleAccountChange(): void {
+		const account = accounts.find((candidate) => candidate.id === form.accountId);
+		if (!account) {
+			form.offerTemplateId = '';
+			return;
+		}
+		form.institution = account.institution ?? form.institution;
+		if (!form.openedDate && account.openedDate) form.openedDate = account.openedDate;
+		if (
+			form.offerTemplateId &&
+			!getCompatibleBonusOffers(account, form.openedDate || account.openedDate).some(
+				(offer) => offer.id === form.offerTemplateId
+			)
+		) {
+			form.offerTemplateId = '';
+		}
+	}
+
+	function applySelectedOffer(): void {
+		if (!form.offerTemplateId) return;
+		const offer = getBonusOfferTemplate(form.offerTemplateId);
+		const openedDate = form.openedDate || formAccount?.openedDate || '';
+		if (!offer || !openedDate) {
+			formError = 'Enter the account opening date before applying a verified offer.';
+			return;
+		}
+		const draft = buildBonusOfferDraft(offer, openedDate);
+		if (!draft) {
+			formError = 'The offer dates could not be calculated.';
+			return;
+		}
+		formError = '';
+		form = {
+			...form,
+			openedDate,
+			name: draft.name,
+			institution: draft.institution,
+			reward: draft.rewardCents / 100,
+			requirementDeadline: draft.requirementDeadline,
+			expectedPayoutDate: draft.expectedPayoutDate,
+			safeToCloseDate: draft.safeToCloseDate,
+			requirementsText: draft.requirements.join('\n'),
+			notes: draft.notes
+		};
+	}
+
+	function handleOfferChange(): void {
+		if (form.offerTemplateId) applySelectedOffer();
+	}
+
+	function handleOpenedDateChange(): void {
+		if (form.offerTemplateId) applySelectedOffer();
 	}
 
 	function closeDialog(): void {
@@ -338,6 +433,21 @@
 
 	async function saveBonus(event: SubmitEvent): Promise<void> {
 		event.preventDefault();
+		if (form.offerTemplateId) {
+			const offer = getBonusOfferTemplate(form.offerTemplateId);
+			if (!offer || !formAccount || !form.openedDate) {
+				formError = 'A verified offer needs a linked account and opening date.';
+				return;
+			}
+			if (
+				!getCompatibleBonusOffers(formAccount, form.openedDate).some(
+					(candidate) => candidate.id === offer.id
+				)
+			) {
+				formError = 'That offer version does not match this account and opening date.';
+				return;
+			}
+		}
 		if (!form.name.trim()) {
 			formError = 'Give this bonus a name.';
 			return;
@@ -346,6 +456,7 @@
 		formError = '';
 		const payload = {
 			accountId: form.accountId || null,
+			offerTemplateId: form.offerTemplateId || null,
 			name: form.name.trim(),
 			institution: form.institution.trim() || null,
 			rewardCents: cents(form.reward),
@@ -464,8 +575,8 @@
 				<p class="finance-kicker">Money in motion</p>
 				<h1 id="bonuses-title">Bonuses</h1>
 				<p>
-					Track every requirement from account opening through payout and the date it becomes safe
-					to close. Check off progress without relying on a bank’s interpretation of your activity.
+					Choose a verified offer, then track its balance, activity, deadlines, and payout without
+					asking an AI to interpret the rules each time.
 				</p>
 			</div>
 			<button class="finance-button" type="button" onclick={openAdd}>+ Add bonus</button>
@@ -506,8 +617,8 @@
 			<div class="finance-empty">
 				<h2>Put your next bonus on rails</h2>
 				<p>
-					Add the offer value, deadline, payout window, and each requirement. You can link it to an
-					account now or later.
+					Link an account and choose the exact offer you enrolled in. ChipDue calculates its
+					deadlines and keeps the tracking rules fixed to that offer version.
 				</p>
 				<button class="finance-button" type="button" onclick={openAdd}>Add your first bonus</button>
 			</div>
@@ -547,13 +658,16 @@
 							</div>
 
 							{#if tracker}
-								<section class="linked-tracker" aria-label="Linked Wells Fargo tracker">
+								<section
+									class="linked-tracker"
+									aria-label={`Linked ${tracker.offer.institution} offer tracker`}
+								>
 									<header class="tracker-heading">
 										<div>
-											<span>Linked Wells Fargo tracker</span>
-											<strong>Balance and posted activity</strong>
+											<span>Linked {tracker.offer.institution} offer tracker</span>
+											<strong>{tracker.offer.accountProduct}</strong>
 										</div>
-										<span class="finance-pill good">Live account</span>
+										<span class="finance-pill good">Verified rules</span>
 									</header>
 
 									<div class="tracker-metrics">
@@ -572,7 +686,10 @@
 										</div>
 										<div>
 											<span>Likely qualifying activity</span>
-											<strong>{tracker.likelyQualifyingTransactions.length} / 5</strong>
+											<strong
+												>{tracker.likelyQualifyingTransactions.length} / {tracker.offer
+													.transactionTarget}</strong
+											>
 											<small>
 												{#if tracker.account.transactionHistoryStatus === 'NOT_READY'}
 													Plaid is still preparing older activity
@@ -587,13 +704,17 @@
 
 									<progress
 										class="balance-progress"
-										max={WELLS_FARGO_BUSINESS_BONUS_TIERS.at(-1)?.thresholdCents ?? 2_500_000}
+										max={tracker.offer.tiers.at(-1)?.thresholdCents ?? 1}
 										value={Math.max(0, tracker.balanceCents ?? 0)}
-										aria-label="Balance progress toward the $825 tier"
+										aria-label={`Balance progress toward the ${formatMoney(tracker.offer.rewardCents)} offer`}
 									></progress>
 
-									<div class="tier-rail" aria-label="Wells Fargo bonus tiers">
-										{#each WELLS_FARGO_BUSINESS_BONUS_TIERS as tier (tier.thresholdCents)}
+									<div
+										class="tier-rail"
+										class:single-tier={tracker.offer.tiers.length === 1}
+										aria-label={`${tracker.offer.institution} bonus tiers`}
+									>
+										{#each tracker.offer.tiers as tier (tier.thresholdCents)}
 											<div class:reached={(tracker.balanceCents ?? 0) >= tier.thresholdCents}>
 												<strong>{formatMoney(tier.rewardCents)}</strong>
 												<span>{tier.label}</span>
@@ -637,8 +758,8 @@
 											onclick={() => checkLinkedAccount(bonus)}
 										>
 											{syncingAccountId === tracker.account.id
-												? 'Checking Wells Fargo…'
-												: 'Check Wells Fargo now'}
+												? `Checking ${tracker.offer.institution}…`
+												: `Check ${tracker.offer.institution} now`}
 										</button>
 										<small>
 											Last checked {formatSyncTime(
@@ -648,9 +769,15 @@
 										</small>
 									</div>
 									<p class="tracker-note">
-										Activity is a conservative estimate from posted Plaid transactions. Verify the
-										five qualifying transactions in Wells Fargo; Zelle, withdrawals, internal
-										transfers, RTP/FedNow, and original credits do not count.
+										Balances are snapshots and cannot prove new-money sources or uninterrupted
+										minimums. Activity is a conservative estimate from posted Plaid transactions. {tracker
+											.offer.activityNote}
+										<a href={tracker.offer.sourceUrl} target="_blank" rel="noreferrer"
+											>Official terms</a
+										>
+										· {tracker.offer.versionLabel} · verified {formatDate(
+											tracker.offer.sourceVerifiedAt
+										)}.
 									</p>
 								</section>
 							{/if}
@@ -711,7 +838,7 @@
 			<header class="finance-dialog-header">
 				<div>
 					<h2 id="bonus-dialog-title">{editingId ? 'Edit bonus' : 'Add bonus'}</h2>
-					<p>Store the bank’s rules as a checklist, then verify completion yourself.</p>
+					<p>Confirm the exact offer; ChipDue will lock in that published version’s rules.</p>
 				</div>
 				<button type="button" aria-label="Close" onclick={closeDialog}>×</button>
 			</header>
@@ -720,7 +847,13 @@
 				<div class="finance-form-grid">
 					<div class="finance-field">
 						<label for="bonus-name">Bonus name</label>
-						<input id="bonus-name" bind:value={form.name} maxlength="80" required />
+						<input
+							id="bonus-name"
+							bind:value={form.name}
+							maxlength="80"
+							readonly={Boolean(form.offerTemplateId)}
+							required
+						/>
 					</div>
 					<div class="finance-field">
 						<label for="bonus-value">Bonus value</label>
@@ -730,21 +863,56 @@
 							min="0"
 							step="0.01"
 							bind:value={form.reward}
+							readonly={Boolean(form.offerTemplateId)}
 							placeholder="500.00"
 						/>
 					</div>
 					<div class="finance-field">
 						<label for="bonus-account">Linked account</label>
-						<select id="bonus-account" bind:value={form.accountId}>
+						<select id="bonus-account" bind:value={form.accountId} onchange={handleAccountChange}>
 							<option value="">No linked account</option>
 							{#each accounts as account (account.id)}
 								<option value={account.id}>{account.nickname}</option>
 							{/each}
 						</select>
 					</div>
+					<div class="finance-field wide offer-picker">
+						<label for="bonus-offer">Verified offer</label>
+						<select
+							id="bonus-offer"
+							bind:value={form.offerTemplateId}
+							onchange={handleOfferChange}
+							disabled={!formAccount}
+						>
+							<option value="">Manual rules</option>
+							{#each selectableOffers as offer (offer.id)}
+								<option value={offer.id}>
+									{offer.name} · {offer.versionLabel}
+								</option>
+							{/each}
+						</select>
+						<small>
+							{#if !formAccount}
+								Link an account first to see matching offers.
+							{:else if compatibleOffers.length > 0}
+								Choose the exact offer you enrolled in. Your bank connection cannot confirm the
+								promotion code for you.
+							{:else}
+								No current verified offer matches this account and opening date. Use manual rules.
+							{/if}
+						</small>
+						{#if selectedOfferDateWarning}
+							<small class="offer-warning">{selectedOfferDateWarning}</small>
+						{/if}
+					</div>
 					<div class="finance-field">
 						<label for="bonus-institution">Institution</label>
-						<input id="bonus-institution" bind:value={form.institution} maxlength="80" />
+						<input
+							id="bonus-institution"
+							bind:value={form.institution}
+							maxlength="80"
+							readonly={Boolean(form.offerTemplateId)}
+						/>
 					</div>
 					<div class="finance-field">
 						<label for="bonus-status">Status</label>
@@ -760,15 +928,30 @@
 					</div>
 					<div class="finance-field">
 						<label for="bonus-opened">Account opened</label>
-						<input id="bonus-opened" type="date" bind:value={form.openedDate} />
+						<input
+							id="bonus-opened"
+							type="date"
+							bind:value={form.openedDate}
+							onchange={handleOpenedDateChange}
+						/>
 					</div>
 					<div class="finance-field">
 						<label for="bonus-deadline">Requirement deadline</label>
-						<input id="bonus-deadline" type="date" bind:value={form.requirementDeadline} />
+						<input
+							id="bonus-deadline"
+							type="date"
+							bind:value={form.requirementDeadline}
+							readonly={Boolean(form.offerTemplateId)}
+						/>
 					</div>
 					<div class="finance-field">
 						<label for="bonus-payout">Expected payout</label>
-						<input id="bonus-payout" type="date" bind:value={form.expectedPayoutDate} />
+						<input
+							id="bonus-payout"
+							type="date"
+							bind:value={form.expectedPayoutDate}
+							readonly={Boolean(form.offerTemplateId)}
+						/>
 					</div>
 					<div class="finance-field">
 						<label for="bonus-paid">Paid date</label>
@@ -776,13 +959,19 @@
 					</div>
 					<div class="finance-field">
 						<label for="bonus-close">Safe to close</label>
-						<input id="bonus-close" type="date" bind:value={form.safeToCloseDate} />
+						<input
+							id="bonus-close"
+							type="date"
+							bind:value={form.safeToCloseDate}
+							readonly={Boolean(form.offerTemplateId)}
+						/>
 					</div>
 					<div class="finance-field wide">
 						<label for="bonus-requirements">Requirements</label>
 						<textarea
 							id="bonus-requirements"
 							bind:value={form.requirementsText}
+							readonly={Boolean(form.offerTemplateId)}
 							placeholder="Receive two qualifying direct deposits&#10;Maintain the required balance for 90 days"
 						></textarea>
 						<small>One requirement per line, up to 20. Existing checkmarks are preserved.</small>
@@ -936,6 +1125,10 @@
 		gap: 0.45rem;
 	}
 
+	.tier-rail.single-tier {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
 	.tier-rail > div,
 	.tracker-dates > div {
 		display: grid;
@@ -1011,6 +1204,20 @@
 
 	.tracker-note {
 		color: var(--muted);
+	}
+
+	.tracker-note a {
+		color: var(--accent-dark);
+		font-weight: 740;
+	}
+
+	.offer-picker small {
+		display: block;
+		line-height: 1.45;
+	}
+
+	.offer-picker .offer-warning {
+		color: var(--red);
 	}
 
 	.requirement-list {

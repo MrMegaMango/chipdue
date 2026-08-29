@@ -62,6 +62,7 @@ describe.sequential('financial workspace API contract', () => {
 
 		const bonusRequest = mutationRequest('/api/bonuses', {
 			accountId: accountPayload.account.id,
+			offerTemplateId: 'us-bank-business-essentials-q3-2026',
 			name: 'Opening offer',
 			rewardCents: 60_000,
 			requirements: [{ label: 'Complete qualifying deposits' }]
@@ -74,6 +75,7 @@ describe.sequential('financial workspace API contract', () => {
 		const bonusPayload = await bonusResponse.json();
 		expect(bonusPayload.bonus).toMatchObject({
 			accountId: accountPayload.account.id,
+			offerTemplateId: 'us-bank-business-essentials-q3-2026',
 			status: 'active',
 			requirements: [{ label: 'Complete qualifying deposits', completed: false }]
 		});
