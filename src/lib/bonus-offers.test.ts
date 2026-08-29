@@ -17,6 +17,7 @@ const account: FinancialAccount = {
 	accountType: 'checking',
 	ownerType: 'business',
 	status: 'active',
+	hidden: false,
 	last4: '1234',
 	currency: 'USD',
 	currentBalanceCents: 1_250_000,

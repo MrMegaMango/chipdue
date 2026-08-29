@@ -116,6 +116,7 @@ const accountPayloadSchema = z.object({
 	accountType: financialAccountTypeSchema,
 	ownerType: financialAccountOwnerSchema,
 	status: financialAccountStatusSchema,
+	hidden: z.boolean().optional().default(false),
 	last4: nullableTextSchema,
 	currency: z.string(),
 	currentBalanceCents: nullableCentsSchema,
@@ -181,6 +182,7 @@ function rowToAccount(row: PrivateRecordRow, payload: AccountPayload): Financial
 		accountType: payload.accountType,
 		ownerType: payload.ownerType,
 		status: payload.status,
+		hidden: payload.hidden,
 		last4: payload.last4,
 		currency: payload.currency,
 		currentBalanceCents: payload.currentBalanceCents,
@@ -332,7 +334,7 @@ export async function createFinancialAccount(
 ): Promise<FinancialAccount> {
 	const id = randomUUID();
 	const now = new Date().toISOString();
-	await insertRecord(id, { recordType: 'account', ...input, holdings: [] }, now);
+	await insertRecord(id, { recordType: 'account', ...input, hidden: false, holdings: [] }, now);
 	return getFinancialAccount(id);
 }
 
@@ -368,6 +370,7 @@ export async function updateFinancialAccount(
 		accountType: changes.accountType ?? existing.accountType,
 		ownerType: changes.ownerType ?? existing.ownerType,
 		status: changes.status ?? existing.status,
+		hidden: changes.hidden ?? existing.hidden,
 		last4: changes.last4 === undefined ? existing.last4 : changes.last4,
 		currency: changes.currency ?? existing.currency,
 		currentBalanceCents:
@@ -409,6 +412,7 @@ function plaidAccountPayload(
 		accountType: snapshot.accountType,
 		ownerType: existing?.ownerType ?? 'personal',
 		status: existing?.status ?? 'active',
+		hidden: existing?.hidden ?? false,
 		last4: snapshot.last4,
 		currency: snapshot.currency,
 		currentBalanceCents: snapshot.currentBalanceCents,

@@ -436,6 +436,7 @@ describe.sequential('Plaid transaction history', () => {
 		await updateFinancialAccount(checking!.id, {
 			nickname: 'Operating cash',
 			ownerType: 'business',
+			hidden: true,
 			openedDate: '2025-01-02',
 			notes: 'Primary operating account'
 		});
@@ -473,6 +474,7 @@ describe.sequential('Plaid transaction history', () => {
 		expect(refreshed.find((account) => account.id === checking!.id)).toMatchObject({
 			nickname: 'Operating cash',
 			ownerType: 'business',
+			hidden: true,
 			openedDate: '2025-01-02',
 			notes: 'Primary operating account',
 			currentBalanceCents: 157_500

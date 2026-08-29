@@ -83,6 +83,8 @@ describe('financial workspace validation', () => {
 			}).success
 		).toBe(true);
 		expect(createBonusSchema.safeParse({ name: 'Bonus', rewardCents: -1 }).success).toBe(false);
+		expect(updateFinancialAccountSchema.safeParse({ hidden: true }).success).toBe(true);
+		expect(updateFinancialAccountSchema.safeParse({ hidden: 'yes' }).success).toBe(false);
 		expect(updateFinancialAccountSchema.safeParse({}).success).toBe(false);
 		expect(updateBonusSchema.safeParse({}).success).toBe(false);
 	});

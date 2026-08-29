@@ -57,15 +57,21 @@
 	let formError = $state('');
 	let busy = $state(false);
 	let deletingId = $state<string | null>(null);
+	let visibilityId = $state<string | null>(null);
+	let showHidden = $state(false);
 	let loggingOut = $state(false);
 	let plaidConfigured = $state(false);
 	let plaidConnections = $state<PlaidConnection[]>([]);
 	let trackedBonusAccountIds = $state<string[]>([]);
 	let syncing = $state(false);
 	let toast = $state('');
+	let toastError = $state(false);
+	let undoHiddenAccountId = $state<string | null>(null);
 	let toastTimer: ReturnType<typeof setTimeout> | undefined;
 
-	const activeAccounts = $derived(accounts.filter((account) => account.status === 'active'));
+	const visibleAccounts = $derived(accounts.filter((account) => !account.hidden));
+	const hiddenAccounts = $derived(accounts.filter((account) => account.hidden));
+	const activeAccounts = $derived(visibleAccounts.filter((account) => account.status === 'active'));
 	const syncedAccountCount = $derived(
 		activeAccounts.filter((account) => account.source === 'plaid').length
 	);
@@ -74,14 +80,24 @@
 			id: 'cash',
 			title: 'Cash accounts',
 			description: 'Checking, savings, and cash management.',
-			accounts: accounts.filter((account) => account.accountType !== 'brokerage')
+			accounts: visibleAccounts.filter((account) => account.accountType !== 'brokerage')
 		},
 		{
 			id: 'brokerage',
 			title: 'Brokerage accounts',
 			description: 'Investments, positions, and performance.',
-			accounts: accounts.filter((account) => account.accountType === 'brokerage')
-		}
+			accounts: visibleAccounts.filter((account) => account.accountType === 'brokerage')
+		},
+		...(showHidden
+			? [
+					{
+						id: 'hidden',
+						title: 'Hidden accounts',
+						description: 'Excluded from your account map and summary totals.',
+						accounts: hiddenAccounts
+					}
+				]
+			: [])
 	]);
 	const dialogAccount = $derived(
 		editingId ? accounts.find((account) => account.id === editingId) : undefined
@@ -389,10 +405,53 @@
 		}
 	}
 
-	function showToast(message: string): void {
+	async function setAccountHidden(account: FinancialAccount, hidden: boolean): Promise<void> {
+		if (visibilityId) return;
+		visibilityId = account.id;
+		try {
+			const response = await requestJson<{ account: FinancialAccount }>(
+				resolve('/api/accounts/[id]', { id: account.id }),
+				{
+					method: 'PATCH',
+					body: JSON.stringify({ hidden })
+				}
+			);
+			accounts = accounts.map((candidate) =>
+				candidate.id === response.account.id ? response.account : candidate
+			);
+			showToast(hidden ? `${account.nickname} hidden.` : `${account.nickname} restored.`, {
+				undoAccountId: hidden ? account.id : null
+			});
+		} catch (error) {
+			showToast(readableError(error, 'The account visibility could not be changed.'), {
+				error: true
+			});
+		} finally {
+			visibilityId = null;
+		}
+	}
+
+	async function undoHiddenAccount(): Promise<void> {
+		const account = accounts.find((candidate) => candidate.id === undoHiddenAccountId);
+		if (!account) return;
+		await setAccountHidden(account, false);
+	}
+
+	function showToast(
+		message: string,
+		options: { error?: boolean; undoAccountId?: string | null } = {}
+	): void {
 		toast = message;
+		toastError = options.error ?? false;
+		undoHiddenAccountId = options.undoAccountId ?? null;
 		if (toastTimer) clearTimeout(toastTimer);
-		toastTimer = setTimeout(() => (toast = ''), 3_000);
+		toastTimer = setTimeout(
+			() => {
+				toast = '';
+				undoHiddenAccountId = null;
+			},
+			undoHiddenAccountId ? 6_000 : 3_000
+		);
 	}
 
 	async function logout(): Promise<void> {
@@ -517,7 +576,22 @@
 						<h2 id="account-list-title">Your account map</h2>
 						<p>Credit cards remain on the Dashboard with their payment details.</p>
 					</div>
+					{#if hiddenAccounts.length > 0}
+						<button
+							class="hidden-accounts-toggle"
+							type="button"
+							aria-expanded={showHidden}
+							onclick={() => (showHidden = !showHidden)}
+						>
+							{showHidden ? 'Hide hidden accounts' : `Show hidden (${hiddenAccounts.length})`}
+						</button>
+					{/if}
 				</div>
+				{#if visibleAccounts.length === 0 && !showHidden}
+					<div class="all-accounts-hidden">
+						<p>All accounts are hidden. Show hidden accounts to restore one.</p>
+					</div>
+				{/if}
 				<div class="account-groups">
 					{#each accountGroups as accountGroup (accountGroup.id)}
 						{#if accountGroup.accounts.length > 0}
@@ -535,6 +609,7 @@
 										<article
 											class:brokerage-with-holdings={account.accountType === 'brokerage' &&
 												account.holdings.length > 0}
+											class:hidden-account={account.hidden}
 											class="finance-card"
 										>
 											<header>
@@ -560,6 +635,9 @@
 													>
 														{account.status}
 													</span>
+													{#if account.hidden}
+														<span class="finance-pill muted">Hidden</span>
+													{/if}
 												</div>
 											</header>
 											<div class="finance-card-value">
@@ -676,13 +754,26 @@
 											{/if}
 											<footer>
 												<span
-													>{account.source === 'plaid'
-														? 'Automatic balance'
-														: 'Manual balance'}</span
+													>{account.hidden
+														? 'Excluded from totals'
+														: account.source === 'plaid'
+															? 'Automatic balance'
+															: 'Manual balance'}</span
 												>
 												<div>
 													<button type="button" onclick={() => openEdit(account)}>
 														{account.source === 'plaid' ? 'Details' : 'Edit'}
+													</button>
+													<button
+														type="button"
+														disabled={visibilityId === account.id}
+														onclick={() => setAccountHidden(account, !account.hidden)}
+													>
+														{visibilityId === account.id
+															? 'Saving…'
+															: account.hidden
+																? 'Show'
+																: 'Hide'}
 													</button>
 													{#if account.source === 'manual'}
 														<button
@@ -850,7 +941,16 @@
 	</div>
 {/if}
 
-{#if toast}<div class="finance-toast" role="status">{toast}</div>{/if}
+{#if toast}
+	<div class:error={toastError} class="finance-toast" role={toastError ? 'alert' : 'status'}>
+		<span>{toast}</span>
+		{#if undoHiddenAccountId}
+			<button type="button" disabled={visibilityId !== null} onclick={undoHiddenAccount}
+				>Undo</button
+			>
+		{/if}
+	</div>
+{/if}
 
 <style>
 	.skip-link {
@@ -879,6 +979,37 @@
 		border-top: 1px solid var(--line);
 	}
 
+	.hidden-accounts-toggle {
+		padding: 0.45rem 0.65rem;
+		border: 1px solid var(--line-strong);
+		border-radius: 8px;
+		color: var(--muted);
+		font: inherit;
+		font-size: 0.64rem;
+		font-weight: 720;
+		background: var(--paper);
+		cursor: pointer;
+	}
+
+	.hidden-accounts-toggle:hover {
+		border-color: var(--accent);
+		color: var(--accent-dark);
+	}
+
+	.all-accounts-hidden {
+		padding: 1rem;
+		border: 1px dashed var(--line-strong);
+		border-radius: 10px;
+		color: var(--muted);
+		font-size: 0.7rem;
+		text-align: center;
+		background: var(--paper-soft);
+	}
+
+	.all-accounts-hidden p {
+		margin: 0;
+	}
+
 	.account-group-heading {
 		margin-bottom: 0.8rem;
 	}
@@ -904,6 +1035,11 @@
 
 	.finance-card.brokerage-with-holdings {
 		grid-column: span 2;
+	}
+
+	.finance-card.hidden-account {
+		border-style: dashed;
+		box-shadow: none;
 	}
 
 	.bonus-offer-callout {
@@ -1076,6 +1212,35 @@
 		font-weight: 680;
 	}
 
+	.finance-card footer button:disabled {
+		opacity: 0.55;
+		cursor: wait;
+	}
+
+	.finance-toast {
+		display: flex;
+		gap: 1rem;
+		align-items: center;
+		justify-content: space-between;
+	}
+
+	.finance-toast.error {
+		border-color: #e8b8b1;
+		color: var(--red);
+		background: var(--red-soft);
+	}
+
+	.finance-toast button {
+		padding: 0;
+		border: 0;
+		color: inherit;
+		font: inherit;
+		font-weight: 800;
+		text-decoration: underline;
+		background: transparent;
+		cursor: pointer;
+	}
+
 	.finance-field input:disabled,
 	.finance-field select:disabled {
 		color: var(--muted);
@@ -1091,6 +1256,15 @@
 		.account-toolbar-actions {
 			display: grid;
 			width: 100%;
+		}
+
+		.finance-section-heading {
+			gap: 0.8rem;
+			align-items: flex-start;
+		}
+
+		.hidden-accounts-toggle {
+			white-space: nowrap;
 		}
 
 		.holding-row {

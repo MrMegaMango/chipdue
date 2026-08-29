@@ -132,6 +132,7 @@ export interface FinancialAccount {
 	accountType: FinancialAccountType;
 	ownerType: FinancialAccountOwner;
 	status: FinancialAccountStatus;
+	hidden: boolean;
 	last4: string | null;
 	currency: string;
 	currentBalanceCents: number | null;

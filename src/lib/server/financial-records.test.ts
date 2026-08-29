@@ -57,7 +57,7 @@ describe.sequential('encrypted financial records', () => {
 
 		expect(await listCards()).toEqual([]);
 		expect(await listFinancialAccounts()).toMatchObject([
-			{ nickname: 'Operating account', ownerType: 'business' }
+			{ nickname: 'Operating account', ownerType: 'business', hidden: false }
 		]);
 		expect(await listBonuses()).toMatchObject([
 			{ name: 'Business checking bonus', accountId: account.id }
@@ -86,13 +86,16 @@ describe.sequential('encrypted financial records', () => {
 				requirements: [{ label: 'Transfer assets' }]
 			})
 		);
-		await updateFinancialAccount(account.id, { currentBalanceCents: 250_000 });
+		await updateFinancialAccount(account.id, { currentBalanceCents: 250_000, hidden: true });
 		await updateBonus(bonus.id, {
 			status: 'qualified',
 			requirements: [{ ...bonus.requirements[0], completed: true }]
 		});
 
-		expect((await listFinancialAccounts())[0].currentBalanceCents).toBe(250_000);
+		expect((await listFinancialAccounts())[0]).toMatchObject({
+			currentBalanceCents: 250_000,
+			hidden: true
+		});
 		expect((await listBonuses())[0]).toMatchObject({
 			status: 'qualified',
 			requirements: [{ completed: true }]

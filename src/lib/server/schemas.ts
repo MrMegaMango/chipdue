@@ -154,6 +154,7 @@ export const updateFinancialAccountSchema = z
 		accountType: financialAccountTypeSchema.optional(),
 		ownerType: financialAccountOwnerSchema.optional(),
 		status: financialAccountStatusSchema.optional(),
+		hidden: z.boolean().optional(),
 		last4: last4Schema.optional(),
 		currency: currencySchema.optional(),
 		currentBalanceCents: centsSchema.optional(),

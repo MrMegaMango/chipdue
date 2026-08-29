@@ -30,6 +30,13 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain('{#each accountGroups as accountGroup');
 	});
 
+	it('lets people hide stale accounts and restore them later', () => {
+		expect(accountsSource).toContain('Show hidden (');
+		expect(accountsSource).toContain('Excluded from your account map and summary totals.');
+		expect(accountsSource).toContain('setAccountHidden(account, !account.hidden)');
+		expect(accountsSource).toContain('undoHiddenAccount');
+	});
+
 	it('tracks the full bonus lifecycle and manual requirements', () => {
 		for (const marker of [
 			'Requirement deadline',
