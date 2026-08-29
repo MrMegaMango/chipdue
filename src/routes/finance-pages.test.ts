@@ -178,12 +178,21 @@ describe('financial workspace navigation', () => {
 			actionsSource.indexOf('Manage connections')
 		);
 		expect(actionsSource.indexOf('Manage connections')).toBeLessThan(
-			actionsSource.indexOf('Sync accounts')
+			actionsSource.indexOf('Sync connections')
 		);
 		expect(actionsSource).toContain('M10 4v12M4 10h12');
 		expect(actionsSource).toContain('M16 7a6.5 6.5 0 1 0 .2 5.5M16 3v4h-4');
 		expect(accountsSource).toContain('flex-wrap: nowrap');
 		expect(accountsSource).toContain('@media (max-width: 900px)');
+	});
+
+	it('uses the same connected-state actions on cards and accounts', () => {
+		expect(dashboardSource).toContain("currentSection === 'cards' && plaid.connectedItems > 0");
+		expect(dashboardSource).toContain("href={resolve('/settings#plaid-connections')}");
+		expect(dashboardSource).toContain('Manage connections');
+		expect(dashboardSource.match(/onclick=\{syncConnections\}/g)).toHaveLength(1);
+		expect(dashboardSource).not.toContain("'Connect another'");
+		expect(accountsSource).toContain("syncing ? 'Syncing…' : 'Sync connections'");
 	});
 
 	it('matches the cards toolbar scale and button geometry', () => {

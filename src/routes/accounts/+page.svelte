@@ -974,19 +974,21 @@
 					<svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 4v12M4 10h12"></path></svg>
 					Add manually
 				</button>
-				{#if plaidConfigured}
-					<a
-						class="finance-button"
-						class:secondary={connections.length > 0}
-						href={resolve('/settings#plaid-connections')}
-					>
-						<svg aria-hidden="true" viewBox="0 0 20 20">
-							<path d="M3 8.5 10 5l7 3.5L10 12 3 8.5Z"></path>
-							<path d="M5 11v3.5M8.3 12.5V16m3.4-3.5V16m3.3-5v3.5M3 17h14"></path>
-						</svg>
-						{connections.length > 0 ? 'Manage connections' : 'Connect a provider'}
-					</a>
-				{/if}
+				<a
+					class="finance-button"
+					class:secondary={connections.length > 0}
+					href={resolve('/settings#plaid-connections')}
+				>
+					<svg aria-hidden="true" viewBox="0 0 20 20">
+						<path d="M3 8.5 10 5l7 3.5L10 12 3 8.5Z"></path>
+						<path d="M5 11v3.5M8.3 12.5V16m3.4-3.5V16m3.3-5v3.5M3 17h14"></path>
+					</svg>
+					{connections.length > 0
+						? 'Manage connections'
+						: plaidConfigured
+							? 'Connect Plaid'
+							: 'Set up Plaid'}
+				</a>
 				{#if connections.length > 0}
 					<button
 						class="finance-button"
@@ -997,7 +999,7 @@
 						<svg class:spinning={syncing} aria-hidden="true" viewBox="0 0 20 20">
 							<path d="M16 7a6.5 6.5 0 1 0 .2 5.5M16 3v4h-4"></path>
 						</svg>
-						{syncing ? 'Syncing…' : 'Sync accounts'}
+						{syncing ? 'Syncing…' : 'Sync connections'}
 					</button>
 				{/if}
 			</div>
@@ -1046,14 +1048,17 @@
 					You can still add an unsupported account and maintain it manually.
 				</p>
 				<div class="empty-account-actions">
-					{#if plaidConfigured}
-						<a class="finance-button" href={resolve('/settings#plaid-connections')}
-							>Connect a provider</a
-						>
-					{/if}
-					<button class="finance-button secondary" type="button" onclick={openAdd}
-						>Add manually</button
-					>
+					<button class="finance-button secondary" type="button" onclick={openAdd}>
+						<svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 4v12M4 10h12"></path></svg>
+						Add manually
+					</button>
+					<a class="finance-button" href={resolve('/settings#plaid-connections')}>
+						<svg aria-hidden="true" viewBox="0 0 20 20">
+							<path d="M3 8.5 10 5l7 3.5L10 12 3 8.5Z"></path>
+							<path d="M5 11v3.5M8.3 12.5V16m3.4-3.5V16m3.3-5v3.5M3 17h14"></path>
+						</svg>
+						{plaidConfigured ? 'Connect Plaid' : 'Set up Plaid'}
+					</a>
 				</div>
 			</div>
 		{:else}
@@ -1384,7 +1389,7 @@
 																</div>
 																{#if !account.transactionHistoryEnabled}
 																	<p class="account-activity-message">
-																		Sync accounts to load activity from {financialProviderName(
+																		Sync connections to load activity from {financialProviderName(
 																			account.connectionProvider
 																		)}.
 																	</p>

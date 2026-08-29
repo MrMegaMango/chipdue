@@ -2571,6 +2571,7 @@
 			<section
 				class:hero={showOnboardingHero && currentSection === 'overview'}
 				class:dashboard-toolbar={!showOnboardingHero || currentSection !== 'overview'}
+				class:cards-toolbar={currentSection === 'cards'}
 				aria-labelledby="page-title"
 			>
 				{#if showOnboardingHero && currentSection === 'overview'}
@@ -2617,27 +2618,51 @@
 								<svg aria-hidden="true" viewBox="0 0 20 20"><path d="M10 4v12M4 10h12"></path></svg>
 								Add manually
 							</button>
-							<button
-								class="button button-primary"
-								type="button"
-								onclick={connectPlaid}
-								disabled={busyAction !== null || loading}
-								aria-busy={busyAction === 'connect'}
-								aria-describedby="plaid-consent-copy"
-								title={plaid.configured ? 'Open Plaid Link' : 'Set up your Plaid account'}
-							>
-								<svg aria-hidden="true" viewBox="0 0 20 20">
-									<path d="M3 8.5 10 5l7 3.5L10 12 3 8.5Z"></path>
-									<path d="M5 11v3.5M8.3 12.5V16m3.4-3.5V16m3.3-5v3.5M3 17h14"></path>
-								</svg>
-								{busyAction === 'connect'
-									? 'Connecting…'
-									: !plaid.configured
-										? 'Set up Plaid'
-										: plaid.connectedItems > 0
-											? 'Connect another'
+							{#if currentSection === 'cards' && plaid.connectedItems > 0}
+								<a class="button button-secondary" href={resolve('/settings#plaid-connections')}>
+									<svg aria-hidden="true" viewBox="0 0 20 20">
+										<path d="M3 8.5 10 5l7 3.5L10 12 3 8.5Z"></path>
+										<path d="M5 11v3.5M8.3 12.5V16m3.4-3.5V16m3.3-5v3.5M3 17h14"></path>
+									</svg>
+									Manage connections
+								</a>
+								<button
+									class="button button-primary"
+									type="button"
+									onclick={syncConnections}
+									disabled={busyAction !== null || loading}
+									aria-busy={busyAction === 'sync'}
+								>
+									<svg
+										class:spinning={busyAction === 'sync'}
+										aria-hidden="true"
+										viewBox="0 0 20 20"
+									>
+										<path d="M16 7a6.5 6.5 0 1 0 .2 5.5M16 3v4h-4"></path>
+									</svg>
+									{busyAction === 'sync' ? 'Syncing…' : 'Sync connections'}
+								</button>
+							{:else}
+								<button
+									class="button button-primary"
+									type="button"
+									onclick={connectPlaid}
+									disabled={busyAction !== null || loading}
+									aria-busy={busyAction === 'connect'}
+									aria-describedby="plaid-consent-copy"
+									title={plaid.configured ? 'Open Plaid Link' : 'Set up your Plaid account'}
+								>
+									<svg aria-hidden="true" viewBox="0 0 20 20">
+										<path d="M3 8.5 10 5l7 3.5L10 12 3 8.5Z"></path>
+										<path d="M5 11v3.5M8.3 12.5V16m3.4-3.5V16m3.3-5v3.5M3 17h14"></path>
+									</svg>
+									{busyAction === 'connect'
+										? 'Connecting…'
+										: !plaid.configured
+											? 'Set up Plaid'
 											: 'Connect Plaid'}
-							</button>
+								</button>
+							{/if}
 						</div>
 						<p
 							id="plaid-consent-copy"
@@ -2832,20 +2857,6 @@
 						<p class="section-kicker">Credit cards</p>
 						<h2 id="cards-heading">Payments &amp; deadlines</h2>
 					</div>
-					{#if plaid.connectedItems > 0}
-						<button
-							class="button button-quiet"
-							type="button"
-							onclick={syncConnections}
-							disabled={busyAction !== null}
-							aria-busy={busyAction === 'sync'}
-						>
-							<svg class:spinning={busyAction === 'sync'} aria-hidden="true" viewBox="0 0 20 20">
-								<path d="M16 7a6.5 6.5 0 1 0 .2 5.5M16 3v4h-4"></path>
-							</svg>
-							{busyAction === 'sync' ? 'Syncing…' : 'Sync connections'}
-						</button>
-					{/if}
 				</div>
 
 				{#if loading}
@@ -4778,8 +4789,10 @@
 
 	.dashboard-actions {
 		display: flex;
+		flex: 0 0 auto;
 		gap: 0.65rem;
 		align-items: center;
+		flex-wrap: nowrap;
 	}
 
 	.visually-hidden {
@@ -4859,6 +4872,7 @@
 		font-weight: 700;
 		line-height: 1;
 		text-decoration: none;
+		white-space: nowrap;
 		cursor: pointer;
 		transition:
 			background 140ms ease,
@@ -7314,6 +7328,15 @@
 			flex-direction: column;
 		}
 
+		.cards-toolbar {
+			align-items: stretch;
+			flex-direction: column;
+		}
+
+		.cards-toolbar .dashboard-actions {
+			justify-content: flex-start;
+		}
+
 		.hero-action-stack {
 			padding-bottom: 0;
 		}
@@ -7363,6 +7386,10 @@
 
 		.dashboard-actions .button {
 			width: 100%;
+		}
+
+		.dashboard-actions > :last-child:nth-child(3) {
+			grid-column: 1 / -1;
 		}
 
 		.hero h1 {
