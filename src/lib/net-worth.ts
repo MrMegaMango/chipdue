@@ -44,6 +44,8 @@ export type NetWorthHistory = {
 	includesEstimates: boolean;
 };
 
+export type NetWorthHistoryRange = '1W' | '1M' | '3M' | '1Y' | 'ALL';
+
 type DailySnapshot = AccountBalanceHistoryPoint & { day: string };
 
 function validTimestamp(value: string | null): value is string {
@@ -79,6 +81,18 @@ function dailySnapshots(account: NetWorthAccount): DailySnapshot[] {
 		byDay.set(snapshot.day, snapshot);
 	}
 	return [...byDay.values()].sort((left, right) => left.day.localeCompare(right.day));
+}
+
+export function netWorthPointsForRange(
+	points: NetWorthHistoryPoint[],
+	range: NetWorthHistoryRange
+): NetWorthHistoryPoint[] {
+	if (range === 'ALL' || points.length < 2) return points;
+	const latest = new Date(points.at(-1)!.recordedAt).getTime();
+	const days = range === '1W' ? 7 : range === '1M' ? 30 : range === '3M' ? 90 : 365;
+	const cutoff = latest - days * 24 * 60 * 60 * 1_000;
+	const filtered = points.filter((point) => new Date(point.recordedAt).getTime() >= cutoff);
+	return filtered.length > 0 ? filtered : points.slice(-1);
 }
 
 export function buildNetWorthHistory(

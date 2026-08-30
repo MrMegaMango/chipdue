@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { NetWorthAccount } from './net-worth';
-import { buildNetWorthHistory } from './net-worth';
+import { buildNetWorthHistory, netWorthPointsForRange } from './net-worth';
 
 function account(overrides: Partial<NetWorthAccount> = {}): NetWorthAccount {
 	return {
@@ -26,6 +26,33 @@ function account(overrides: Partial<NetWorthAccount> = {}): NetWorthAccount {
 }
 
 describe('net worth history', () => {
+	it('supports a one-week view anchored to the latest history date', () => {
+		const history = buildNetWorthHistory([
+			account({
+				balanceHistory: [
+					{
+						recordedAt: '2026-01-01T12:00:00.000Z',
+						balanceCents: 100_000,
+						netContributionsCents: null,
+						source: 'observed'
+					},
+					{
+						recordedAt: '2026-01-03T12:00:00.000Z',
+						balanceCents: 120_000,
+						netContributionsCents: null,
+						source: 'observed'
+					}
+				],
+				lastSyncedAt: '2026-01-10T12:00:00.000Z',
+				updatedAt: '2026-01-10T12:00:00.000Z'
+			})
+		]);
+
+		expect(
+			netWorthPointsForRange(history.points, '1W').map((point) => point.recordedAt.slice(0, 10))
+		).toEqual(['2026-01-03', '2026-01-10']);
+	});
+
 	it('aggregates visible active account balances and subtracts tracked card balances', () => {
 		const history = buildNetWorthHistory(
 			[

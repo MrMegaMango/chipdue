@@ -2,12 +2,13 @@
 	import { resolve } from '$app/paths';
 	import {
 		buildNetWorthHistory,
+		netWorthPointsForRange,
 		type NetWorthAccount,
 		type NetWorthAccountBreakdown,
-		type NetWorthHistoryPoint
+		type NetWorthHistoryPoint,
+		type NetWorthHistoryRange
 	} from '$lib/net-worth';
 
-	type HistoryRange = '1M' | '3M' | '1Y' | 'ALL';
 	type ChartPoint = NetWorthHistoryPoint & {
 		x: number;
 		y: number;
@@ -29,7 +30,8 @@
 	const PLOT_RIGHT = 22;
 	const PLOT_TOP = 22;
 	const PLOT_BOTTOM = 38;
-	const ranges: Array<{ id: HistoryRange; label: string }> = [
+	const ranges: Array<{ id: NetWorthHistoryRange; label: string }> = [
+		{ id: '1W', label: '1W' },
 		{ id: '1M', label: '1M' },
 		{ id: '3M', label: '3M' },
 		{ id: '1Y', label: '1Y' },
@@ -59,11 +61,11 @@
 		year: 'numeric'
 	});
 
-	let selectedRange = $state<HistoryRange>('1Y');
+	let selectedRange = $state<NetWorthHistoryRange>('1Y');
 	let hoveredIndex = $state<number | null>(null);
 	let selectedRecordedAt = $state<string | null>(null);
 	const history = $derived(buildNetWorthHistory(accounts, cardBalanceCents));
-	const visibleHistory = $derived(pointsForRange(history.points, selectedRange));
+	const visibleHistory = $derived(netWorthPointsForRange(history.points, selectedRange));
 	const chart = $derived(chartFor(visibleHistory));
 	const firstPoint = $derived(visibleHistory[0]);
 	const latestPoint = $derived(visibleHistory.at(-1));
@@ -86,18 +88,6 @@
 	const selectedBreakdown = $derived(
 		selectedPoint === null ? [] : sortBreakdown(selectedPoint.accounts)
 	);
-
-	function pointsForRange(
-		points: typeof history.points,
-		range: HistoryRange
-	): typeof history.points {
-		if (range === 'ALL' || points.length < 2) return points;
-		const latest = new Date(points.at(-1)!.recordedAt).getTime();
-		const days = range === '1M' ? 30 : range === '3M' ? 90 : 365;
-		const cutoff = latest - days * 24 * 60 * 60 * 1_000;
-		const filtered = points.filter((point) => new Date(point.recordedAt).getTime() >= cutoff);
-		return filtered.length > 0 ? filtered : points.slice(-1);
-	}
 
 	function samplePoints(points: typeof history.points): typeof history.points {
 		if (points.length <= 260) return points;
