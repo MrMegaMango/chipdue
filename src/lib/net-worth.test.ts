@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { NetWorthAccount } from './net-worth';
-import { buildNetWorthHistory, netWorthPointsForRange } from './net-worth';
+import { buildNetWorthHistory, netWorthDateAxisTicks, netWorthPointsForRange } from './net-worth';
 
 function account(overrides: Partial<NetWorthAccount> = {}): NetWorthAccount {
 	return {
@@ -51,6 +51,29 @@ describe('net worth history', () => {
 		expect(
 			netWorthPointsForRange(history.points, '1W').map((point) => point.recordedAt.slice(0, 10))
 		).toEqual(['2026-01-03', '2026-01-10']);
+	});
+
+	it('builds evenly spaced date-axis ticks with unambiguous endpoints', () => {
+		const history = buildNetWorthHistory([
+			account({
+				balanceHistory: [
+					{
+						recordedAt: '2025-08-29T12:00:00.000Z',
+						balanceCents: 100_000,
+						netContributionsCents: null,
+						source: 'observed'
+					}
+				],
+				lastSyncedAt: '2026-08-29T12:00:00.000Z',
+				updatedAt: '2026-08-29T12:00:00.000Z'
+			})
+		]);
+
+		const ticks = netWorthDateAxisTicks(history.points);
+		expect(ticks).toHaveLength(5);
+		expect(ticks.map((tick) => tick.position)).toEqual([0, 0.25, 0.5, 0.75, 1]);
+		expect(ticks[0].recordedAt).toBe('2025-08-29T12:00:00.000Z');
+		expect(ticks.at(-1)?.recordedAt).toBe('2026-08-29T12:00:00.000Z');
 	});
 
 	it('aggregates visible active account balances and subtracts tracked card balances', () => {

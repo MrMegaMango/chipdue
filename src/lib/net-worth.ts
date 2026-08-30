@@ -46,6 +46,11 @@ export type NetWorthHistory = {
 
 export type NetWorthHistoryRange = '1W' | '1M' | '3M' | '1Y' | 'ALL';
 
+export type NetWorthDateAxisTick = {
+	recordedAt: string;
+	position: number;
+};
+
 type DailySnapshot = AccountBalanceHistoryPoint & { day: string };
 
 function validTimestamp(value: string | null): value is string {
@@ -93,6 +98,26 @@ export function netWorthPointsForRange(
 	const cutoff = latest - days * 24 * 60 * 60 * 1_000;
 	const filtered = points.filter((point) => new Date(point.recordedAt).getTime() >= cutoff);
 	return filtered.length > 0 ? filtered : points.slice(-1);
+}
+
+export function netWorthDateAxisTicks(
+	points: NetWorthHistoryPoint[],
+	tickCount = 5
+): NetWorthDateAxisTick[] {
+	if (points.length === 0) return [];
+	const firstTime = new Date(points[0].recordedAt).getTime();
+	const lastTime = new Date(points.at(-1)!.recordedAt).getTime();
+	if (points.length === 1 || firstTime === lastTime) {
+		return [{ recordedAt: points.at(-1)!.recordedAt, position: 0.5 }];
+	}
+	const count = Math.max(2, Math.floor(tickCount));
+	return Array.from({ length: count }, (_, index) => {
+		const position = index / (count - 1);
+		return {
+			recordedAt: new Date(firstTime + (lastTime - firstTime) * position).toISOString(),
+			position
+		};
+	});
 }
 
 export function buildNetWorthHistory(

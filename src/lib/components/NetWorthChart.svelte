@@ -2,6 +2,7 @@
 	import { resolve } from '$app/paths';
 	import {
 		buildNetWorthHistory,
+		netWorthDateAxisTicks,
 		netWorthPointsForRange,
 		type NetWorthAccount,
 		type NetWorthAccountBreakdown,
@@ -60,6 +61,16 @@
 		day: 'numeric',
 		year: 'numeric'
 	});
+	const axisDayLabel = new Intl.DateTimeFormat('en-US', {
+		month: 'short',
+		day: 'numeric',
+		timeZone: 'UTC'
+	});
+	const axisMonthYearLabel = new Intl.DateTimeFormat('en-US', {
+		month: 'short',
+		year: 'numeric',
+		timeZone: 'UTC'
+	});
 
 	let selectedRange = $state<NetWorthHistoryRange>('1Y');
 	let hoveredIndex = $state<number | null>(null);
@@ -108,9 +119,12 @@
 		linePath: string;
 		areaPath: string;
 		ticks: Array<{ value: number; y: number }>;
+		dateTicks: Array<{ recordedAt: string; x: number }>;
 	} {
 		const sampled = samplePoints(points);
-		if (sampled.length === 0) return { points: [], linePath: '', areaPath: '', ticks: [] };
+		if (sampled.length === 0) {
+			return { points: [], linePath: '', areaPath: '', ticks: [], dateTicks: [] };
+		}
 		const values = sampled.map((point) => point.netWorthCents);
 		const rawMin = Math.min(...values);
 		const rawMax = Math.max(...values);
@@ -146,7 +160,11 @@
 			value,
 			y: PLOT_TOP + ((max - value) / (max - min)) * plotHeight
 		}));
-		return { points: scaled, linePath, areaPath, ticks };
+		const dateTicks = netWorthDateAxisTicks(sampled).map((tick) => ({
+			recordedAt: tick.recordedAt,
+			x: PLOT_LEFT + tick.position * plotWidth
+		}));
+		return { points: scaled, linePath, areaPath, ticks, dateTicks };
 	}
 
 	function formatMoney(value: number | null): string {
@@ -172,6 +190,12 @@
 
 	function formatDate(value: string, full = false): string {
 		return (full ? fullDateLabel : dateLabel).format(new Date(value));
+	}
+
+	function formatAxisDate(value: string): string {
+		return (
+			selectedRange === '1Y' || selectedRange === 'ALL' ? axisMonthYearLabel : axisDayLabel
+		).format(new Date(value));
 	}
 
 	function accountTypeLabel(value: NetWorthAccountBreakdown['accountType']): string {
@@ -339,6 +363,17 @@
 						{formatCompactMoney(tick.value)}
 					</text>
 				{/each}
+				{#each chart.dateTicks as tick, index (tick.recordedAt)}
+					{#if index > 0 && index < chart.dateTicks.length - 1}
+						<line
+							x1={tick.x}
+							x2={tick.x}
+							y1={PLOT_TOP}
+							y2={HEIGHT - PLOT_BOTTOM}
+							class="date-grid-line"
+						></line>
+					{/if}
+				{/each}
 				{#if chart.areaPath}
 					<path d={chart.areaPath} fill="url(#net-worth-fill)"></path>
 				{/if}
@@ -364,11 +399,35 @@
 						></circle>
 					{/if}
 				{/each}
-				{#if firstPoint && latestPoint}
-					<text x={PLOT_LEFT} y={HEIGHT - 11}>{formatDate(firstPoint.recordedAt)}</text>
-					<text x={WIDTH - PLOT_RIGHT} y={HEIGHT - 11} text-anchor="end">
-						{formatDate(latestPoint.recordedAt)}
-					</text>
+				{#if chart.dateTicks.length > 0}
+					<line
+						x1={PLOT_LEFT}
+						x2={WIDTH - PLOT_RIGHT}
+						y1={HEIGHT - PLOT_BOTTOM}
+						y2={HEIGHT - PLOT_BOTTOM}
+						class="date-axis-line"
+					></line>
+					{#each chart.dateTicks as tick, index (tick.recordedAt)}
+						<line
+							x1={tick.x}
+							x2={tick.x}
+							y1={HEIGHT - PLOT_BOTTOM}
+							y2={HEIGHT - PLOT_BOTTOM + 5}
+							class="date-axis-tick"
+						></line>
+						<text
+							x={tick.x}
+							y={HEIGHT - 10}
+							text-anchor={index === 0
+								? 'start'
+								: index === chart.dateTicks.length - 1
+									? 'end'
+									: 'middle'}
+							class="date-axis-label"
+						>
+							{formatAxisDate(tick.recordedAt)}
+						</text>
+					{/each}
 				{/if}
 			</svg>
 
@@ -626,6 +685,17 @@
 		stroke-dasharray: 3 5;
 	}
 
+	.date-grid-line {
+		stroke: rgba(187, 180, 168, 0.22);
+		stroke-dasharray: 3 6;
+	}
+
+	.date-axis-line,
+	.date-axis-tick {
+		stroke: rgba(131, 124, 113, 0.7);
+		stroke-width: 1.25;
+	}
+
 	.value-line {
 		fill: none;
 		stroke: var(--accent);
@@ -650,6 +720,11 @@
 		fill: var(--faint);
 		font-size: 10px;
 		font-weight: 620;
+	}
+
+	.net-worth-chart text.date-axis-label {
+		fill: var(--muted);
+		font-weight: 720;
 	}
 
 	.chart-tooltip {
