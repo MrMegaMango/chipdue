@@ -52,8 +52,11 @@ describe('financial workspace navigation', () => {
 
 	it('shows live relative sync times throughout the workspace with exact hover timestamps', () => {
 		expect(syncedTimeSource).toContain('relativeTimestampLabel(value, $currentTime');
-		expect(syncedTimeSource).toContain('title={exactLabel ?? undefined}');
-		expect(syncedTimeSource).toContain('aria-label={exactLabel ?? relativeLabel}');
+		expect(syncedTimeSource).toContain('popover="manual"');
+		expect(syncedTimeSource).toContain('tooltipElement.showPopover()');
+		expect(syncedTimeSource).toContain('role="tooltip"');
+		expect(syncedTimeSource).toContain('aria-label={exactLabel}');
+		expect(syncedTimeSource).not.toContain('cursor: help');
 		expect(dashboardSource).toContain('<SyncedTime');
 		expect(dashboardSource).toContain('class="workspace-sync-time"');
 		expect(accountsSource).toContain('value={account.lastSyncedAt}');
