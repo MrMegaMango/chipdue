@@ -10,14 +10,15 @@ import {
 	formatRewardEstimate,
 	formatRewardRate,
 	googleCalendarEventUrl,
+	hasPaymentDue,
 	inputToCents,
 	inputToRewardRate,
-	interestSavingTarget,
 	isApprovedBootstrapContinuation,
 	isGoogleOnlyCloudMode,
 	isValidOptionalAmount,
 	isValidSetupToken,
 	LAST_FOUR_PATTERN,
+	paymentHeadline,
 	parseGoogleCallbackResult
 } from './+page.svelte';
 
@@ -259,30 +260,59 @@ describe('card activity preview', () => {
 	});
 });
 
-describe('interest-saving payment target', () => {
-	it('prioritizes the reported statement balance over the current balance', () => {
-		expect(interestSavingTarget(120_000, 145_000)).toEqual({
-			amountCents: 120_000,
-			source: 'statement'
+describe('credit-card payment status', () => {
+	it('keeps the statement balance historical instead of presenting it as an amount to pay', () => {
+		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+		expect(source).not.toContain('Pay to avoid interest');
+		expect(source).toContain(
+			'Last statement ${formatMoney(card.statementBalanceCents)} (historical)'
+		);
+		expect(source).toContain("payment.source === 'none' ? 'Reported due date' : 'Due date'");
+	});
+
+	it('uses the reported minimum payment as the actionable amount', () => {
+		expect(paymentHeadline(2_500, 145_000)).toEqual({
+			label: 'Minimum payment due',
+			amountCents: 2_500,
+			source: 'minimum'
 		});
 	});
 
-	it('uses a clearly identified current-balance estimate when the statement is unavailable', () => {
-		expect(interestSavingTarget(null, 145_000)).toEqual({
+	it('shows no payment due when the minimum is zero, regardless of the historical statement', () => {
+		expect(paymentHeadline(0, -1_545)).toEqual({
+			label: 'No payment due',
+			amountCents: 0,
+			source: 'none'
+		});
+		expect(hasPaymentDue(0, -1_545, '2026-09-01')).toBe(false);
+	});
+
+	it('shows a positive current balance only when the minimum payment is unavailable', () => {
+		expect(paymentHeadline(null, 145_000)).toEqual({
+			label: 'Current balance',
 			amountCents: 145_000,
 			source: 'current'
 		});
-		expect(interestSavingTarget(null, null)).toEqual({
+		expect(paymentHeadline(null, null)).toEqual({
+			label: 'Not reported',
 			amountCents: null,
 			source: 'unavailable'
 		});
 	});
 
-	it('never suggests paying a negative balance', () => {
-		expect(interestSavingTarget(-2_500, -1_000)).toEqual({
+	it('never presents a negative current balance as money owed', () => {
+		expect(paymentHeadline(null, -1_000)).toEqual({
+			label: 'No payment due',
 			amountCents: 0,
-			source: 'statement'
+			source: 'none'
 		});
+		expect(hasPaymentDue(null, -1_000, '2026-09-01')).toBe(false);
+	});
+
+	it('uses a reported due date only when the amount and balance do not rule out a payment', () => {
+		expect(hasPaymentDue(null, 12_000, '2026-09-01')).toBe(true);
+		expect(hasPaymentDue(null, null, '2026-09-01')).toBe(true);
+		expect(hasPaymentDue(null, 12_000, null)).toBe(false);
 	});
 });
 

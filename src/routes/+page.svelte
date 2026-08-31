@@ -113,22 +113,43 @@
 		return brand ? asset(`/brands/${brand}.svg`) : null;
 	}
 
-	export type InterestSavingTarget = {
+	export type PaymentHeadline = {
+		label: 'Minimum payment due' | 'No payment due' | 'Current balance' | 'Not reported';
 		amountCents: number | null;
-		source: 'statement' | 'current' | 'unavailable';
+		source: 'minimum' | 'none' | 'current' | 'unavailable';
 	};
 
-	export function interestSavingTarget(
-		statementBalanceCents: number | null,
+	export function paymentHeadline(
+		minimumPaymentCents: number | null,
 		currentBalanceCents: number | null
-	): InterestSavingTarget {
-		if (statementBalanceCents !== null) {
-			return { amountCents: Math.max(0, statementBalanceCents), source: 'statement' };
+	): PaymentHeadline {
+		if (minimumPaymentCents !== null) {
+			if (minimumPaymentCents === 0) {
+				return { label: 'No payment due', amountCents: 0, source: 'none' };
+			}
+			return {
+				label: 'Minimum payment due',
+				amountCents: minimumPaymentCents,
+				source: 'minimum'
+			};
 		}
 		if (currentBalanceCents !== null) {
-			return { amountCents: Math.max(0, currentBalanceCents), source: 'current' };
+			if (currentBalanceCents <= 0) {
+				return { label: 'No payment due', amountCents: 0, source: 'none' };
+			}
+			return { label: 'Current balance', amountCents: currentBalanceCents, source: 'current' };
 		}
-		return { amountCents: null, source: 'unavailable' };
+		return { label: 'Not reported', amountCents: null, source: 'unavailable' };
+	}
+
+	export function hasPaymentDue(
+		minimumPaymentCents: number | null,
+		currentBalanceCents: number | null,
+		dueDate: string | null
+	): boolean {
+		if (minimumPaymentCents !== null) return minimumPaymentCents > 0;
+		if (currentBalanceCents !== null && currentBalanceCents <= 0) return false;
+		return dueDate !== null;
 	}
 
 	export type CardRewardType = 'points' | 'miles' | 'cash_back';
@@ -555,17 +576,11 @@
 		activeWorkspaceBonuses.reduce((total, bonus) => total + (bonus.rewardCents ?? 0), 0)
 	);
 
-	const interestSavingTargets = $derived(
-		cards.map((card) => interestSavingTarget(card.statementBalanceCents, card.currentBalanceCents))
+	const totalMinimumPaymentCents = $derived(
+		cards.reduce((total, card) => total + (card.minimumPaymentCents ?? 0), 0)
 	);
-	const totalInterestSavingCents = $derived(
-		interestSavingTargets.reduce((total, target) => total + (target.amountCents ?? 0), 0)
-	);
-	const knownInterestSavingCount = $derived(
-		interestSavingTargets.filter((target) => target.amountCents !== null).length
-	);
-	const estimatedInterestSavingCount = $derived(
-		interestSavingTargets.filter((target) => target.source === 'current').length
+	const knownMinimumPaymentCount = $derived(
+		cards.filter((card) => card.minimumPaymentCents !== null).length
 	);
 	const dueSoonCount = $derived(cards.filter((card) => isDueSoon(card)).length);
 	const trackedCardBalanceCents = $derived(
@@ -578,7 +593,12 @@
 	);
 	const nextCard = $derived(
 		cards
-			.filter((card) => card.dueDate && daysUntil(card.dueDate) >= 0)
+			.filter(
+				(card) =>
+					card.dueDate &&
+					hasPaymentDue(card.minimumPaymentCents, card.currentBalanceCents, card.dueDate) &&
+					daysUntil(card.dueDate) >= 0
+			)
 			.toSorted((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''))[0] ?? null
 	);
 	const nextBonusDeadline = $derived(
@@ -1360,21 +1380,36 @@
 
 	function isOverdue(card: CardView): boolean {
 		if (card.isOverdue !== null) return card.isOverdue;
-		return daysUntil(card.dueDate) < 0 && (card.minimumPaymentCents ?? 0) > 0;
+		return (
+			daysUntil(card.dueDate) < 0 &&
+			hasPaymentDue(card.minimumPaymentCents, card.currentBalanceCents, card.dueDate)
+		);
 	}
 
 	function isDueSoon(card: CardView): boolean {
 		const days = daysUntil(card.dueDate);
-		return isOverdue(card) || (days < 0 && card.isOverdue !== false) || (days >= 0 && days <= 7);
+		if (isOverdue(card)) return true;
+		if (!hasPaymentDue(card.minimumPaymentCents, card.currentBalanceCents, card.dueDate)) {
+			return false;
+		}
+		return (days < 0 && card.isOverdue !== false) || (days >= 0 && days <= 7);
 	}
 
 	function dueStatus(card: CardView): {
 		label: string;
 		tone: 'neutral' | 'good' | 'warn' | 'danger';
 	} {
+		if (isOverdue(card)) return { label: 'Past due', tone: 'danger' };
+		if (
+			card.minimumPaymentCents === 0 ||
+			(card.minimumPaymentCents === null &&
+				card.currentBalanceCents !== null &&
+				card.currentBalanceCents <= 0)
+		) {
+			return { label: 'No payment due', tone: 'good' };
+		}
 		if (!card.dueDate) return { label: 'Date needed', tone: 'neutral' };
 		const days = daysUntil(card.dueDate);
-		if (isOverdue(card)) return { label: 'Past due', tone: 'danger' };
 		if (days < 0 && card.isOverdue === null) {
 			return { label: 'Past date · check status', tone: 'warn' };
 		}
@@ -2726,24 +2761,19 @@
 						>
 					</div>
 					<div>
-						<p>Pay to avoid interest</p>
+						<p>Minimum payments due</p>
 						<strong>
 							{loading || !hasLoadedCards
 								? '—'
-								: cards.length > 0 && knownInterestSavingCount === 0
+								: cards.length > 0 && knownMinimumPaymentCount === 0
 									? 'Not reported'
-									: formatMoney(totalInterestSavingCents)}
+									: formatMoney(totalMinimumPaymentCents)}
 						</strong>
 						<span>
 							{#if !hasLoadedCards}
 								Awaiting local data
-							{:else if estimatedInterestSavingCount > 0}
-								Includes {estimatedInterestSavingCount} current-balance {estimatedInterestSavingCount ===
-								1
-									? 'estimate'
-									: 'estimates'}
-							{:else if knownInterestSavingCount < cards.length}
-								{knownInterestSavingCount} of {cards.length} reported
+							{:else if knownMinimumPaymentCount < cards.length}
+								{knownMinimumPaymentCount} of {cards.length} reported
 							{:else}
 								Across {cards.length} {cards.length === 1 ? 'card' : 'cards'}
 							{/if}
@@ -2908,10 +2938,7 @@
 						{#each cards as card (card.id)}
 							{@const status = dueStatus(card)}
 							{@const cardBrand = cardBrandForIssuer(card.issuer)}
-							{@const paymentTarget = interestSavingTarget(
-								card.statementBalanceCents,
-								card.currentBalanceCents
-							)}
+							{@const payment = paymentHeadline(card.minimumPaymentCents, card.currentBalanceCents)}
 							<article class:overdue={status.tone === 'danger'} class="credit-card">
 								<header class="card-header">
 									<div class="card-identity">
@@ -2940,20 +2967,28 @@
 								</header>
 
 								<div class="balance-block">
-									<span>Pay to avoid interest</span>
-									<strong class:unavailable={paymentTarget.amountCents === null}>
-										{formatMoney(paymentTarget.amountCents)}
+									<span>{payment.label}</span>
+									<strong class:unavailable={payment.amountCents === null}>
+										{formatMoney(payment.amountCents)}
 									</strong>
-									{#if paymentTarget.source === 'statement'}
+									{#if card.currentBalanceCents !== null}
 										<small>
-											Latest statement balance{card.currentBalanceCents !== null
-												? ` · Current ${formatMoney(card.currentBalanceCents)}`
+											{card.currentBalanceCents < 0
+												? `Current credit ${formatMoney(Math.abs(card.currentBalanceCents))}`
+												: `Current balance ${formatMoney(card.currentBalanceCents)}`}{card.statementBalanceCents !==
+											null
+												? ` · Last statement ${formatMoney(card.statementBalanceCents)} (historical)`
 												: ''}
 										</small>
-									{:else if paymentTarget.source === 'current'}
-										<small>Current-balance estimate · statement not reported</small>
+									{:else if card.statementBalanceCents !== null}
+										<small
+											>Last statement {formatMoney(card.statementBalanceCents)} (historical)</small
+										>
 									{:else}
-										<small>Check your issuer for the statement balance</small>
+										<small>Current and statement balances are not reported</small>
+									{/if}
+									{#if payment.source === 'current'}
+										<small>Minimum payment not reported · check your issuer before paying</small>
 									{/if}
 								</div>
 
@@ -2963,7 +2998,7 @@
 										<strong>{formatMoney(card.minimumPaymentCents)}</strong>
 									</div>
 									<div>
-										<span>Due date</span>
+										<span>{payment.source === 'none' ? 'Reported due date' : 'Due date'}</span>
 										<strong>{formatDate(card.dueDate)}</strong>
 									</div>
 								</div>
