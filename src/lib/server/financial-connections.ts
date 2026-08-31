@@ -4,7 +4,7 @@ import type {
 	FinancialDataProvider,
 	FinancialProviderStatus
 } from '$lib/types';
-import { AppError } from './errors';
+import { AppError, asAppError } from './errors';
 import {
 	disconnectPlaidItem,
 	plaidConfigurationStatus,
@@ -160,7 +160,22 @@ export async function syncFinancialConnection(
 export async function syncCurrentTenantFinancialConnections(): Promise<ConnectionsSyncResult> {
 	const connections = await listFinancialConnections();
 	return summarize(
-		await Promise.all(connections.map((connection) => syncFinancialConnection(connection.id)))
+		await Promise.all(
+			connections.map(async (connection) => {
+				try {
+					return await syncFinancialConnection(connection.id);
+				} catch (error) {
+					const safeError = asAppError(error);
+					const institutionName =
+						connection.institutionName?.trim() || FINANCIAL_PROVIDER_NAMES[connection.provider];
+					throw new AppError(
+						safeError.code,
+						`Sync failed for ${institutionName}: ${safeError.message}`,
+						safeError.status
+					);
+				}
+			})
+		)
 	);
 }
 
