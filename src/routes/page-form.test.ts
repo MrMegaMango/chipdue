@@ -18,7 +18,7 @@ import {
 	isValidOptionalAmount,
 	isValidSetupToken,
 	LAST_FOUR_PATTERN,
-	paymentHeadline,
+	payInFullTarget,
 	parseGoogleCallbackResult
 } from './+page.svelte';
 
@@ -261,58 +261,57 @@ describe('card activity preview', () => {
 });
 
 describe('credit-card payment status', () => {
-	it('keeps the statement balance historical instead of presenting it as an amount to pay', () => {
+	it('prioritizes statement balances and their deadlines over minimum payments', () => {
 		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
 		expect(source).not.toContain('Pay to avoid interest');
-		expect(source).toContain(
-			'Last statement ${formatMoney(card.statementBalanceCents)} (historical)'
-		);
-		expect(source).toContain("payment.source === 'none' ? 'Reported due date' : 'Due date'");
+		expect(source).not.toContain('Minimum payments due');
+		expect(source).toContain('Statement balances to pay');
+		expect(source).toContain("payment.source === 'statement' ? 'Pay by' : 'Reported due date'");
 	});
 
-	it('uses the reported minimum payment as the actionable amount', () => {
-		expect(paymentHeadline(2_500, 145_000)).toEqual({
-			label: 'Minimum payment due',
-			amountCents: 2_500,
-			source: 'minimum'
+	it('uses the statement balance as the pay-in-full target', () => {
+		expect(payInFullTarget(17_522, 4_000, 28_139)).toEqual({
+			label: 'Statement balance to pay',
+			amountCents: 17_522,
+			source: 'statement'
 		});
 	});
 
 	it('shows no payment due when the minimum is zero, regardless of the historical statement', () => {
-		expect(paymentHeadline(0, -1_545)).toEqual({
+		expect(payInFullTarget(19_977, 0, -1_545)).toEqual({
 			label: 'No payment due',
 			amountCents: 0,
 			source: 'none'
 		});
-		expect(hasPaymentDue(0, -1_545, '2026-09-01')).toBe(false);
+		expect(hasPaymentDue(19_977, 0, -1_545, '2026-09-01')).toBe(false);
 	});
 
-	it('shows a positive current balance only when the minimum payment is unavailable', () => {
-		expect(paymentHeadline(null, 145_000)).toEqual({
-			label: 'Current balance',
-			amountCents: 145_000,
-			source: 'current'
+	it('does not substitute the current balance when the statement balance is unavailable', () => {
+		expect(payInFullTarget(null, 3_000, 147_657)).toEqual({
+			label: 'Statement balance unavailable',
+			amountCents: null,
+			source: 'unavailable'
 		});
-		expect(paymentHeadline(null, null)).toEqual({
-			label: 'Not reported',
+		expect(payInFullTarget(null, null, null)).toEqual({
+			label: 'Statement balance unavailable',
 			amountCents: null,
 			source: 'unavailable'
 		});
 	});
 
 	it('never presents a negative current balance as money owed', () => {
-		expect(paymentHeadline(null, -1_000)).toEqual({
+		expect(payInFullTarget(20_000, 2_500, -1_000)).toEqual({
 			label: 'No payment due',
 			amountCents: 0,
 			source: 'none'
 		});
-		expect(hasPaymentDue(null, -1_000, '2026-09-01')).toBe(false);
+		expect(hasPaymentDue(20_000, 2_500, -1_000, '2026-09-01')).toBe(false);
 	});
 
 	it('uses a reported due date only when the amount and balance do not rule out a payment', () => {
-		expect(hasPaymentDue(null, 12_000, '2026-09-01')).toBe(true);
-		expect(hasPaymentDue(null, null, '2026-09-01')).toBe(true);
-		expect(hasPaymentDue(null, 12_000, null)).toBe(false);
+		expect(hasPaymentDue(12_000, null, 15_000, '2026-09-01')).toBe(true);
+		expect(hasPaymentDue(null, null, null, '2026-09-01')).toBe(true);
+		expect(hasPaymentDue(12_000, null, 15_000, null)).toBe(false);
 	});
 });
 
