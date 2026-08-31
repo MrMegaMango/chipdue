@@ -3564,7 +3564,7 @@
 								<ul class="connection-list">
 									{#each financialConnections as connection (connection.id)}
 										{@const institutionLogoUrl = connectionLogoUrl(connection)}
-										<li>
+										<li class:needs-update={connection.status === 'needs_update'}>
 											<div class="connection-details">
 												{#if institutionLogoUrl}
 													<span class="institution-icon institution-logo">
@@ -3584,8 +3584,20 @@
 												<span>
 													<strong>{connectionLabel(connection)}</strong>
 													<small class:attention={connection.status === 'needs_update'}>
-														{connection.status === 'needs_update' ? 'Needs attention' : 'Connected'} ·
-														<SyncedTime value={connection.lastSyncedAt} fallback="Never synced" />
+														{#if connection.status === 'needs_update'}
+															<span class="attention-status">
+																<span class="attention-icon" aria-hidden="true">!</span>
+																Needs attention ·
+																<SyncedTime
+																	value={connection.lastSyncedAt}
+																	fallback="Never synced"
+																/>
+															</span>
+															<span class="attention-guidance">Reconnect to resume syncing</span>
+														{:else}
+															Connected ·
+															<SyncedTime value={connection.lastSyncedAt} fallback="Never synced" />
+														{/if}
 													</small>
 												</span>
 											</div>
@@ -3593,18 +3605,27 @@
 												{#if connection.provider === 'plaid'}
 													<button
 														class="update-connection"
+														class:repair-connection={connection.status === 'needs_update'}
 														type="button"
 														onclick={() => updatePlaid(connection)}
 														disabled={busyAction !== null}
 														aria-busy={busyAction === 'update' &&
 															plaidItemActionId === connection.id}
+														aria-label={connection.status === 'needs_update'
+															? `Repair ${connectionLabel(connection)} connection`
+															: `Manage ${connectionLabel(connection)} accounts`}
 														aria-describedby="plaid-consent-copy"
 													>
-														{busyAction === 'update' && plaidItemActionId === connection.id
-															? 'Opening…'
-															: connection.status === 'needs_update'
-																? 'Repair & manage'
-																: 'Manage accounts'}
+														{#if busyAction === 'update' && plaidItemActionId === connection.id}
+															Opening…
+														{:else if connection.status === 'needs_update'}
+															<svg aria-hidden="true" viewBox="0 0 16 16">
+																<path d="M13.4 5.5A5.7 5.7 0 1 0 13 11M13.4 2.5v3.4H10"></path>
+															</svg>
+															Repair connection
+														{:else}
+															Manage accounts
+														{/if}
 													</button>
 												{/if}
 												<button
@@ -6502,6 +6523,12 @@
 		background: var(--paper-soft);
 	}
 
+	.connection-list > li.needs-update {
+		border-color: #d18a37;
+		background: #fff8ec;
+		box-shadow: 0 0 0 1px rgb(209 138 55 / 22%);
+	}
+
 	.connection-details {
 		display: flex;
 		min-width: 0;
@@ -6563,8 +6590,36 @@
 	}
 
 	.connection-details small.attention {
-		color: #855018;
-		font-weight: 680;
+		display: grid;
+		gap: 0.14rem;
+		color: #7a3f0b;
+		font-weight: 720;
+	}
+
+	.attention-status {
+		display: flex;
+		gap: 0.3rem;
+		align-items: center;
+	}
+
+	.attention-icon {
+		display: inline-grid;
+		width: 15px;
+		height: 15px;
+		flex: 0 0 auto;
+		place-items: center;
+		border-radius: 50%;
+		color: white;
+		font-size: 0.57rem;
+		font-weight: 850;
+		line-height: 1;
+		background: #b45309;
+	}
+
+	.attention-guidance {
+		color: #92400e;
+		font-size: 0.58rem;
+		font-weight: 620;
 	}
 
 	.connection-actions {
@@ -6592,6 +6647,39 @@
 	.update-connection {
 		border: 1px solid #dfbd87;
 		color: #734713;
+	}
+
+	.update-connection.repair-connection {
+		display: inline-flex;
+		min-height: 38px;
+		gap: 0.38rem;
+		align-items: center;
+		justify-content: center;
+		padding: 0.48rem 0.72rem;
+		border-color: #873806;
+		color: white;
+		font-size: 0.69rem;
+		background: #b45309;
+		box-shadow: 0 2px 0 #783308;
+	}
+
+	.update-connection.repair-connection:hover:not(:disabled) {
+		background: #92400e;
+	}
+
+	.update-connection.repair-connection:focus-visible {
+		outline: 3px solid rgb(180 83 9 / 28%);
+		outline-offset: 2px;
+	}
+
+	.update-connection.repair-connection svg {
+		width: 14px;
+		height: 14px;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.8;
+		stroke-linecap: round;
+		stroke-linejoin: round;
 	}
 
 	.disconnect-connection {
