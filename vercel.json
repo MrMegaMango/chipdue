@@ -4,11 +4,11 @@
 	"crons": [
 		{
 			"path": "/api/cron/plaid-sync/morning-pdt",
-			"schedule": "0 16 * * *"
+			"schedule": "0 15 * * *"
 		},
 		{
 			"path": "/api/cron/plaid-sync/morning-pst",
-			"schedule": "0 17 * * *"
+			"schedule": "0 16 * * *"
 		},
 		{
 			"path": "/api/cron/plaid-sync/evening-pdt",

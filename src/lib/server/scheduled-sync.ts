@@ -17,8 +17,8 @@ const CANDIDATES: Record<
 	ScheduledSyncCandidate,
 	{ period: ScheduledSyncPeriod; localHour: number; utcHour: number }
 > = {
-	'morning-pdt': { period: 'morning', localHour: 9, utcHour: 16 },
-	'morning-pst': { period: 'morning', localHour: 9, utcHour: 17 },
+	'morning-pdt': { period: 'morning', localHour: 8, utcHour: 15 },
+	'morning-pst': { period: 'morning', localHour: 8, utcHour: 16 },
 	'evening-pdt': { period: 'evening', localHour: 17, utcHour: 0 },
 	'evening-pst': { period: 'evening', localHour: 17, utcHour: 1 }
 };

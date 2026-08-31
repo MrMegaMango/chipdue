@@ -20,11 +20,11 @@ describe.sequential('scheduled Plaid synchronization', () => {
 	});
 
 	it('selects the Pacific daylight and standard time windows', () => {
-		expect(scheduledSyncWindow('morning-pdt', new Date('2026-08-28T16:15:00Z'))).toEqual({
+		expect(scheduledSyncWindow('morning-pdt', new Date('2026-08-28T15:15:00Z'))).toEqual({
 			period: 'morning',
 			localDate: '2026-08-28'
 		});
-		expect(scheduledSyncWindow('morning-pst', new Date('2026-12-28T17:15:00Z'))).toEqual({
+		expect(scheduledSyncWindow('morning-pst', new Date('2026-12-28T16:15:00Z'))).toEqual({
 			period: 'morning',
 			localDate: '2026-12-28'
 		});
@@ -39,9 +39,9 @@ describe.sequential('scheduled Plaid synchronization', () => {
 	});
 
 	it('skips the inactive daylight-saving candidate and malformed requests', () => {
-		expect(scheduledSyncWindow('morning-pst', new Date('2026-08-28T17:15:00Z'))).toBeNull();
-		expect(scheduledSyncWindow('morning-pdt', new Date('2026-12-28T16:15:00Z'))).toBeNull();
-		expect(scheduledSyncWindow('unknown', new Date('2026-08-28T16:15:00Z'))).toBeNull();
+		expect(scheduledSyncWindow('morning-pst', new Date('2026-08-28T16:15:00Z'))).toBeNull();
+		expect(scheduledSyncWindow('morning-pdt', new Date('2026-12-28T15:15:00Z'))).toBeNull();
+		expect(scheduledSyncWindow('unknown', new Date('2026-08-28T15:15:00Z'))).toBeNull();
 		expect(scheduledSyncWindow('morning-pdt', new Date('invalid'))).toBeNull();
 	});
 
