@@ -12,6 +12,7 @@ const plaidMocks = vi.hoisted(() => ({
 	investmentsTransactionsGet: vi.fn(),
 	transactionsSync: vi.fn(),
 	itemGet: vi.fn(),
+	itemRemove: vi.fn(),
 	itemPublicTokenExchange: vi.fn(),
 	institutionsGet: vi.fn(),
 	institutionsGetById: vi.fn(),
@@ -69,6 +70,10 @@ vi.mock('plaid', async (importOriginal) => {
 				return plaidMocks.itemGet(request);
 			}
 
+			itemRemove(request: unknown) {
+				return plaidMocks.itemRemove(request);
+			}
+
 			itemPublicTokenExchange(request: unknown) {
 				this.record('itemPublicTokenExchange');
 				return plaidMocks.itemPublicTokenExchange(request);
@@ -98,17 +103,19 @@ import {
 	createPlaidLinkToken,
 	createPlaidTransactionsUpdateToken,
 	createPlaidUpdateToken,
+	disconnectPlaidItem,
 	exchangePlaidPublicToken,
 	plaidConfigurationStatus,
 	refreshPlaidInvestments,
 	resetPlaidClientForTests,
 	syncPlaidItem
 } from './plaid';
-import { savePlaidItem } from './plaid-store';
+import { listPlaidConnections, savePlaidItem } from './plaid-store';
 import { updateCardRewardsSchema } from './schemas';
 import {
 	listFinancialAccounts,
 	listFinancialAccountTransactions,
+	replaceConnectedFinancialAccounts,
 	updateFinancialAccount
 } from './financial-records';
 
@@ -253,6 +260,7 @@ describe.sequential('Plaid transaction history', () => {
 			data: { investment_transactions: [], securities: [], total_investment_transactions: 0 }
 		});
 		plaidMocks.itemGet.mockRejectedValue(new Error('Institution metadata unavailable'));
+		plaidMocks.itemRemove.mockResolvedValue({ data: { removed: true } });
 	});
 
 	afterEach(() => {
@@ -400,6 +408,148 @@ describe.sequential('Plaid transaction history', () => {
 				secret: 'original-production-secret'
 			}
 		]);
+	});
+
+	it('removes a newly linked Plaid Item when its selected account is already connected', async () => {
+		await savePlaidItem('provider-item-existing-chase', 'existing-chase-token', 'Chase');
+		plaidMocks.itemGet.mockResolvedValue({
+			data: { item: { institution_id: 'ins_56' } }
+		});
+		plaidMocks.accountsGet.mockResolvedValue({
+			data: {
+				accounts: [
+					{
+						account_id: 'existing-provider-account',
+						name: 'Self-Directed',
+						mask: '3352',
+						type: 'investment',
+						subtype: 'brokerage',
+						balances: {
+							current: 521_334.37,
+							available: 0,
+							limit: null,
+							iso_currency_code: 'USD',
+							unofficial_currency_code: null
+						}
+					}
+				]
+			}
+		});
+		plaidMocks.itemPublicTokenExchange.mockResolvedValue({
+			data: { item_id: 'provider-item-redundant-chase', access_token: 'redundant-chase-token' }
+		});
+
+		await expect(
+			exchangePlaidPublicToken('duplicate-public-token', 'Chase', {
+				institutionId: 'ins_56',
+				accounts: [
+					{
+						name: 'Self-Directed',
+						mask: '3352',
+						type: 'investment',
+						subtype: 'brokerage'
+					}
+				]
+			})
+		).rejects.toMatchObject({ code: 'DUPLICATE_CONNECTION', status: 409 });
+		expect(plaidMocks.itemPublicTokenExchange).toHaveBeenCalledOnce();
+		expect(plaidMocks.itemRemove).toHaveBeenCalledWith({ access_token: 'redundant-chase-token' });
+		expect(await listPlaidConnections()).toHaveLength(1);
+	});
+
+	it('preserves a duplicate brokerage balance observation before disconnecting its Item', async () => {
+		const canonicalItem = await savePlaidItem(
+			'provider-item-canonical-chase',
+			'canonical-chase-token',
+			'Chase'
+		);
+		const duplicateItem = await savePlaidItem(
+			'provider-item-duplicate-chase',
+			'duplicate-chase-token',
+			'Chase'
+		);
+		const snapshot = (accountId: string, currentBalanceCents: number) => ({
+			accountId,
+			nickname: 'Self-Directed',
+			institution: 'Chase',
+			institutionLogoBase64: null,
+			accountType: 'brokerage' as const,
+			last4: '3352',
+			currency: 'USD',
+			currentBalanceCents,
+			costBasisCents: 37_500_000,
+			holdings: []
+		});
+		await replaceConnectedFinancialAccounts(
+			'plaid',
+			canonicalItem,
+			[snapshot('canonical-account', 51_760_404)],
+			'2026-09-01T19:39:45.000Z'
+		);
+		await replaceConnectedFinancialAccounts(
+			'plaid',
+			duplicateItem,
+			[snapshot('duplicate-account', 52_133_437)],
+			'2026-09-01T16:27:55.000Z'
+		);
+
+		await disconnectPlaidItem(duplicateItem);
+
+		expect(plaidMocks.itemRemove).toHaveBeenCalledWith({ access_token: 'duplicate-chase-token' });
+		expect(await listPlaidConnections()).toHaveLength(1);
+		const [account] = await listFinancialAccounts();
+		expect(account).toMatchObject({
+			connectionId: canonicalItem,
+			currentBalanceCents: 51_760_404
+		});
+		expect(account.balanceHistory.filter((point) => point.source === 'observed')).toHaveLength(2);
+	});
+
+	it('allows another Plaid Item at the same institution when its accounts do not overlap', async () => {
+		await savePlaidItem('provider-item-first-chase-login', 'first-chase-token', 'Chase');
+		plaidMocks.itemGet.mockResolvedValue({
+			data: { item: { institution_id: 'ins_56' } }
+		});
+		plaidMocks.accountsGet.mockResolvedValue({
+			data: {
+				accounts: [
+					{
+						account_id: 'first-provider-account',
+						name: 'Self-Directed',
+						mask: '3352',
+						type: 'investment',
+						subtype: 'brokerage',
+						balances: {
+							current: 521_334.37,
+							available: 0,
+							limit: null,
+							iso_currency_code: 'USD',
+							unofficial_currency_code: null
+						}
+					}
+				]
+			}
+		});
+		plaidMocks.itemPublicTokenExchange.mockResolvedValue({
+			data: { item_id: 'provider-item-second-chase-login', access_token: 'second-chase-token' }
+		});
+
+		await expect(
+			exchangePlaidPublicToken('distinct-public-token', 'Chase', {
+				institutionId: 'ins_56',
+				accounts: [
+					{
+						name: 'Business checking',
+						mask: '7788',
+						type: 'depository',
+						subtype: 'checking'
+					}
+				]
+			})
+		).resolves.toMatchObject({ connection: { institutionName: 'Chase' } });
+		expect(plaidMocks.itemPublicTokenExchange).toHaveBeenCalledOnce();
+		expect(plaidMocks.itemRemove).not.toHaveBeenCalled();
+		expect(await listPlaidConnections()).toHaveLength(2);
 	});
 
 	it('uses installation credentials as the original Team fallback for legacy connections', async () => {

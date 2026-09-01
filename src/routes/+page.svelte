@@ -411,7 +411,15 @@
 			token: string;
 			onSuccess: (
 				publicToken: string,
-				metadata?: { institution?: { name?: string | null } | null }
+				metadata?: {
+					institution?: { institution_id?: string | null; name?: string | null } | null;
+					accounts?: Array<{
+						name?: string | null;
+						mask?: string | null;
+						type?: string | null;
+						subtype?: string | null;
+					}>;
+				}
 			) => void;
 			onExit: (error: unknown) => void;
 		}) => PlaidHandler;
@@ -2029,7 +2037,28 @@
 						return;
 					}
 					const institutionName = metadata?.institution?.name?.trim().slice(0, 80) || null;
-					void finishPlaidConnection(publicToken, institutionName, handler, epoch);
+					const institutionId = metadata?.institution?.institution_id?.trim().slice(0, 64) || null;
+					const selectedAccounts = (metadata?.accounts ?? []).flatMap((account) => {
+						const name = account.name?.trim().slice(0, 160);
+						const type = account.type?.trim().slice(0, 40);
+						if (!name || !type) return [];
+						return [
+							{
+								name,
+								mask: account.mask?.trim().slice(0, 16) || null,
+								type,
+								subtype: account.subtype?.trim().slice(0, 80) || null
+							}
+						];
+					});
+					void finishPlaidConnection(
+						publicToken,
+						institutionName,
+						institutionId,
+						selectedAccounts,
+						handler,
+						epoch
+					);
 				},
 				onExit: (error) => {
 					handler.destroy();
@@ -2053,6 +2082,8 @@
 	async function finishPlaidConnection(
 		publicToken: string,
 		institutionName: string | null,
+		institutionId: string | null,
+		accounts: Array<{ name: string; mask: string | null; type: string; subtype: string | null }>,
 		handler: PlaidHandler,
 		epoch: number
 	): Promise<void> {
@@ -2066,7 +2097,7 @@
 				resolve('/api/plaid/exchange'),
 				{
 					method: 'POST',
-					body: JSON.stringify({ publicToken, institutionName })
+					body: JSON.stringify({ publicToken, institutionName, institutionId, accounts })
 				},
 				{ privateEpoch: epoch }
 			);
@@ -2263,7 +2294,7 @@
 		const label = connectionLabel(connection);
 		const providerName = financialProviderName(connection.provider);
 		const confirmed = window.confirm(
-			`Disconnect “${label}”?\n\nChipDue will ask ${providerName} to revoke access, then erase this connection and its locally synced accounts, cards, and activity. This cannot be undone.`
+			`Disconnect “${label}”?\n\nChipDue will preserve unique history in any matching brokerage account, ask ${providerName} to revoke access, then erase this connection and its remaining locally synced data. This cannot be undone.`
 		);
 		if (!confirmed) return;
 

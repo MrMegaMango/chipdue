@@ -397,6 +397,119 @@ function rowToAccount(row: PrivateRecordRow, payload: AccountPayload): Financial
 	};
 }
 
+type FinancialAccountCandidate = {
+	row: PrivateRecordRow;
+	payload: AccountPayload;
+	account: FinancialAccount;
+};
+
+function observedHistoryCount(candidate: FinancialAccountCandidate): number {
+	return candidate.account.balanceHistory.filter((point) => point.source === 'observed').length;
+}
+
+function preferCanonicalAccount(
+	left: FinancialAccountCandidate,
+	right: FinancialAccountCandidate
+): FinancialAccountCandidate {
+	const observedComparison = observedHistoryCount(left) - observedHistoryCount(right);
+	if (observedComparison !== 0) return observedComparison > 0 ? left : right;
+
+	const historyComparison =
+		left.account.balanceHistory.length - right.account.balanceHistory.length;
+	if (historyComparison !== 0) return historyComparison > 0 ? left : right;
+
+	const syncComparison = (left.account.lastSyncedAt ?? '').localeCompare(
+		right.account.lastSyncedAt ?? ''
+	);
+	if (syncComparison !== 0) return syncComparison > 0 ? left : right;
+
+	const updateComparison = left.account.updatedAt.localeCompare(right.account.updatedAt);
+	if (updateComparison !== 0) return updateComparison > 0 ? left : right;
+
+	return left.account.id.localeCompare(right.account.id) > 0 ? left : right;
+}
+
+function connectedBrokerageDisplayIdentity(account: FinancialAccount): string | null {
+	const institution = account.institution?.trim().toLocaleLowerCase();
+	const nickname = account.nickname.trim().toLocaleLowerCase();
+	if (account.accountType !== 'brokerage' || !institution || !nickname || !account.last4) {
+		return null;
+	}
+	return [institution, nickname, account.last4.toLocaleLowerCase(), account.currency].join(
+		'\u0000'
+	);
+}
+
+function financialAccountCandidates(rows: PrivateRecordRow[]): FinancialAccountCandidate[] {
+	return rows.flatMap((row) => {
+		const payload = decodeRecord(row);
+		return payload?.recordType === 'account'
+			? [{ row, payload, account: rowToAccount(row, payload) }]
+			: [];
+	});
+}
+
+function uniqueFinancialAccounts(rows: PrivateRecordRow[]): FinancialAccount[] {
+	const accounts: FinancialAccount[] = [];
+	const connectedBrokeragesByProviderReference = new Map<string, FinancialAccountCandidate>();
+
+	for (const candidate of financialAccountCandidates(rows)) {
+		const { row, account } = candidate;
+		if (
+			account.accountType !== 'brokerage' ||
+			row.source === 'manual' ||
+			!row.external_account_ref
+		) {
+			accounts.push(account);
+			continue;
+		}
+
+		const current = connectedBrokeragesByProviderReference.get(row.external_account_ref);
+		connectedBrokeragesByProviderReference.set(
+			row.external_account_ref,
+			current ? preferCanonicalAccount(current, candidate) : candidate
+		);
+	}
+
+	const unmatchedBrokerages: FinancialAccount[] = [];
+	const brokeragesByDisplayIdentity = new Map<string, Map<string, FinancialAccountCandidate[]>>();
+	for (const candidate of connectedBrokeragesByProviderReference.values()) {
+		const displayIdentity = connectedBrokerageDisplayIdentity(candidate.account);
+		const connectionId = candidate.row.plaid_item_id;
+		if (!displayIdentity || !connectionId) {
+			unmatchedBrokerages.push(candidate.account);
+			continue;
+		}
+
+		const byConnection = brokeragesByDisplayIdentity.get(displayIdentity) ?? new Map();
+		const connectionBrokerages = byConnection.get(connectionId) ?? [];
+		connectionBrokerages.push(candidate);
+		byConnection.set(connectionId, connectionBrokerages);
+		brokeragesByDisplayIdentity.set(displayIdentity, byConnection);
+	}
+
+	for (const byConnection of brokeragesByDisplayIdentity.values()) {
+		let preferredConnection: FinancialAccountCandidate[] | undefined;
+		let preferredAccount: FinancialAccountCandidate | undefined;
+		for (const connectionBrokerages of byConnection.values()) {
+			const bestAccount = connectionBrokerages.reduce(preferCanonicalAccount);
+			if (
+				!preferredConnection ||
+				connectionBrokerages.length > preferredConnection.length ||
+				(connectionBrokerages.length === preferredConnection.length &&
+					(!preferredAccount ||
+						preferCanonicalAccount(preferredAccount, bestAccount) === bestAccount))
+			) {
+				preferredConnection = connectionBrokerages;
+				preferredAccount = bestAccount;
+			}
+		}
+		accounts.push(...(preferredConnection ?? []).map(({ account }) => account));
+	}
+
+	return [...accounts, ...unmatchedBrokerages];
+}
+
 function rowToBonus(row: PrivateRecordRow, payload: BonusPayload): AccountBonus {
 	return {
 		id: row.id,
@@ -515,12 +628,9 @@ function normalizeRequirements(requirements: CreateBonusData['requirements']): B
 }
 
 export async function listFinancialAccounts(): Promise<FinancialAccount[]> {
-	const accounts: FinancialAccount[] = [];
-	for (const row of await listRows()) {
-		const payload = decodeRecord(row);
-		if (payload?.recordType === 'account') accounts.push(rowToAccount(row, payload));
-	}
-	return accounts.sort((left, right) => left.nickname.localeCompare(right.nickname));
+	return uniqueFinancialAccounts(await listRows()).sort((left, right) =>
+		left.nickname.localeCompare(right.nickname)
+	);
 }
 
 export async function getFinancialAccount(id: string): Promise<FinancialAccount> {
@@ -711,6 +821,161 @@ function connectedAccountPayload(
 		openedDate: existingPayload?.openedDate ?? null,
 		notes: existingPayload?.notes ?? null
 	};
+}
+
+function mergeObservedBalanceHistory(
+	target: FinancialAccountCandidate,
+	source: FinancialAccountCandidate
+): AccountBalanceHistoryPoint[] {
+	const mergedByRecordedAt = new Map(
+		target.account.balanceHistory.map((point) => [point.recordedAt, point])
+	);
+	for (const point of source.account.balanceHistory) {
+		if (point.source === 'observed' && !mergedByRecordedAt.has(point.recordedAt)) {
+			mergedByRecordedAt.set(point.recordedAt, point);
+		}
+	}
+	return [...mergedByRecordedAt.values()]
+		.sort((left, right) => left.recordedAt.localeCompare(right.recordedAt))
+		.slice(-MAX_BALANCE_HISTORY_POINTS);
+}
+
+const TRANSACTION_STATUS_RANK: Record<TransactionHistoryStatus, number> = {
+	unknown: 0,
+	preparing: 1,
+	current: 2,
+	historical_complete: 3
+};
+
+function mergeTransactionHistory(
+	targetAccountReference: string | null,
+	target: StoredTransactionHistory | undefined,
+	source: StoredTransactionHistory | undefined
+): StoredTransactionHistory | undefined {
+	if (!source) return target;
+	if (!target) {
+		return {
+			...source,
+			accountReference: targetAccountReference ?? source.accountReference
+		};
+	}
+	const transactions = new Map(
+		source.transactions.map((transaction) => [transaction.transactionId, transaction])
+	);
+	for (const transaction of target.transactions)
+		transactions.set(transaction.transactionId, transaction);
+	return {
+		...target,
+		accountReference: target.accountReference ?? targetAccountReference ?? source.accountReference,
+		status:
+			TRANSACTION_STATUS_RANK[source.status] > TRANSACTION_STATUS_RANK[target.status]
+				? source.status
+				: target.status,
+		transactions: [...transactions.values()]
+			.sort((left, right) => {
+				const dateComparison = right.date.localeCompare(left.date);
+				return dateComparison !== 0
+					? dateComparison
+					: left.transactionId.localeCompare(right.transactionId);
+			})
+			.slice(0, 10_000)
+	};
+}
+
+function matchingConsolidationTarget(
+	source: FinancialAccountCandidate,
+	allSources: FinancialAccountCandidate[],
+	remaining: FinancialAccountCandidate[]
+): FinancialAccountCandidate | null {
+	const exactReferenceMatches = remaining.filter(
+		(candidate) => candidate.row.external_account_ref === source.row.external_account_ref
+	);
+	if (exactReferenceMatches.length > 0) return exactReferenceMatches.reduce(preferCanonicalAccount);
+
+	const identity = connectedBrokerageDisplayIdentity(source.account);
+	if (!identity) return null;
+	const sourceIdentityMatches = allSources.filter(
+		(candidate) => connectedBrokerageDisplayIdentity(candidate.account) === identity
+	);
+	if (sourceIdentityMatches.length !== 1) return null;
+	const identityMatches = remaining.filter(
+		(candidate) => connectedBrokerageDisplayIdentity(candidate.account) === identity
+	);
+	const matchesPerConnection = new Map<string, number>();
+	for (const candidate of identityMatches) {
+		const connectionId = candidate.row.plaid_item_id;
+		if (!connectionId) continue;
+		matchesPerConnection.set(connectionId, (matchesPerConnection.get(connectionId) ?? 0) + 1);
+	}
+	if (
+		identityMatches.length === 0 ||
+		[...matchesPerConnection.values()].some((count) => count !== 1)
+	) {
+		return null;
+	}
+	return identityMatches.reduce(preferCanonicalAccount);
+}
+
+export async function consolidateConnectedFinancialAccountsBeforeDisconnect(
+	provider: FinancialDataProvider,
+	sourceConnectionId: string
+): Promise<{
+	mergedAccountCount: number;
+	addedObservedPointCount: number;
+	addedTransactionCount: number;
+}> {
+	const storedSource = storedSourceForProvider(provider);
+	const candidates = financialAccountCandidates(await listRows()).filter(
+		(candidate) => candidate.row.source === storedSource && candidate.row.plaid_item_id
+	);
+	const sources = candidates.filter(
+		(candidate) => candidate.row.plaid_item_id === sourceConnectionId
+	);
+	const remaining = candidates.filter(
+		(candidate) => candidate.row.plaid_item_id !== sourceConnectionId
+	);
+	let mergedAccountCount = 0;
+	let addedObservedPointCount = 0;
+	let addedTransactionCount = 0;
+
+	for (const source of sources) {
+		const target = matchingConsolidationTarget(source, sources, remaining);
+		if (!target) continue;
+		const balanceHistory = mergeObservedBalanceHistory(target, source);
+		const transactionHistory = mergeTransactionHistory(
+			target.row.external_account_ref,
+			target.payload.transactionHistory,
+			source.payload.transactionHistory
+		);
+		const targetObservedCount = target.account.balanceHistory.filter(
+			(point) => point.source === 'observed'
+		).length;
+		const mergedObservedCount = balanceHistory.filter(
+			(point) => point.source === 'observed'
+		).length;
+		const targetTransactionCount = target.payload.transactionHistory?.transactions.length ?? 0;
+		const mergedTransactionCount = transactionHistory?.transactions.length ?? 0;
+		const transactionStatusChanged =
+			transactionHistory?.status !== target.payload.transactionHistory?.status;
+		if (
+			balanceHistory.length === target.account.balanceHistory.length &&
+			mergedTransactionCount === targetTransactionCount &&
+			!transactionStatusChanged
+		) {
+			continue;
+		}
+
+		const now = new Date().toISOString();
+		const payload = { ...target.payload, balanceHistory, transactionHistory };
+		await updateRecord(target.row.id, payload, now);
+		target.payload = payload;
+		target.account = rowToAccount({ ...target.row, updated_at: now }, payload);
+		mergedAccountCount += 1;
+		addedObservedPointCount += Math.max(0, mergedObservedCount - targetObservedCount);
+		addedTransactionCount += Math.max(0, mergedTransactionCount - targetTransactionCount);
+	}
+
+	return { mergedAccountCount, addedObservedPointCount, addedTransactionCount };
 }
 
 function accountRows(rows: PrivateRecordRow[]): Array<{

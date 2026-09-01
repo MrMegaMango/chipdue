@@ -223,7 +223,28 @@ export const updateBonusSchema = z
 export const exchangeTokenSchema = z
 	.object({
 		publicToken: z.string().min(1).max(512),
-		institutionName: z.string().trim().min(1).max(80).nullable().optional().default(null)
+		institutionName: z.string().trim().min(1).max(80).nullable().optional().default(null),
+		institutionId: z
+			.string()
+			.trim()
+			.regex(/^[A-Za-z0-9_-]{1,64}$/)
+			.nullable()
+			.optional()
+			.default(null),
+		accounts: z
+			.array(
+				z
+					.object({
+						name: z.string().trim().min(1).max(160),
+						mask: z.string().trim().min(1).max(16).nullable(),
+						type: z.string().trim().min(1).max(40),
+						subtype: z.string().trim().min(1).max(80).nullable()
+					})
+					.strict()
+			)
+			.max(200)
+			.optional()
+			.default([])
 	})
 	.strict();
 

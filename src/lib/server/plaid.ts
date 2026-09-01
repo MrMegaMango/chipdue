@@ -28,6 +28,7 @@ import { privateFingerprint } from './crypto';
 import { getInstallId } from './database';
 import { AppError } from './errors';
 import {
+	consolidateConnectedFinancialAccountsBeforeDisconnect,
 	replaceConnectedFinancialAccounts,
 	type ConnectedFinancialAccountSnapshot
 } from './financial-records';
@@ -88,6 +89,18 @@ export async function plaidConfigurationStatus(): Promise<{
 
 export { isInstallationPlaidConfigured };
 
+export interface PlaidLinkAccountSelection {
+	name: string;
+	mask: string | null;
+	type: string;
+	subtype: string | null;
+}
+
+export interface PlaidLinkSelection {
+	institutionId: string | null;
+	accounts: PlaidLinkAccountSelection[];
+}
+
 function clientForConfiguration(config: PlaidClientConfiguration): PlaidApi {
 	const signature = `${config.environment}:${config.clientId}:${config.secret}`;
 	if (cachedClient?.signature === signature) return cachedClient.client;
@@ -121,6 +134,85 @@ async function getPlaidClientForItem(
 			? installation
 			: current
 	);
+}
+
+function normalizedPlaidLabel(value: string | null | undefined): string {
+	return (value ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+}
+
+function plaidAccountSelectionIdentity(account: PlaidLinkAccountSelection): string | null {
+	const name = normalizedPlaidLabel(account.name);
+	const mask = normalizedPlaidLabel(account.mask);
+	const type = normalizedPlaidLabel(account.type);
+	if (!name || !mask || !type) return null;
+	return [name, mask, type, normalizedPlaidLabel(account.subtype)].join('\u0000');
+}
+
+async function duplicatePlaidConnectionForSelection(
+	institutionName: string | null,
+	selection: PlaidLinkSelection
+): Promise<FinancialConnection | null> {
+	const selectedAccounts = new Set(
+		selection.accounts
+			.map(plaidAccountSelectionIdentity)
+			.filter((identity): identity is string => identity !== null)
+	);
+	if (selectedAccounts.size === 0) return null;
+
+	const normalizedInstitutionName = normalizedPlaidLabel(institutionName);
+	for (const connection of await listPlaidConnections()) {
+		if (connection.status !== 'healthy') continue;
+		const nameMatches =
+			normalizedInstitutionName !== '' &&
+			normalizedPlaidLabel(connection.institutionName) === normalizedInstitutionName;
+		if (!nameMatches && !selection.institutionId) continue;
+
+		try {
+			const item = await getPrivatePlaidItem(connection.id);
+			const client = await getPlaidClientForItem(item);
+			if (selection.institutionId) {
+				let existingInstitutionId: string | null = null;
+				try {
+					const response = await client.itemGet({ access_token: item.accessToken });
+					const candidate = response.data.item.institution_id;
+					existingInstitutionId =
+						typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
+				} catch {
+					// Older or unhealthy Items may not return institution metadata. The encrypted
+					// institution name remains a safe same-tenant fallback.
+				}
+				if (
+					(existingInstitutionId && existingInstitutionId !== selection.institutionId) ||
+					(!existingInstitutionId && !nameMatches)
+				) {
+					continue;
+				}
+			} else if (!nameMatches) {
+				continue;
+			}
+
+			const response = await client.accountsGet({ access_token: item.accessToken });
+			const existingAccounts = new Set(
+				response.data.accounts
+					.map((account) =>
+						plaidAccountSelectionIdentity({
+							name: account.name,
+							mask: account.mask,
+							type: account.type,
+							subtype: account.subtype
+						})
+					)
+					.filter((identity): identity is string => identity !== null)
+			);
+			if ([...selectedAccounts].some((identity) => existingAccounts.has(identity))) {
+				return connection;
+			}
+		} catch {
+			// A connection that cannot be read should not prevent recovery through a new Item.
+		}
+	}
+
+	return null;
 }
 
 function plaidErrorCode(error: unknown): string | null {
@@ -292,13 +384,18 @@ export async function createPlaidUpdateToken(
 
 export async function exchangePlaidPublicToken(
 	publicToken: string,
-	institutionName: string | null
+	institutionName: string | null,
+	selection: PlaidLinkSelection = { institutionId: null, accounts: [] }
 ): Promise<{ connection: FinancialConnection; synced: boolean }> {
 	const current = await requirePlaidConfiguration();
 	const installation = installationFallbackForCurrentTenant();
 	const routing = await getPlaidLinkRouting(current, installation);
 	const configuration = routing.configuration;
 	const client = clientForConfiguration(configuration);
+	const duplicateConnection = await duplicatePlaidConnectionForSelection(
+		institutionName,
+		selection
+	);
 	let itemId: string;
 	let accessToken: string;
 	try {
@@ -308,6 +405,25 @@ export async function exchangePlaidPublicToken(
 	} catch (error) {
 		if (error instanceof AppError) throw error;
 		throw await sanitizedPlaidError(error);
+	}
+	if (duplicateConnection) {
+		try {
+			await client.itemRemove({ access_token: accessToken });
+		} catch {
+			await savePlaidItem(itemId, accessToken, institutionName, configuration);
+			await advancePlaidLinkAlternation(current, configuration, installation);
+			throw new AppError(
+				'DUPLICATE_CONNECTION_CLEANUP_FAILED',
+				`${institutionName ?? 'This institution'} is already connected. Plaid could not remove the redundant connection automatically, so it remains available to disconnect manually.`,
+				502
+			);
+		}
+		await advancePlaidLinkAlternation(current, configuration, installation);
+		throw new AppError(
+			'DUPLICATE_CONNECTION',
+			`${institutionName ?? 'This institution'} is already connected with one of the selected accounts. Use Manage accounts on the existing connection instead.`,
+			409
+		);
 	}
 
 	const localItemId = await savePlaidItem(itemId, accessToken, institutionName, configuration);
@@ -947,6 +1063,7 @@ export async function syncAllPlaidItems(): Promise<{
 
 export async function disconnectPlaidItem(localItemId: string): Promise<void> {
 	const item = await getPrivatePlaidItem(localItemId);
+	await consolidateConnectedFinancialAccountsBeforeDisconnect('plaid', localItemId);
 	try {
 		await (await getPlaidClientForItem(item)).itemRemove({ access_token: item.accessToken });
 	} catch (error) {

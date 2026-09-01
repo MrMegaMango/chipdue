@@ -4,6 +4,7 @@ import {
 	createBonusSchema,
 	createFinancialAccountSchema,
 	createManualCardSchema,
+	exchangeTokenSchema,
 	isoDateSchema,
 	updateBonusSchema,
 	updateCardRewardsSchema,
@@ -12,6 +13,31 @@ import {
 } from './schemas';
 
 describe('card request validation', () => {
+	it('accepts bounded Plaid account selection metadata', () => {
+		expect(
+			exchangeTokenSchema.safeParse({
+				publicToken: 'public-token',
+				institutionName: 'Chase',
+				institutionId: 'ins_56',
+				accounts: [
+					{
+						name: 'Self-Directed',
+						mask: '3352',
+						type: 'investment',
+						subtype: 'brokerage'
+					}
+				]
+			}).success
+		).toBe(true);
+		expect(
+			exchangeTokenSchema.safeParse({
+				publicToken: 'public-token',
+				institutionId: '../invalid',
+				accounts: []
+			}).success
+		).toBe(false);
+	});
+
 	it('rejects impossible calendar dates', () => {
 		expect(isoDateSchema.safeParse('2027-02-29').success).toBe(false);
 		expect(isoDateSchema.safeParse('2028-02-29').success).toBe(true);
