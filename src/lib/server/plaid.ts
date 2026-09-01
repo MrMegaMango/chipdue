@@ -876,6 +876,49 @@ export async function syncPlaidItem(
 	}
 }
 
+export async function refreshPlaidInvestments(localItemId: string): Promise<
+	| {
+			availability: 'refreshed';
+			syncedAt: string;
+			cardCount: number;
+			accountCount: number;
+			transactionCount: number;
+	  }
+	| { availability: 'unsupported' }
+> {
+	const item = await getPrivatePlaidItem(localItemId);
+	try {
+		await (
+			await getPlaidClientForItem(item)
+		).investmentsRefresh({
+			access_token: item.accessToken
+		});
+	} catch (error) {
+		if (
+			new Set([
+				'NO_INVESTMENT_ACCOUNTS',
+				'PRODUCT_NOT_ENABLED',
+				'PRODUCT_NOT_SUPPORTED',
+				'PRODUCTS_NOT_SUPPORTED',
+				'UNAUTHORIZED_ROUTE_ACCESS'
+			]).has(plaidErrorCode(error) ?? '')
+		) {
+			return { availability: 'unsupported' };
+		}
+		if (error instanceof AppError) throw error;
+		throw await sanitizedPlaidError(error, localItemId);
+	}
+
+	const result = await syncPlaidItem(localItemId);
+	return {
+		availability: 'refreshed',
+		syncedAt: result.syncedAt,
+		cardCount: result.count,
+		accountCount: result.accountCount,
+		transactionCount: result.transactionCount
+	};
+}
+
 export async function syncAllPlaidItems(): Promise<{
 	syncedItems: number;
 	cardCount: number;

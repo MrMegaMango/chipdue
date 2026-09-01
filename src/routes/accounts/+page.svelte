@@ -34,6 +34,8 @@
 		status: FinancialAccount['transactionHistoryStatus'];
 		lastSyncedAt: string | null;
 	};
+	type InvestmentRefreshResponse =
+		{ availability: 'refreshed'; syncedAt: string } | { availability: 'unsupported' };
 	type AccountForm = {
 		nickname: string;
 		institution: string;
@@ -115,6 +117,7 @@
 	let historyEstimateLoadingByAccount = $state<Record<string, boolean>>({});
 	let historyEstimateErrorByAccount = $state<Record<string, string>>({});
 	let historyEstimateNoteByAccount = $state<Record<string, string>>({});
+	let refreshingPricesAccountId = $state<string | null>(null);
 	let syncing = $state(false);
 	let connecting = $state(false);
 	let toast = $state('');
@@ -1021,6 +1024,39 @@
 		}
 	}
 
+	async function refreshInvestmentPrices(account: FinancialAccount): Promise<void> {
+		if (
+			refreshingPricesAccountId ||
+			account.source !== 'connected' ||
+			account.connectionProvider !== 'plaid' ||
+			!account.connectionId
+		) {
+			return;
+		}
+		refreshingPricesAccountId = account.id;
+		pageError = '';
+		try {
+			const response = await requestJson<InvestmentRefreshResponse>(
+				resolve('/api/connections/[id]/investments/refresh', { id: account.connectionId }),
+				{ method: 'POST' }
+			);
+			if (response.availability === 'unsupported') {
+				showToast('Plaid Investments Refresh is not available for this connection.', {
+					error: true
+				});
+				return;
+			}
+			await reloadAccounts(true);
+			showToast('Plaid refreshed the investment data.');
+		} catch (error) {
+			showToast(readableError(error, 'Investment data could not be refreshed.'), {
+				error: true
+			});
+		} finally {
+			refreshingPricesAccountId = null;
+		}
+	}
+
 	async function deleteAccount(account: FinancialAccount): Promise<void> {
 		if (account.source === 'connected') return;
 		if (
@@ -1472,12 +1508,23 @@
 																aria-label={`${account.nickname} holdings`}
 															>
 																<div class="holding-list-heading">
-																	<h4>Holdings</h4>
-																	<span>
-																		{account.holdings.length
-																			? `${account.holdings.length} ${account.holdings.length === 1 ? 'position' : 'positions'}`
-																			: 'No positions reported'}
-																	</span>
+																	<div>
+																		<h4>Holdings</h4>
+																		<span>
+																			{account.holdings.length
+																				? `${account.holdings.length} ${account.holdings.length === 1 ? 'position' : 'positions'}`
+																				: 'No positions reported'}
+																		</span>
+																	</div>
+																	<button
+																		type="button"
+																		disabled={refreshingPricesAccountId !== null}
+																		onclick={() => refreshInvestmentPrices(account)}
+																	>
+																		{refreshingPricesAccountId === account.id
+																			? 'Refreshing…'
+																			: 'Refresh prices'}
+																	</button>
 																</div>
 																{#if account.holdings.length > 0}
 																	<div
@@ -2194,9 +2241,31 @@
 
 	.holding-list-heading {
 		display: flex;
-		align-items: baseline;
+		align-items: center;
 		justify-content: space-between;
 		margin-bottom: 0.55rem;
+	}
+
+	.holding-list-heading > div {
+		display: grid;
+		gap: 0.12rem;
+	}
+
+	.holding-list-heading button {
+		padding: 0.38rem 0.52rem;
+		border: 1px solid var(--accent);
+		border-radius: 7px;
+		color: var(--accent-dark);
+		font: inherit;
+		font-size: 0.54rem;
+		font-weight: 760;
+		background: white;
+		cursor: pointer;
+	}
+
+	.holding-list-heading button:disabled {
+		opacity: 0.58;
+		cursor: wait;
 	}
 
 	.holding-list h4 {
