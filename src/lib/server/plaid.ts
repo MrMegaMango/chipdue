@@ -782,7 +782,7 @@ export async function syncPlaidItem(
 	try {
 		const client = await getPlaidClientForItem(item);
 		const [accountsResponse, brand] = await Promise.all([
-			client.accountsGet({ access_token: item.accessToken }),
+			client.accountsBalanceGet({ access_token: item.accessToken }),
 			institutionBrand(client, item.accessToken, item.institutionName)
 		]);
 		const plaidAccounts = accountsResponse.data.accounts;

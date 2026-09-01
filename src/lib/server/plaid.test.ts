@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const plaidMocks = vi.hoisted(() => ({
 	linkTokenCreate: vi.fn(),
 	accountsGet: vi.fn(),
+	accountsBalanceGet: vi.fn(),
 	liabilitiesGet: vi.fn(),
 	investmentsHoldingsGet: vi.fn(),
 	investmentsRefresh: vi.fn(),
@@ -39,6 +40,11 @@ vi.mock('plaid', async (importOriginal) => {
 			accountsGet(request: unknown) {
 				this.record('accountsGet');
 				return plaidMocks.accountsGet(request);
+			}
+
+			accountsBalanceGet(request: unknown) {
+				this.record('accountsBalanceGet');
+				return plaidMocks.accountsBalanceGet(request);
 			}
 
 			linkTokenCreate(request: unknown) {
@@ -254,6 +260,7 @@ describe.sequential('Plaid transaction history', () => {
 		plaidMocks.accountsGet.mockResolvedValue({
 			data: { accounts: liabilityResponse().data.accounts }
 		});
+		plaidMocks.accountsBalanceGet.mockImplementation((request) => plaidMocks.accountsGet(request));
 		plaidMocks.investmentsHoldingsGet.mockResolvedValue({ data: { holdings: [] } });
 		plaidMocks.investmentsRefresh.mockResolvedValue({ data: { request_id: 'refresh-request' } });
 		plaidMocks.investmentsTransactionsGet.mockResolvedValue({
@@ -927,6 +934,80 @@ describe.sequential('Plaid transaction history', () => {
 		expect(await listCards()).toHaveLength(1);
 	});
 
+	it('uses a live brokerage balance when cached account data is stale', async () => {
+		const itemId = await savePlaidItem(
+			'provider-item-live-brokerage-balance',
+			'test-access-value',
+			'Wealthfront'
+		);
+		plaidMocks.accountsGet.mockResolvedValue(mixedAccountsResponse(1_250, 100.93));
+		plaidMocks.accountsBalanceGet.mockResolvedValueOnce(mixedAccountsResponse(1_250, 1));
+		plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
+		plaidMocks.investmentsHoldingsGet.mockResolvedValueOnce({
+			data: {
+				holdings: [
+					{
+						account_id: 'account-brokerage',
+						security_id: 'security-spym',
+						cost_basis: 1.01,
+						institution_price: 89.77,
+						institution_price_as_of: '2026-09-01',
+						institution_value: 0.94,
+						quantity: 0.01043,
+						iso_currency_code: 'USD',
+						unofficial_currency_code: null
+					},
+					{
+						account_id: 'account-brokerage',
+						security_id: 'security-cash',
+						cost_basis: 0.06,
+						institution_price: 1,
+						institution_price_as_of: '2026-09-01',
+						institution_value: 0.06,
+						quantity: 0.06,
+						iso_currency_code: 'USD',
+						unofficial_currency_code: null
+					}
+				],
+				securities: [
+					{
+						security_id: 'security-spym',
+						name: 'State Street SPDR Portfolio S&P 500 ETF',
+						ticker_symbol: 'SPYM',
+						type: 'etf'
+					},
+					{
+						security_id: 'security-cash',
+						name: 'U S Dollar',
+						ticker_symbol: 'CUR:USD',
+						type: 'cash'
+					}
+				]
+			}
+		});
+
+		await syncPlaidItem(itemId);
+
+		expect(plaidMocks.accountsGet).not.toHaveBeenCalled();
+		expect(plaidMocks.accountsBalanceGet).toHaveBeenCalledWith({
+			access_token: 'test-access-value'
+		});
+		const brokerage = (await listFinancialAccounts()).find(
+			(account) => account.accountType === 'brokerage'
+		);
+		expect(brokerage).toMatchObject({
+			currentBalanceCents: 100,
+			holdings: [
+				expect.objectContaining({ tickerSymbol: 'SPYM', valueCents: 94 }),
+				expect.objectContaining({ tickerSymbol: 'CUR:USD', valueCents: 6 })
+			]
+		});
+		expect(brokerage?.balanceHistory.at(-1)).toMatchObject({
+			balanceCents: 100,
+			source: 'observed'
+		});
+	});
+
 	it('requests a Plaid investment refresh before syncing the connection', async () => {
 		const itemId = await savePlaidItem(
 			'provider-item-investment-refresh',
@@ -961,7 +1042,7 @@ describe.sequential('Plaid transaction history', () => {
 		await expect(refreshPlaidInvestments(itemId)).resolves.toEqual({
 			availability: 'unsupported'
 		});
-		expect(plaidMocks.accountsGet).not.toHaveBeenCalled();
+		expect(plaidMocks.accountsBalanceGet).not.toHaveBeenCalled();
 	});
 
 	it('keeps brokerage balances when Investments holdings are unavailable', async () => {
