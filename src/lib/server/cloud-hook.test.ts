@@ -18,8 +18,11 @@ const ENV_KEYS = [
 	'CARDDUE_GOOGLE_CLIENT_ID',
 	'CARDDUE_GOOGLE_CLIENT_SECRET',
 	'CARDDUE_GOOGLE_BOOTSTRAP_HASH',
+	'CRON_SECRET',
 	'VERCEL'
 ] as const;
+
+const CRON_SECRET = 'x'.repeat(32);
 
 const emptyAdapter: CloudDatabaseAdapter = {
 	async query<T extends CloudRow>(): Promise<T[]> {
@@ -32,11 +35,18 @@ const emptyAdapter: CloudDatabaseAdapter = {
 
 async function cloudRequest(
 	path: string,
-	options: { host?: string; protocol?: 'http' | 'https'; routeId?: string } = {}
+	options: {
+		headers?: HeadersInit;
+		host?: string;
+		protocol?: 'http' | 'https';
+		routeId?: string;
+	} = {}
 ): Promise<Response> {
 	const protocol = options.protocol ?? 'https';
+	const headers = new Headers(options.headers);
+	headers.set('host', options.host ?? 'cards.example.test');
 	const request = new Request(`${protocol}://cards.example.test${path}`, {
-		headers: { host: options.host ?? 'cards.example.test' }
+		headers
 	});
 	return handle({
 		event: {
@@ -63,6 +73,7 @@ describe.sequential('cloud request guard', () => {
 		process.env.CARDDUE_MASTER_KEY = Buffer.alloc(32, 4).toString('base64url');
 		process.env.CARDDUE_OWNER_PASSWORD_HASH = `scrypt$16384$8$1$${Buffer.alloc(16, 2).toString('base64url')}$${Buffer.alloc(32, 3).toString('base64url')}`;
 		process.env.CARDDUE_ALLOWED_HOSTS = 'cards.example.test';
+		process.env.CRON_SECRET = CRON_SECRET;
 		delete process.env.CARDDUE_GOOGLE_CLIENT_ID;
 		delete process.env.CARDDUE_GOOGLE_CLIENT_SECRET;
 		delete process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH;
@@ -130,12 +141,64 @@ describe.sequential('cloud request guard', () => {
 		}
 	});
 
-	it('lets the protected scheduled-sync route perform its own cron-secret validation', async () => {
+	it('allows an authenticated scheduled-sync route without a user session', async () => {
 		const response = await cloudRequest('/api/cron/plaid-sync/morning-pdt', {
-			routeId: '/api/cron/plaid-sync/[candidate]'
+			routeId: '/api/cron/plaid-sync/[candidate]',
+			headers: {
+				authorization: `Bearer ${CRON_SECRET}`,
+				'user-agent': 'vercel-cron/1.0'
+			}
 		});
 		expect(response.status).toBe(200);
 		expect(await response.text()).toBe('resolved');
+	});
+
+	it("accepts an authenticated cron on Vercel's generated production hostname", async () => {
+		process.env.VERCEL = '1';
+		const response = await cloudRequest('/api/cron/plaid-sync/morning-pdt', {
+			host: 'chipdue-generated-team.vercel.app',
+			routeId: '/api/cron/plaid-sync/[candidate]',
+			headers: {
+				authorization: `Bearer ${CRON_SECRET}`,
+				'user-agent': 'vercel-cron/1.0',
+				'x-forwarded-proto': 'https'
+			}
+		});
+		expect(response.status).toBe(200);
+		expect(await response.text()).toBe('resolved');
+	});
+
+	it('keeps generated Vercel hostnames closed to every other request', async () => {
+		process.env.VERCEL = '1';
+		const response = await cloudRequest('/api/health', {
+			host: 'chipdue-generated-team.vercel.app',
+			headers: { 'x-forwarded-proto': 'https' }
+		});
+		expect(response.status).toBe(403);
+	});
+
+	it('rejects unauthenticated requests before bypassing the cron host allowlist', async () => {
+		process.env.VERCEL = '1';
+		const response = await cloudRequest('/api/cron/plaid-sync/morning-pdt', {
+			host: 'chipdue-generated-team.vercel.app',
+			routeId: '/api/cron/plaid-sync/[candidate]',
+			headers: { 'x-forwarded-proto': 'https' }
+		});
+		expect(response.status).toBe(404);
+	});
+
+	it('requires HTTPS for authenticated cron requests on generated hostnames', async () => {
+		process.env.VERCEL = '1';
+		const response = await cloudRequest('/api/cron/plaid-sync/morning-pdt', {
+			host: 'chipdue-generated-team.vercel.app',
+			routeId: '/api/cron/plaid-sync/[candidate]',
+			headers: {
+				authorization: `Bearer ${CRON_SECRET}`,
+				'user-agent': 'vercel-cron/1.0',
+				'x-forwarded-proto': 'http'
+			}
+		});
+		expect(response.status).toBe(403);
 	});
 
 	it('removes the password endpoint at the hook boundary in Google-only mode', async () => {

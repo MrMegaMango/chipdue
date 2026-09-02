@@ -26,6 +26,14 @@ export function isLocalAuthority(authority: string | null): boolean {
 	return hostname === '127.0.0.1' || hostname === 'localhost';
 }
 
+export function assertSecureCloudTransport(request: Request, url: URL): void {
+	const secure =
+		process.env.VERCEL === '1'
+			? request.headers.get('x-forwarded-proto')?.trim().toLowerCase() === 'https'
+			: url.protocol === 'https:';
+	if (!secure) throw new AppError('HTTPS_REQUIRED', 'Cloud mode requires HTTPS.', 403);
+}
+
 export function assertSecureCloudRequest(request: Request, url: URL): string {
 	const config = getCloudRuntimeConfig();
 	const authority = normalizeAuthority(request.headers.get('host'));
@@ -33,11 +41,7 @@ export function assertSecureCloudRequest(request: Request, url: URL): string {
 		throw new AppError('HOST_NOT_ALLOWED', 'The request host is not allowed.', 403);
 	}
 
-	const secure =
-		process.env.VERCEL === '1'
-			? request.headers.get('x-forwarded-proto')?.trim().toLowerCase() === 'https'
-			: url.protocol === 'https:';
-	if (!secure) throw new AppError('HTTPS_REQUIRED', 'Cloud mode requires HTTPS.', 403);
+	assertSecureCloudTransport(request, url);
 	return authority;
 }
 

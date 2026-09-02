@@ -1,8 +1,13 @@
 import type { Handle, HandleServerError } from '@sveltejs/kit';
 import { authenticatedTenantId, SESSION_COOKIE_NAME } from '$lib/server/auth';
 import { apiError, apiJson } from '$lib/server/http';
-import { assertSecureCloudRequest, isLocalAuthority } from '$lib/server/request-security';
+import {
+	assertSecureCloudRequest,
+	assertSecureCloudTransport,
+	isLocalAuthority
+} from '$lib/server/request-security';
 import { getRuntimeAuthMode, getRuntimeMode } from '$lib/server/runtime';
+import { assertScheduledSyncRequest } from '$lib/server/scheduled-sync';
 import { LEGACY_TENANT_ID, runAsTenant } from '$lib/server/tenant';
 
 function secureHeaders(response: Response): Response {
@@ -53,9 +58,17 @@ export const handle: Handle = async ({ event, resolve }) => {
 				);
 			}
 		} else {
-			assertSecureCloudRequest(event.request, event.url);
 			const path = event.url.pathname.replace(/\/+$/, '') || '/';
 			const matchedPath = event.route?.id?.replace(/\/+$/, '') || path;
+			if (matchedPath === '/api/cron/plaid-sync/[candidate]') {
+				// Vercel invokes cron jobs on the generated deployment URL rather than a stable
+				// project alias. Authenticate that one route before bypassing the browser host
+				// allowlist, while retaining the same HTTPS requirement as every cloud request.
+				assertSecureCloudTransport(event.request, event.url);
+				assertScheduledSyncRequest(event.request);
+			} else {
+				assertSecureCloudRequest(event.request, event.url);
+			}
 			if (matchedPath === '/api/auth/login' && getRuntimeAuthMode() === 'google') {
 				return secureHeaders(
 					apiJson(
