@@ -992,6 +992,57 @@ export async function syncPlaidItem(
 	}
 }
 
+export async function refreshPlaidTransactions(localItemId: string): Promise<
+	| {
+			availability: 'refreshed';
+			syncedAt: string;
+			cardCount: number;
+			accountCount: number;
+			transactionCount: number;
+	  }
+	| {
+			availability: 'unsupported';
+			syncedAt: string;
+			cardCount: number;
+			accountCount: number;
+			transactionCount: number;
+	  }
+> {
+	const item = await getPrivatePlaidItem(localItemId);
+	let availability: 'refreshed' | 'unsupported' = 'refreshed';
+	try {
+		await (
+			await getPlaidClientForItem(item)
+		).transactionsRefresh({
+			access_token: item.accessToken
+		});
+	} catch (error) {
+		if (
+			new Set([
+				'INVALID_PRODUCT',
+				'PRODUCT_NOT_ENABLED',
+				'PRODUCT_NOT_SUPPORTED',
+				'PRODUCTS_NOT_SUPPORTED',
+				'UNAUTHORIZED_ROUTE_ACCESS'
+			]).has(plaidErrorCode(error) ?? '')
+		) {
+			availability = 'unsupported';
+		} else {
+			if (error instanceof AppError) throw error;
+			throw await sanitizedPlaidError(error, localItemId);
+		}
+	}
+
+	const result = await syncPlaidItem(localItemId, { enableTransactions: true });
+	return {
+		availability,
+		syncedAt: result.syncedAt,
+		cardCount: result.count,
+		accountCount: result.accountCount,
+		transactionCount: result.transactionCount
+	};
+}
+
 export async function refreshPlaidInvestments(localItemId: string): Promise<
 	| {
 			availability: 'refreshed';

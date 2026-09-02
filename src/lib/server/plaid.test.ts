@@ -11,6 +11,7 @@ const plaidMocks = vi.hoisted(() => ({
 	investmentsHoldingsGet: vi.fn(),
 	investmentsRefresh: vi.fn(),
 	investmentsTransactionsGet: vi.fn(),
+	transactionsRefresh: vi.fn(),
 	transactionsSync: vi.fn(),
 	itemGet: vi.fn(),
 	itemRemove: vi.fn(),
@@ -68,6 +69,10 @@ vi.mock('plaid', async (importOriginal) => {
 				return plaidMocks.investmentsTransactionsGet(request);
 			}
 
+			transactionsRefresh(request: unknown) {
+				return plaidMocks.transactionsRefresh(request);
+			}
+
 			transactionsSync(request: unknown) {
 				return plaidMocks.transactionsSync(request);
 			}
@@ -113,6 +118,7 @@ import {
 	exchangePlaidPublicToken,
 	plaidConfigurationStatus,
 	refreshPlaidInvestments,
+	refreshPlaidTransactions,
 	resetPlaidClientForTests,
 	syncPlaidItem
 } from './plaid';
@@ -263,6 +269,7 @@ describe.sequential('Plaid transaction history', () => {
 		plaidMocks.accountsBalanceGet.mockImplementation((request) => plaidMocks.accountsGet(request));
 		plaidMocks.investmentsHoldingsGet.mockResolvedValue({ data: { holdings: [] } });
 		plaidMocks.investmentsRefresh.mockResolvedValue({ data: { request_id: 'refresh-request' } });
+		plaidMocks.transactionsRefresh.mockResolvedValue({ data: { request_id: 'refresh-request' } });
 		plaidMocks.investmentsTransactionsGet.mockResolvedValue({
 			data: { investment_transactions: [], securities: [], total_investment_transactions: 0 }
 		});
@@ -1043,6 +1050,65 @@ describe.sequential('Plaid transaction history', () => {
 			availability: 'unsupported'
 		});
 		expect(plaidMocks.accountsBalanceGet).not.toHaveBeenCalled();
+	});
+
+	it('requests fresh transactions before syncing the connection activity', async () => {
+		const itemId = await savePlaidItem(
+			'provider-item-transaction-refresh',
+			'test-access-value',
+			'Synthetic Bank'
+		);
+		plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
+		plaidMocks.transactionsSync.mockResolvedValueOnce({
+			data: {
+				added: [transaction('fresh-transaction', -4, 'Fresh deposit', '2026-09-01')],
+				modified: [],
+				removed: [],
+				next_cursor: 'fresh-cursor',
+				has_more: false,
+				transactions_update_status: 'HISTORICAL_UPDATE_COMPLETE'
+			}
+		});
+
+		await expect(refreshPlaidTransactions(itemId)).resolves.toMatchObject({
+			availability: 'refreshed',
+			transactionCount: 1
+		});
+		expect(plaidMocks.transactionsRefresh).toHaveBeenCalledWith({
+			access_token: 'test-access-value'
+		});
+		expect(plaidMocks.transactionsSync).toHaveBeenCalledWith(
+			expect.objectContaining({ access_token: 'test-access-value' })
+		);
+	});
+
+	it('still syncs scheduled transaction data when on-demand refresh is unavailable', async () => {
+		const itemId = await savePlaidItem(
+			'provider-item-transaction-refresh-unavailable',
+			'test-access-value',
+			'Synthetic Bank'
+		);
+		plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
+		plaidMocks.transactionsRefresh.mockRejectedValueOnce({
+			response: { data: { error_code: 'UNAUTHORIZED_ROUTE_ACCESS' } }
+		});
+		plaidMocks.transactionsSync.mockResolvedValueOnce({
+			data: {
+				added: [],
+				modified: [],
+				removed: [],
+				next_cursor: 'scheduled-cursor',
+				has_more: false,
+				transactions_update_status: 'HISTORICAL_UPDATE_COMPLETE'
+			}
+		});
+
+		await expect(refreshPlaidTransactions(itemId)).resolves.toMatchObject({
+			availability: 'unsupported',
+			transactionCount: 0
+		});
+		expect(plaidMocks.accountsGet).toHaveBeenCalled();
+		expect(plaidMocks.transactionsSync).toHaveBeenCalled();
 	});
 
 	it('keeps brokerage balances when Investments holdings are unavailable', async () => {

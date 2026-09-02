@@ -8,6 +8,7 @@ import { AppError, asAppError } from './errors';
 import {
 	disconnectPlaidItem,
 	plaidConfigurationStatus,
+	refreshPlaidTransactions,
 	syncAllPlaidItems,
 	syncPlaidItem
 } from './plaid';
@@ -20,6 +21,10 @@ export interface ConnectionSyncResult {
 	accountCount: number;
 	transactionCount: number;
 }
+
+export type ConnectionTransactionRefreshResult = ConnectionSyncResult & {
+	availability: 'refreshed' | 'unsupported';
+};
 
 export interface ConnectionsSyncResult {
 	syncedConnections: number;
@@ -39,6 +44,7 @@ interface FinancialProviderAdapter {
 		connectionId: string,
 		options?: { enableTransactions?: boolean }
 	): Promise<ConnectionSyncResult>;
+	refreshTransactions(connectionId: string): Promise<ConnectionTransactionRefreshResult>;
 	syncAllTenants(): Promise<ConnectionsSyncResult>;
 	disconnectConnection(connectionId: string): Promise<void>;
 }
@@ -59,6 +65,9 @@ const plaidAdapter: FinancialProviderAdapter = {
 			accountCount: result.accountCount,
 			transactionCount: result.transactionCount
 		};
+	},
+	async refreshTransactions(connectionId) {
+		return refreshPlaidTransactions(connectionId);
 	},
 	async syncAllTenants() {
 		const result = await syncAllPlaidItems();
@@ -155,6 +164,13 @@ export async function syncFinancialConnection(
 ): Promise<ConnectionSyncResult> {
 	const { adapter } = await adapterForConnection(connectionId);
 	return adapter.syncConnection(connectionId, options);
+}
+
+export async function refreshFinancialConnectionTransactions(
+	connectionId: string
+): Promise<ConnectionTransactionRefreshResult> {
+	const { adapter } = await adapterForConnection(connectionId);
+	return adapter.refreshTransactions(connectionId);
 }
 
 export async function syncCurrentTenantFinancialConnections(): Promise<ConnectionsSyncResult> {

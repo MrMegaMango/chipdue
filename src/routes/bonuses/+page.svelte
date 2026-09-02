@@ -30,6 +30,12 @@
 		status: TransactionHistoryStatus;
 		lastSyncedAt: string | null;
 	};
+	type TransactionRefreshResponse = {
+		availability: 'refreshed' | 'unsupported';
+		syncedAt: string;
+		accountCount: number;
+		transactionCount: number;
+	};
 	type BonusForm = {
 		offerTemplateId: string;
 		name: string;
@@ -307,8 +313,8 @@
 		syncingAccountId = account.id;
 		activityErrors = { ...activityErrors, [account.id]: '' };
 		try {
-			await requestJson(
-				resolve('/api/connections/[id]/transactions/sync', { id: account.connectionId }),
+			const refresh = await requestJson<TransactionRefreshResponse>(
+				resolve('/api/connections/[id]/transactions/refresh', { id: account.connectionId }),
 				{ method: 'POST' }
 			);
 			const response = await requestJson<{ accounts: FinancialAccount[] }>(
@@ -317,7 +323,17 @@
 			accounts = response.accounts;
 			const refreshed = response.accounts.find((candidate) => candidate.id === account.id);
 			if (refreshed) await loadAccountActivity(refreshed);
-			showToast(`${offer?.institution ?? 'Linked account'} tracker updated.`);
+			const institution = offer?.institution ?? 'Linked account';
+			if (refresh.availability === 'unsupported') {
+				activityErrors = {
+					...activityErrors,
+					[account.id]:
+						'Plaid on-demand refresh is not enabled. Showing its latest scheduled activity.'
+				};
+				showToast(`${institution} synced with Plaid’s latest scheduled activity.`);
+			} else {
+				showToast(`${institution} refreshed directly from the bank.`);
+			}
 		} catch (error) {
 			activityErrors = {
 				...activityErrors,
@@ -790,7 +806,7 @@
 												onclick={() => checkLinkedAccount(bonus)}
 											>
 												{syncingAccountId === tracker.account.id
-													? `Checking ${tracker.offer.institution}…`
+													? `Refreshing ${tracker.offer.institution}…`
 													: `Check ${tracker.offer.institution} now`}
 											</button>
 											<small>
