@@ -231,6 +231,21 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain('@media (max-width: 900px)');
 	});
 
+	it('keeps the account inventory visible when one connection cannot sync', () => {
+		const syncSource = accountsSource.slice(
+			accountsSource.indexOf('async function syncConnectedAccounts'),
+			accountsSource.indexOf('function plaidFactory')
+		);
+		expect(syncSource).toContain('Promise.allSettled');
+		expect(syncSource).toContain('failedConnections');
+		expect(syncSource).toContain('Your accounts remain available.');
+		expect(syncSource).not.toContain('pageError =');
+		expect(accountsSource).toContain("connection.status === 'needs_update'");
+		expect(accountsSource).toContain('One institution needs to be reconnected');
+		expect(accountsSource).toContain("resolve('/settings#plaid-connections')");
+		expect(accountsSource).toContain('and balances remain available below.');
+	});
+
 	it('uses the same connected-state actions on cards and accounts', () => {
 		expect(dashboardSource).toContain("currentSection === 'cards' && plaid.connectedItems > 0");
 		expect(dashboardSource).toContain('Add connection');

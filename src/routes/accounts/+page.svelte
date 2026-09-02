@@ -134,6 +134,12 @@
 	const syncedAccountCount = $derived(
 		activeAccounts.filter((account) => account.source === 'connected').length
 	);
+	const connectionsNeedingAttention = $derived(
+		connections.filter((connection) => connection.status === 'needs_update')
+	);
+	const syncableConnections = $derived(
+		connections.filter((connection) => connection.status === 'healthy')
+	);
 	const accountGroups = $derived([
 		{
 			id: 'cash',
@@ -327,6 +333,16 @@
 
 	function readableError(error: unknown, fallback: string): string {
 		return error instanceof Error && error.message ? error.message : fallback;
+	}
+
+	function connectionName(connection: FinancialConnection): string {
+		return connection.institutionName ?? financialProviderName(connection.provider);
+	}
+
+	function connectionNames(items: FinancialConnection[]): string {
+		return new Intl.ListFormat('en-US', { style: 'long', type: 'conjunction' }).format(
+			items.map(connectionName)
+		);
 	}
 
 	function cents(value: number | undefined): number | null {
@@ -893,21 +909,64 @@
 	}
 
 	async function syncConnectedAccounts(): Promise<void> {
-		if (syncing || connections.length === 0) return;
+		if (syncing || syncableConnections.length === 0) return;
 		syncing = true;
-		pageError = '';
+		const syncTargets = [...syncableConnections];
+		const skippedConnections = [...connectionsNeedingAttention];
 		try {
-			await Promise.all(
-				connections.map((connection) =>
+			const results = await Promise.allSettled(
+				syncTargets.map((connection) =>
 					requestJson(resolve('/api/connections/[id]/transactions/sync', { id: connection.id }), {
 						method: 'POST'
 					})
 				)
 			);
-			await reloadAccounts(true);
-			showToast('Connected balances, holdings, and activity are up to date.');
-		} catch (error) {
-			pageError = readableError(error, 'Connected accounts could not be synced.');
+			const failedConnections = results.flatMap((result, index) =>
+				result.status === 'rejected' ? [syncTargets[index]] : []
+			);
+			const successfulCount = results.length - failedConnections.length;
+
+			let refreshError: unknown = null;
+			try {
+				await reloadAccounts(true);
+			} catch (error) {
+				refreshError = error;
+			}
+
+			try {
+				const response = await requestJson<ConnectionsStatusResponse>(resolve('/api/connections'));
+				connections = response.connections;
+				plaidConfigured =
+					response.providers.find((status) => status.provider === 'plaid')?.configured ?? false;
+			} catch (error) {
+				refreshError ??= error;
+			}
+
+			if (failedConnections.length > 0) {
+				const successfulMessage =
+					successfulCount > 0
+						? ` ${successfulCount} other ${successfulCount === 1 ? 'connection was' : 'connections were'} updated.`
+						: '';
+				showToast(
+					`${connectionNames(failedConnections)} could not sync.${successfulMessage} Your accounts remain available.`,
+					{ error: true }
+				);
+			} else if (refreshError) {
+				showToast(
+					readableError(
+						refreshError,
+						'Connections synced, but the account view could not be refreshed.'
+					),
+					{ error: true }
+				);
+			} else if (skippedConnections.length > 0) {
+				showToast(
+					`${syncTargets.length} available ${syncTargets.length === 1 ? 'connection is' : 'connections are'} up to date. Reconnect ${connectionNames(skippedConnections)} to resume its sync.`,
+					{ error: true }
+				);
+			} else {
+				showToast('Connected balances, holdings, and activity are up to date.');
+			}
 		} finally {
 			syncing = false;
 		}
@@ -1204,7 +1263,7 @@
 						class="finance-button"
 						type="button"
 						onclick={syncConnectedAccounts}
-						disabled={syncing}
+						disabled={syncing || syncableConnections.length === 0}
 					>
 						<svg class:spinning={syncing} aria-hidden="true" viewBox="0 0 20 20">
 							<path d="M16 7a6.5 6.5 0 1 0 .2 5.5M16 3v4h-4"></path>
@@ -1214,6 +1273,27 @@
 				{/if}
 			</div>
 		</section>
+
+		{#if connectionsNeedingAttention.length > 0}
+			<section class="connection-attention" aria-labelledby="connection-attention-title">
+				<div>
+					<p class="finance-kicker">Connection attention</p>
+					<h2 id="connection-attention-title">
+						{connectionsNeedingAttention.length === 1
+							? 'One institution needs to be reconnected'
+							: `${connectionsNeedingAttention.length} institutions need to be reconnected`}
+					</h2>
+					<p>
+						Reconnect {connectionNames(connectionsNeedingAttention)} to resume
+						{connectionsNeedingAttention.length === 1 ? 'its' : 'their'} updates. Your saved accounts
+						and balances remain available below.
+					</p>
+				</div>
+				<a class="finance-button secondary" href={resolve('/settings#plaid-connections')}>
+					Repair {connectionsNeedingAttention.length === 1 ? 'connection' : 'connections'}
+				</a>
+			</section>
+		{/if}
 
 		<section class="finance-summary" aria-label="Account summary">
 			<article>
@@ -2601,6 +2681,38 @@
 		flex-wrap: nowrap;
 	}
 
+	.connection-attention {
+		display: flex;
+		gap: 1.25rem;
+		align-items: center;
+		justify-content: space-between;
+		margin-bottom: 1rem;
+		padding: 1rem 1.15rem;
+		border: 1px solid #e8b8b1;
+		border-radius: 12px;
+		background: var(--red-soft);
+	}
+
+	.connection-attention h2,
+	.connection-attention p {
+		margin: 0;
+	}
+
+	.connection-attention h2 {
+		font-size: 0.92rem;
+	}
+
+	.connection-attention > div > p:last-child {
+		margin-top: 0.3rem;
+		color: var(--muted);
+		font-size: 0.68rem;
+		line-height: 1.5;
+	}
+
+	.connection-attention .finance-button {
+		flex: 0 0 auto;
+	}
+
 	.empty-account-actions {
 		justify-content: center;
 	}
@@ -2698,6 +2810,11 @@
 
 		.account-toolbar-actions > :only-child {
 			grid-column: 1 / -1;
+		}
+
+		.connection-attention {
+			align-items: flex-start;
+			flex-direction: column;
 		}
 
 		.finance-section-heading {
