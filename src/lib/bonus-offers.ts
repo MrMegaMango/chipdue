@@ -1,7 +1,7 @@
 import type { AccountBonus, FinancialAccount, FinancialAccountTransaction } from '$lib/types';
 
 export type BonusTransactionRule =
-	'capital-one-business' | 'wells-fargo-business' | 'us-bank-business';
+	'balance-only' | 'capital-one-business' | 'wells-fargo-business' | 'us-bank-business';
 
 export interface BonusOfferTier {
 	thresholdCents: number;
@@ -28,7 +28,11 @@ export interface BonusOfferTemplate {
 	transactionTarget: number;
 	transactionRule: BonusTransactionRule;
 	qualificationLabel: string;
-	payoutRule: 'qualification-plus-30' | 'qualification-plus-90' | 'qualification-month-end-plus-30';
+	payoutRule:
+		| 'qualification-plus-14'
+		| 'qualification-plus-30'
+		| 'qualification-plus-90'
+		| 'qualification-month-end-plus-30';
 	requirements(openedDate: string): string[];
 	notes: string;
 	activityNote: string;
@@ -72,6 +76,8 @@ const WELLS_FARGO_SOURCE = 'https://accountoffers.wellsfargo.com/business-checki
 const US_BANK_SOURCE =
 	'https://www.usbank.com/business-banking/banking-products/business-bank-accounts/business-checking-account.html';
 const CAPITAL_ONE_SOURCE = 'https://www.capitalone.com/small-business/bank/bizchecking500/';
+const BMO_SOURCE =
+	'https://www.bmo.com/en-us/main/business-banking/bank-accounts/bb-checking-offer/';
 
 export const WELLS_FARGO_BUSINESS_BONUS_TIERS: BonusOfferTier[] = [
 	{ thresholdCents: 250_000, rewardCents: 40_000, label: '$2,500 balance' },
@@ -89,6 +95,13 @@ const US_BANK_PLATINUM_TIER: BonusOfferTier[] = [
 
 const CAPITAL_ONE_BUSINESS_TIER: BonusOfferTier[] = [
 	{ thresholdCents: 500_000, rewardCents: 50_000, label: '$5,000 end-of-day balance' }
+];
+
+export const BMO_BUSINESS_BONUS_TIERS: BonusOfferTier[] = [
+	{ thresholdCents: 400_000, rewardCents: 40_000, label: '$4,000 daily balance' },
+	{ thresholdCents: 2_500_000, rewardCents: 75_000, label: '$25,000 daily balance' },
+	{ thresholdCents: 5_000_000, rewardCents: 100_000, label: '$50,000 daily balance' },
+	{ thresholdCents: 10_000_000, rewardCents: 150_000, label: '$100,000 daily balance' }
 ];
 
 function addDays(value: string, days: number): string {
@@ -158,7 +171,45 @@ function capitalOneRequirements(openedDate: string): string[] {
 	];
 }
 
+function bmoRequirements(openedDate: string): string[] {
+	const fundingDeadline = dayOfOffer(openedDate, 30);
+	const qualificationDeadline = dayOfOffer(openedDate, 90);
+	const payoutDate = addDays(qualificationDeadline, 14);
+	return [
+		'Confirm the account was opened through the online offer or with the branch promo code',
+		`Reach at least $4,000 by ${formatDate(fundingDeadline)}; the day-30 balance sets the $400 / $750 / $1,000 / $1,500 tier`,
+		`Maintain at least the chosen tier balance every day from day 31 through ${formatDate(qualificationDeadline)}; a lower daily balance can reduce the bonus`,
+		`Keep the account open, in good standing, and above $0 through the expected payout on ${formatDate(payoutDate)}`
+	];
+}
+
 export const BONUS_OFFER_CATALOG: BonusOfferTemplate[] = [
+	{
+		id: 'bmo-business-checking-2026-08-31',
+		institution: 'BMO',
+		institutionAliases: ['BMO', 'BMO (US)', 'BMO Bank', 'BMO Bank N.A.'],
+		name: 'BMO business checking bonus (up to $1,500)',
+		accountProduct: 'Digital, Simple, Premium, or Elite Business Checking',
+		versionLabel: 'Offer ending Aug 31, 2026',
+		validFrom: '2026-05-01',
+		validThrough: '2026-08-31',
+		sourceUrl: BMO_SOURCE,
+		sourceVerifiedAt: '2026-09-02',
+		promoCode: null,
+		rewardCents: 150_000,
+		tiers: BMO_BUSINESS_BONUS_TIERS,
+		fundingDay: 30,
+		qualificationDay: 90,
+		transactionTarget: 0,
+		transactionRule: 'balance-only',
+		qualificationLabel: 'Maintain through',
+		payoutRule: 'qualification-plus-14',
+		requirements: bmoRequirements,
+		notes:
+			'Official terms require an eligible BMO business checking account opened online through the offer page or in branch with a promo code between May 1 and August 31, 2026. The day-30 balance sets the maximum tier: $4,000 for $400, $25,000 for $750, $50,000 for $1,000, or $100,000 for $1,500. Maintain at least that balance every day from day 31 through day 90; dropping to a lower tier reduces the bonus, and dropping below $4,000 forfeits it. BMO expects payment within 14 days after qualification. Existing business checking customers and businesses that closed a BMO business checking account within the prior 12 months are not eligible; one bonus per business entity, and taxes may apply.',
+		activityNote:
+			'BMO has no transaction-count requirement for this offer. Verify the uninterrupted daily balance directly with BMO because provider snapshots cannot prove it.'
+	},
 	{
 		id: 'wells-fargo-business-checking-2026-09-08',
 		institution: 'Wells Fargo',
@@ -309,11 +360,13 @@ export function buildBonusOfferDraft(
 	const qualificationDeadline = dayOfOffer(openedDate, offer.qualificationDay);
 	if (!fundingDeadline || !qualificationDeadline) return null;
 	const expectedPayoutDate =
-		offer.payoutRule === 'qualification-plus-30'
-			? addDays(qualificationDeadline, 30)
-			: offer.payoutRule === 'qualification-plus-90'
-				? addDays(qualificationDeadline, 90)
-				: endOfMonthPlusDays(qualificationDeadline, 30);
+		offer.payoutRule === 'qualification-plus-14'
+			? addDays(qualificationDeadline, 14)
+			: offer.payoutRule === 'qualification-plus-30'
+				? addDays(qualificationDeadline, 30)
+				: offer.payoutRule === 'qualification-plus-90'
+					? addDays(qualificationDeadline, 90)
+					: endOfMonthPlusDays(qualificationDeadline, 30);
 	return {
 		name: offer.name,
 		institution: offer.institution,
@@ -468,7 +521,7 @@ export function isLikelyCapitalOneQualifyingTransaction(
 function resolveOffer(bonus: AccountBonus, account: FinancialAccount): BonusOfferTemplate | null {
 	const selected = getBonusOfferTemplate(bonus.offerTemplateId);
 	if (selected) return selected;
-	const legacyWellsFargo = BONUS_OFFER_CATALOG[0];
+	const legacyWellsFargo = getBonusOfferTemplate('wells-fargo-business-checking-2026-09-08')!;
 	if (
 		bonus.rewardCents === legacyWellsFargo.rewardCents &&
 		institutionMatches(legacyWellsFargo, account.institution) &&
@@ -514,11 +567,13 @@ export function buildBonusTracker(
 			: (offer.tiers.find((tier) => balanceCents < tier.thresholdCents) ?? null);
 	const qualificationDeadline = bonus.requirementDeadline ?? draft.requirementDeadline;
 	const classifier =
-		offer.transactionRule === 'wells-fargo-business'
-			? isLikelyWellsFargoQualifyingTransaction
-			: offer.transactionRule === 'capital-one-business'
-				? isLikelyCapitalOneQualifyingTransaction
-				: isLikelyUsBankQualifyingTransaction;
+		offer.transactionRule === 'balance-only'
+			? () => false
+			: offer.transactionRule === 'wells-fargo-business'
+				? isLikelyWellsFargoQualifyingTransaction
+				: offer.transactionRule === 'capital-one-business'
+					? isLikelyCapitalOneQualifyingTransaction
+					: isLikelyUsBankQualifyingTransaction;
 	return {
 		offer,
 		account,

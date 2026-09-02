@@ -181,6 +181,57 @@ describe('versioned business bonus offer catalog', () => {
 		});
 	});
 
+	it('tracks the BMO balance-only offer and its four tiers', () => {
+		const bmoAccount = {
+			...account,
+			institution: 'BMO (US)',
+			nickname: 'BMO Simple Business Checking',
+			currentBalanceCents: 2_500_000,
+			openedDate: '2026-08-31'
+		};
+		const offer = getCompatibleBonusOffers(bmoAccount, bmoAccount.openedDate)[0];
+		expect(offer).toMatchObject({
+			id: 'bmo-business-checking-2026-08-31',
+			rewardCents: 150_000,
+			transactionTarget: 0,
+			qualificationLabel: 'Maintain through'
+		});
+		expect(getCompatibleBonusOffers(bmoAccount, '2026-09-01')).toEqual([]);
+
+		const draft = buildBonusOfferDraft(offer!, '2026-08-31');
+		expect(draft).toMatchObject({
+			requirementDeadline: '2026-11-28',
+			expectedPayoutDate: '2026-12-12',
+			safeToCloseDate: '2026-12-13',
+			requirements: [
+				expect.stringContaining('offer'),
+				expect.stringContaining('Sep 29, 2026'),
+				expect.stringContaining('Nov 28, 2026'),
+				expect.stringContaining('Dec 12, 2026')
+			]
+		});
+
+		const bmoBonus: AccountBonus = {
+			...bonus,
+			accountId: bmoAccount.id,
+			offerTemplateId: offer!.id,
+			name: offer!.name,
+			institution: 'BMO',
+			rewardCents: offer!.rewardCents,
+			openedDate: '2026-08-31',
+			requirementDeadline: draft!.requirementDeadline,
+			expectedPayoutDate: draft!.expectedPayoutDate,
+			safeToCloseDate: draft!.safeToCloseDate
+		};
+		expect(buildBonusTracker(bmoBonus, bmoAccount, [transaction()])).toMatchObject({
+			currentTier: { thresholdCents: 2_500_000, rewardCents: 75_000 },
+			nextTier: { thresholdCents: 5_000_000, rewardCents: 100_000 },
+			amountToNextTierCents: 2_500_000,
+			likelyQualifyingTransactions: [],
+			offer: { tiers: expect.arrayContaining([expect.objectContaining({ rewardCents: 150_000 })]) }
+		});
+	});
+
 	it('counts earned value only after a posted bonus reward reaches the connected account', () => {
 		const capitalOneAccount = {
 			...account,

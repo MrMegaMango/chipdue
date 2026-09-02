@@ -686,7 +686,10 @@
 										</span>
 									</header>
 
-									<div class="tracker-metrics">
+									<div
+										class="tracker-metrics"
+										class:balance-only={tracker.offer.transactionTarget === 0}
+									>
 										<div>
 											<span>
 												{tracker.account.source === 'connected'
@@ -704,27 +707,29 @@
 												{/if}
 											</small>
 										</div>
-										<div>
-											<span>Likely qualifying activity</span>
-											<strong
-												>{activityLoadingByAccount[tracker.account.id]
-													? '—'
-													: `${tracker.likelyQualifyingTransactions.length} / ${tracker.offer.transactionTarget}`}</strong
-											>
-											<small>
-												{#if activityLoadingByAccount[tracker.account.id]}
-													Loading posted activity…
-												{:else if tracker.account.source !== 'connected'}
-													Manual account — verify activity with {tracker.offer.institution}
-												{:else if tracker.account.transactionHistoryStatus === 'preparing'}
-													The provider is still preparing older activity
-												{:else if tracker.account.transactionHistoryEnabled}
-													Posted since {formatDate(bonus.openedDate)}
-												{:else}
-													Check now to load posted activity
-												{/if}
-											</small>
-										</div>
+										{#if tracker.offer.transactionTarget > 0}
+											<div>
+												<span>Likely qualifying activity</span>
+												<strong
+													>{activityLoadingByAccount[tracker.account.id]
+														? '—'
+														: `${tracker.likelyQualifyingTransactions.length} / ${tracker.offer.transactionTarget}`}</strong
+												>
+												<small>
+													{#if activityLoadingByAccount[tracker.account.id]}
+														Loading posted activity…
+													{:else if tracker.account.source !== 'connected'}
+														Manual account — verify activity with {tracker.offer.institution}
+													{:else if tracker.account.transactionHistoryStatus === 'preparing'}
+														The provider is still preparing older activity
+													{:else if tracker.account.transactionHistoryEnabled}
+														Posted since {formatDate(bonus.openedDate)}
+													{:else}
+														Check now to load posted activity
+													{/if}
+												</small>
+											</div>
+										{/if}
 									</div>
 
 									<progress
@@ -762,7 +767,7 @@
 										</div>
 									</dl>
 
-									{#if tracker.likelyQualifyingTransactions.length > 0}
+									{#if tracker.offer.transactionTarget > 0 && tracker.likelyQualifyingTransactions.length > 0}
 										<ul class="tracker-activity" aria-label="Likely qualifying posted activity">
 											{#each tracker.likelyQualifyingTransactions.slice(0, 5) as transaction (transaction.id)}
 												<li>
@@ -796,14 +801,20 @@
 												/>
 											</small>
 										{:else}
-											<small>Connect this account to a provider to estimate posted activity.</small>
+											<small>
+												{tracker.offer.transactionTarget === 0
+													? 'Connect this account to a provider to update its balance automatically.'
+													: 'Connect this account to a provider to estimate posted activity.'}
+											</small>
 										{/if}
 									</div>
 									<p class="tracker-note">
 										Balances are snapshots and cannot prove new-money sources or uninterrupted
-										minimums. {tracker.account.source === 'connected'
-											? 'Activity is a conservative estimate from posted provider transactions.'
-											: 'Activity remains a manual check until the account is connected to a provider.'}
+										minimums. {tracker.offer.transactionTarget === 0
+											? 'This promotion is balance-based.'
+											: tracker.account.source === 'connected'
+												? 'Activity is a conservative estimate from posted provider transactions.'
+												: 'Activity remains a manual check until the account is connected to a provider.'}
 										{tracker.offer.activityNote}
 										<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- Provider terms are an external URL. -->
 										<a href={tracker.offer.sourceUrl} target="_blank" rel="noreferrer"
@@ -1173,6 +1184,10 @@
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 		gap: 0.55rem;
+	}
+
+	.tracker-metrics.balance-only {
+		grid-template-columns: minmax(0, 1fr);
 	}
 
 	.tracker-metrics > div {
