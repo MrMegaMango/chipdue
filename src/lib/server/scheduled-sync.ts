@@ -15,12 +15,12 @@ const CRON_SECRET_MINIMUM_LENGTH = 16;
 const CRON_SECRET_MAXIMUM_LENGTH = 512;
 const CANDIDATES: Record<
 	ScheduledSyncCandidate,
-	{ period: ScheduledSyncPeriod; localHour: number; utcHour: number }
+	{ period: ScheduledSyncPeriod; localHour: number }
 > = {
-	'morning-pdt': { period: 'morning', localHour: 8, utcHour: 15 },
-	'morning-pst': { period: 'morning', localHour: 8, utcHour: 16 },
-	'evening-pdt': { period: 'evening', localHour: 17, utcHour: 0 },
-	'evening-pst': { period: 'evening', localHour: 17, utcHour: 1 }
+	'morning-pdt': { period: 'morning', localHour: 8 },
+	'morning-pst': { period: 'morning', localHour: 8 },
+	'evening-pdt': { period: 'evening', localHour: 17 },
+	'evening-pst': { period: 'evening', localHour: 17 }
 };
 
 const pacificParts = new Intl.DateTimeFormat('en-US', {
@@ -42,14 +42,13 @@ export function scheduledSyncWindow(
 ): ScheduledSyncWindow | null {
 	if (!Object.hasOwn(CANDIDATES, candidate) || !Number.isFinite(now.getTime())) return null;
 	const configuration = CANDIDATES[candidate as ScheduledSyncCandidate];
-	if (now.getUTCHours() !== configuration.utcHour) return null;
 
 	const parts = pacificParts.formatToParts(now);
 	const year = fixedPart(parts, 'year');
 	const month = fixedPart(parts, 'month');
 	const day = fixedPart(parts, 'day');
 	const hour = Number(fixedPart(parts, 'hour'));
-	if (!year || !month || !day || hour !== configuration.localHour) return null;
+	if (!year || !month || !day || hour < configuration.localHour) return null;
 
 	return {
 		period: configuration.period,

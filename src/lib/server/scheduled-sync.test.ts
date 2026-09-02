@@ -38,9 +38,24 @@ describe.sequential('scheduled Plaid synchronization', () => {
 		});
 	});
 
-	it('skips the inactive daylight-saving candidate and malformed requests', () => {
-		expect(scheduledSyncWindow('morning-pst', new Date('2026-08-28T16:15:00Z'))).toBeNull();
+	it('allows a later candidate or manual run to catch up a missed period', () => {
+		expect(scheduledSyncWindow('morning-pst', new Date('2026-08-28T16:15:00Z'))).toEqual({
+			period: 'morning',
+			localDate: '2026-08-28'
+		});
+		expect(scheduledSyncWindow('morning-pdt', new Date('2026-08-28T17:15:00Z'))).toEqual({
+			period: 'morning',
+			localDate: '2026-08-28'
+		});
+		expect(scheduledSyncWindow('evening-pst', new Date('2026-08-29T01:15:00Z'))).toEqual({
+			period: 'evening',
+			localDate: '2026-08-28'
+		});
+	});
+
+	it('skips candidates before their Pacific period and malformed requests', () => {
 		expect(scheduledSyncWindow('morning-pdt', new Date('2026-12-28T15:15:00Z'))).toBeNull();
+		expect(scheduledSyncWindow('evening-pdt', new Date('2026-12-29T00:15:00Z'))).toBeNull();
 		expect(scheduledSyncWindow('unknown', new Date('2026-08-28T15:15:00Z'))).toBeNull();
 		expect(scheduledSyncWindow('morning-pdt', new Date('invalid'))).toBeNull();
 	});
