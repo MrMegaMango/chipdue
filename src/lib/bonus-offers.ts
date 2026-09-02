@@ -176,7 +176,7 @@ function bmoRequirements(openedDate: string): string[] {
 	const qualificationDeadline = dayOfOffer(openedDate, 90);
 	const payoutDate = addDays(qualificationDeadline, 14);
 	return [
-		'Confirm the account was opened through the online offer or with the branch promo code',
+		'Confirm BMO attached this exact offer at account opening; the published terms used online enrollment or an in-branch promo code',
 		`Reach at least $4,000 by ${formatDate(fundingDeadline)}; the day-30 balance sets the $400 / $750 / $1,000 / $1,500 tier`,
 		`Maintain at least the chosen tier balance every day from day 31 through ${formatDate(qualificationDeadline)}; a lower daily balance can reduce the bonus`,
 		`Keep the account open, in good standing, and above $0 through the expected payout on ${formatDate(payoutDate)}`
