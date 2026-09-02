@@ -122,7 +122,7 @@ import {
 	resetPlaidClientForTests,
 	syncPlaidItem
 } from './plaid';
-import { listPlaidConnections, savePlaidItem } from './plaid-store';
+import { listPlaidConnections, markPlaidItemNeedsUpdate, savePlaidItem } from './plaid-store';
 import { updateCardRewardsSchema } from './schemas';
 import {
 	listFinancialAccounts,
@@ -703,6 +703,27 @@ describe.sequential('Plaid transaction history', () => {
 				update: { account_selection_enabled: true }
 			})
 		);
+	});
+
+	it('uses the minimal update-mode request when repairing an expired login', async () => {
+		plaidMocks.linkTokenCreate.mockResolvedValue({
+			data: { link_token: 'repair-link-value', expiration: '2026-09-03T00:00:00.000Z' }
+		});
+		const itemId = await savePlaidItem(
+			'provider-item-needing-login',
+			'test-access-value',
+			'Synthetic Bank'
+		);
+		await markPlaidItemNeedsUpdate(itemId);
+
+		await expect(createPlaidUpdateToken(itemId)).resolves.toEqual({
+			linkToken: 'repair-link-value',
+			expiration: '2026-09-03T00:00:00.000Z'
+		});
+		const request = plaidMocks.linkTokenCreate.mock.calls.at(-1)?.[0];
+		expect(request).toEqual(expect.objectContaining({ access_token: 'test-access-value' }));
+		expect(request).not.toHaveProperty('additional_consented_products');
+		expect(request).not.toHaveProperty('update');
 	});
 
 	it('keeps core account linking available when optional Plaid products are disabled', async () => {

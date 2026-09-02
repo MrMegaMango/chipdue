@@ -342,9 +342,22 @@ export async function createPlaidUpdateToken(
 ): Promise<{ linkToken: string; expiration: string }> {
 	const item = await getPrivatePlaidItem(localItemId);
 	const client = await getPlaidClientForItem(item);
-	const request = {
+	const baseRequest = {
 		...(await baseLinkTokenRequest()),
-		access_token: item.accessToken,
+		access_token: item.accessToken
+	};
+	if (item.status === 'needs_update') {
+		try {
+			const response = await client.linkTokenCreate(baseRequest);
+			return { linkToken: response.data.link_token, expiration: response.data.expiration };
+		} catch (error) {
+			if (error instanceof AppError) throw error;
+			throw await sanitizedPlaidError(error, localItemId);
+		}
+	}
+
+	const request = {
+		...baseRequest,
 		update: { account_selection_enabled: true }
 	};
 	try {
