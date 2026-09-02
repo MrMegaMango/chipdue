@@ -46,6 +46,7 @@ const bonus: AccountBonus = {
 	id: '00000000-0000-4000-8000-000000000003',
 	accountId: account.id,
 	offerTemplateId: null,
+	offerDateOverrideConfirmed: false,
 	name: 'Wells Fargo business checking bonus (up to $825)',
 	institution: 'Wells Fargo',
 	rewardCents: 82_500,
@@ -229,6 +230,28 @@ describe('versioned business bonus offer catalog', () => {
 			amountToNextTierCents: 2_500_000,
 			likelyQualifyingTransactions: [],
 			offer: { tiers: expect.arrayContaining([expect.objectContaining({ rewardCents: 150_000 })]) }
+		});
+
+		const bankConfirmedException = {
+			...bmoBonus,
+			offerDateOverrideConfirmed: true,
+			openedDate: '2026-09-02',
+			requirementDeadline: null,
+			expectedPayoutDate: null,
+			safeToCloseDate: null
+		};
+		expect(
+			buildBonusTracker(
+				{ ...bankConfirmedException, offerDateOverrideConfirmed: false },
+				bmoAccount,
+				[]
+			)
+		).toBeNull();
+		expect(buildBonusTracker(bankConfirmedException, bmoAccount, [])).toMatchObject({
+			fundingDeadline: '2026-10-01',
+			qualificationDeadline: '2026-11-30',
+			latestPayoutDate: '2026-12-14',
+			offer: { id: 'bmo-business-checking-2026-08-31' }
 		});
 	});
 

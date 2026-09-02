@@ -38,6 +38,7 @@
 	};
 	type BonusForm = {
 		offerTemplateId: string;
+		offerDateOverrideConfirmed: boolean;
 		name: string;
 		institution: string;
 		accountId: string;
@@ -104,14 +105,15 @@
 	);
 	const nextBonus = $derived(upcomingBonuses[0] ?? null);
 	const formAccount = $derived(accounts.find((account) => account.id === form.accountId) ?? null);
+	const institutionOffers = $derived(getCompatibleBonusOffers(formAccount, null));
 	const compatibleOffers = $derived(
 		getCompatibleBonusOffers(formAccount, form.openedDate || formAccount?.openedDate || null)
 	);
 	const selectedOffer = $derived(getBonusOfferTemplate(form.offerTemplateId || null));
 	const selectableOffers = $derived(
-		selectedOffer && !compatibleOffers.some((offer) => offer.id === selectedOffer.id)
-			? [selectedOffer, ...compatibleOffers]
-			: compatibleOffers
+		selectedOffer && !institutionOffers.some((offer) => offer.id === selectedOffer.id)
+			? [selectedOffer, ...institutionOffers]
+			: institutionOffers
 	);
 	const selectedOfferDateWarning = $derived(
 		selectedOffer && form.openedDate && !isOfferDateEligible(selectedOffer, form.openedDate)
@@ -126,6 +128,7 @@
 	function blankForm(): BonusForm {
 		return {
 			offerTemplateId: '',
+			offerDateOverrideConfirmed: false,
 			name: '',
 			institution: '',
 			accountId: '',
@@ -269,6 +272,14 @@
 		);
 	}
 
+	function targetTierFor(bonus: AccountBonus, tracker: BonusTracker) {
+		return (
+			tracker.offer.tiers.find((tier) => tier.rewardCents === bonus.rewardCents) ??
+			tracker.offer.tiers.at(-1) ??
+			null
+		);
+	}
+
 	function trackerSetupOffersFor(bonus: AccountBonus) {
 		const account = linkedAccount(bonus);
 		if (!account || resolveBonusOffer(bonus, account)) return [];
@@ -369,6 +380,7 @@
 		const account = linkedAccount(bonus);
 		form = {
 			offerTemplateId: bonus.offerTemplateId ?? resolveBonusOffer(bonus, account)?.id ?? '',
+			offerDateOverrideConfirmed: bonus.offerDateOverrideConfirmed,
 			name: bonus.name,
 			institution: bonus.institution ?? '',
 			accountId: bonus.accountId ?? '',
@@ -388,6 +400,7 @@
 
 	function handleAccountChange(): void {
 		const account = accounts.find((candidate) => candidate.id === form.accountId);
+		form.offerDateOverrideConfirmed = false;
 		if (!account) {
 			form.offerTemplateId = '';
 			return;
@@ -396,15 +409,13 @@
 		if (!form.openedDate && account.openedDate) form.openedDate = account.openedDate;
 		if (
 			form.offerTemplateId &&
-			!getCompatibleBonusOffers(account, form.openedDate || account.openedDate).some(
-				(offer) => offer.id === form.offerTemplateId
-			)
+			!getCompatibleBonusOffers(account, null).some((offer) => offer.id === form.offerTemplateId)
 		) {
 			form.offerTemplateId = '';
 		}
 	}
 
-	function applySelectedOffer(): void {
+	function applySelectedOffer(preserveTarget = false): void {
 		if (!form.offerTemplateId) return;
 		const offer = getBonusOfferTemplate(form.offerTemplateId);
 		const openedDate = form.openedDate || formAccount?.openedDate || '';
@@ -418,12 +429,17 @@
 			return;
 		}
 		formError = '';
+		const reward =
+			preserveTarget &&
+			offer.tiers.some((tier) => tier.rewardCents === Math.round((form.reward ?? 0) * 100))
+				? form.reward
+				: draft.rewardCents / 100;
 		form = {
 			...form,
 			openedDate,
 			name: draft.name,
 			institution: draft.institution,
-			reward: draft.rewardCents / 100,
+			reward,
 			requirementDeadline: draft.requirementDeadline,
 			expectedPayoutDate: draft.expectedPayoutDate,
 			safeToCloseDate: draft.safeToCloseDate,
@@ -433,11 +449,15 @@
 	}
 
 	function handleOfferChange(): void {
+		form.offerDateOverrideConfirmed = false;
 		if (form.offerTemplateId) applySelectedOffer();
 	}
 
 	function handleOpenedDateChange(): void {
-		if (form.offerTemplateId) applySelectedOffer();
+		if (selectedOffer && isOfferDateEligible(selectedOffer, form.openedDate)) {
+			form.offerDateOverrideConfirmed = false;
+		}
+		if (form.offerTemplateId) applySelectedOffer(true);
 	}
 
 	function closeDialog(): void {
@@ -467,11 +487,13 @@
 				return;
 			}
 			if (
-				!getCompatibleBonusOffers(formAccount, form.openedDate).some(
-					(candidate) => candidate.id === offer.id
-				)
+				!getCompatibleBonusOffers(formAccount, null).some((candidate) => candidate.id === offer.id)
 			) {
-				formError = 'That offer version does not match this account and opening date.';
+				formError = 'That offer version does not match this account.';
+				return;
+			}
+			if (!isOfferDateEligible(offer, form.openedDate) && !form.offerDateOverrideConfirmed) {
+				formError = 'Confirm that the bank applied this offer outside its published dates.';
 				return;
 			}
 		}
@@ -484,6 +506,7 @@
 		const payload = {
 			accountId: form.accountId || null,
 			offerTemplateId: form.offerTemplateId || null,
+			offerDateOverrideConfirmed: Boolean(form.offerTemplateId) && form.offerDateOverrideConfirmed,
 			name: form.name.trim(),
 			institution: form.institution.trim() || null,
 			rewardCents: cents(form.reward),
@@ -660,6 +683,11 @@
 				<div class="finance-grid bonus-grid">
 					{#each bonuses as bonus (bonus.id)}
 						{@const tracker = trackerFor(bonus)}
+						{@const targetTier = tracker ? targetTierFor(bonus, tracker) : null}
+						{@const amountToTargetCents =
+							tracker && targetTier && tracker.balanceCents !== null
+								? Math.max(0, targetTier.thresholdCents - tracker.balanceCents)
+								: null}
 						{@const trackerSetupOffers = trackerSetupOffersFor(bonus)}
 						<article class="finance-card bonus-card" class:has-tracker={tracker !== null}>
 							<header>
@@ -714,10 +742,13 @@
 											</span>
 											<strong>{formatMoney(tracker.balanceCents)}</strong>
 											<small>
-												{#if tracker.currentTier}
-													Currently tracking the {formatMoney(tracker.currentTier.rewardCents)} tier
-												{:else if tracker.amountToNextTierCents !== null}
-													{formatMoney(tracker.amountToNextTierCents)} to the first tier
+												{#if amountToTargetCents === 0}
+													Your {formatMoney(targetTier?.rewardCents ?? null)} target is reached in this
+													snapshot
+												{:else if amountToTargetCents !== null}
+													{formatMoney(amountToTargetCents)} to your {formatMoney(
+														targetTier?.rewardCents ?? null
+													)} target
 												{:else}
 													Waiting for a synced balance
 												{/if}
@@ -750,9 +781,11 @@
 
 									<progress
 										class="balance-progress"
-										max={tracker.offer.tiers.at(-1)?.thresholdCents ?? 1}
+										max={targetTier?.thresholdCents ??
+											tracker.offer.tiers.at(-1)?.thresholdCents ??
+											1}
 										value={Math.max(0, tracker.balanceCents ?? 0)}
-										aria-label={`Balance progress toward the ${formatMoney(tracker.offer.rewardCents)} offer`}
+										aria-label={`Balance progress toward the ${formatMoney(targetTier?.rewardCents ?? tracker.offer.rewardCents)} target`}
 									></progress>
 
 									<div
@@ -761,9 +794,16 @@
 										aria-label={`${tracker.offer.institution} bonus tiers`}
 									>
 										{#each tracker.offer.tiers as tier (tier.thresholdCents)}
-											<div class:reached={(tracker.balanceCents ?? 0) >= tier.thresholdCents}>
+											<div
+												class:reached={(tracker.balanceCents ?? 0) >= tier.thresholdCents}
+												class:target={targetTier?.thresholdCents === tier.thresholdCents}
+											>
 												<strong>Reward {formatMoney(tier.rewardCents)}</strong>
-												<span>{tier.label}</span>
+												<span>
+													{tier.label}{targetTier?.thresholdCents === tier.thresholdCents
+														? ' · Your target'
+														: ''}
+												</span>
 											</div>
 										{/each}
 									</div>
@@ -825,8 +865,11 @@
 										{/if}
 									</div>
 									<p class="tracker-note">
-										Balances are snapshots and cannot prove new-money sources or uninterrupted
-										minimums. {tracker.offer.transactionTarget === 0
+										{#if bonus.offerDateOverrideConfirmed}
+											<strong>Bank-confirmed enrollment date exception.</strong>
+										{/if}
+										Balances are snapshots and cannot prove new-money sources or uninterrupted minimums.
+										{tracker.offer.transactionTarget === 0
 											? 'This promotion is balance-based.'
 											: tracker.account.source === 'connected'
 												? 'Activity is a conservative estimate from posted provider transactions.'
@@ -933,16 +976,28 @@
 						/>
 					</div>
 					<div class="finance-field">
-						<label for="bonus-value">Bonus value</label>
-						<input
-							id="bonus-value"
-							type="number"
-							min="0"
-							step="0.01"
-							bind:value={form.reward}
-							readonly={Boolean(form.offerTemplateId)}
-							placeholder="500.00"
-						/>
+						{#if selectedOffer && selectedOffer.tiers.length > 1}
+							<label for="bonus-target-tier">Target tier</label>
+							<select id="bonus-target-tier" bind:value={form.reward}>
+								{#each selectedOffer.tiers as tier (tier.rewardCents)}
+									<option value={tier.rewardCents / 100}>
+										{formatMoney(tier.rewardCents)} · {tier.label}
+									</option>
+								{/each}
+							</select>
+							<small>Sets the value you plan to earn; all offer tiers stay visible.</small>
+						{:else}
+							<label for="bonus-value">Bonus value</label>
+							<input
+								id="bonus-value"
+								type="number"
+								min="0"
+								step="0.01"
+								bind:value={form.reward}
+								readonly={Boolean(form.offerTemplateId)}
+								placeholder="500.00"
+							/>
+						{/if}
 					</div>
 					<div class="finance-field">
 						<label for="bonus-account">Linked account</label>
@@ -974,12 +1029,24 @@
 							{:else if compatibleOffers.length > 0}
 								Choose the exact offer you enrolled in. Your bank connection cannot confirm the
 								promotion code for you.
+							{:else if institutionOffers.length > 0}
+								Only past verified offer versions match this account. Select the exact one and
+								record the bank’s confirmation if it applies.
 							{:else}
 								No current verified offer matches this account and opening date. Use manual rules.
 							{/if}
 						</small>
 						{#if selectedOfferDateWarning}
 							<small class="offer-warning">{selectedOfferDateWarning}</small>
+							<label class="offer-exception">
+								<input type="checkbox" bind:checked={form.offerDateOverrideConfirmed} />
+								<span>
+									<strong>Bank-confirmed enrollment</strong>
+									<small>
+										The bank confirmed this exact offer applies despite the published dates.
+									</small>
+								</span>
+							</label>
 						{/if}
 					</div>
 					<div class="finance-field">
@@ -1271,6 +1338,10 @@
 		background: rgba(34, 139, 94, 0.09);
 	}
 
+	.tier-rail > div.target {
+		box-shadow: inset 0 0 0 1px var(--accent);
+	}
+
 	.tier-rail strong {
 		font-size: 0.72rem;
 	}
@@ -1345,6 +1416,32 @@
 
 	.offer-picker .offer-warning {
 		color: var(--red);
+	}
+
+	.offer-exception {
+		display: flex;
+		gap: 0.55rem;
+		align-items: flex-start;
+		margin-top: 0.45rem;
+		padding: 0.65rem;
+		border: 1px solid color-mix(in srgb, var(--red) 35%, var(--line));
+		border-radius: 8px;
+		background: color-mix(in srgb, var(--red) 5%, white);
+		text-transform: none;
+	}
+
+	.offer-exception input {
+		width: auto;
+		margin-top: 0.15rem;
+	}
+
+	.offer-exception span {
+		display: grid;
+		gap: 0.12rem;
+	}
+
+	.offer-exception strong {
+		font-size: 0.7rem;
 	}
 
 	.requirement-list {

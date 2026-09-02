@@ -241,6 +241,7 @@ export interface AccountBonus {
 	id: string;
 	accountId: string | null;
 	offerTemplateId: string | null;
+	offerDateOverrideConfirmed: boolean;
 	name: string;
 	institution: string | null;
 	rewardCents: number | null;

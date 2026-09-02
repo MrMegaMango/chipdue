@@ -202,6 +202,7 @@ const bonusPayloadSchema = z.object({
 	recordType: z.literal('bonus'),
 	accountId: z.string().uuid().nullable(),
 	offerTemplateId: z.string().max(100).nullable().optional().default(null),
+	offerDateOverrideConfirmed: z.boolean().optional().default(false),
 	name: z.string(),
 	institution: nullableTextSchema,
 	rewardCents: nullableCentsSchema,
@@ -515,6 +516,7 @@ function rowToBonus(row: PrivateRecordRow, payload: BonusPayload): AccountBonus 
 		id: row.id,
 		accountId: payload.accountId,
 		offerTemplateId: payload.offerTemplateId,
+		offerDateOverrideConfirmed: payload.offerDateOverrideConfirmed,
 		name: payload.name,
 		institution: payload.institution,
 		rewardCents: payload.rewardCents,
@@ -1241,6 +1243,10 @@ export async function updateBonus(id: string, changes: UpdateBonusData): Promise
 		accountId: changes.accountId === undefined ? existing.accountId : changes.accountId,
 		offerTemplateId:
 			changes.offerTemplateId === undefined ? existing.offerTemplateId : changes.offerTemplateId,
+		offerDateOverrideConfirmed:
+			changes.offerDateOverrideConfirmed === undefined
+				? existing.offerDateOverrideConfirmed
+				: changes.offerDateOverrideConfirmed,
 		name: changes.name ?? existing.name,
 		institution: changes.institution === undefined ? existing.institution : changes.institution,
 		rewardCents: changes.rewardCents === undefined ? existing.rewardCents : changes.rewardCents,

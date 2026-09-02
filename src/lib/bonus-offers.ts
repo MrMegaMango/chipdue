@@ -541,7 +541,7 @@ export function resolveBonusOffer(
 	const offer = resolveOffer(bonus, account);
 	return offer &&
 		institutionMatches(offer, account.institution) &&
-		isOfferDateEligible(offer, bonus.openedDate)
+		(isOfferDateEligible(offer, bonus.openedDate) || bonus.offerDateOverrideConfirmed)
 		? offer
 		: null;
 }

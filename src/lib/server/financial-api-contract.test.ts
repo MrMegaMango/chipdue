@@ -76,6 +76,7 @@ describe.sequential('financial workspace API contract', () => {
 		expect(bonusPayload.bonus).toMatchObject({
 			accountId: accountPayload.account.id,
 			offerTemplateId: 'us-bank-business-essentials-q3-2026',
+			offerDateOverrideConfirmed: false,
 			status: 'active',
 			requirements: [{ label: 'Complete qualifying deposits', completed: false }]
 		});

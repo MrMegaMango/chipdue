@@ -128,6 +128,8 @@ describe('financial workspace validation', () => {
 				]
 			}).success
 		).toBe(true);
+		expect(createBonusSchema.parse({ name: 'Bonus' }).offerDateOverrideConfirmed).toBe(false);
+		expect(updateBonusSchema.safeParse({ offerDateOverrideConfirmed: true }).success).toBe(true);
 		expect(createBonusSchema.safeParse({ name: 'Bonus', rewardCents: -1 }).success).toBe(false);
 		expect(updateFinancialAccountSchema.safeParse({ hidden: true }).success).toBe(true);
 		expect(updateFinancialAccountSchema.safeParse({ netContributionsCents: -50_000 }).success).toBe(
