@@ -48,6 +48,20 @@ function description(card: Card, includeAmounts: boolean): string {
 	return parts.join('\n');
 }
 
+export function hasUpcomingPaymentDueDate(card: Card, now: Date): boolean {
+	if (!card.dueDate || card.dueDate < now.toISOString().slice(0, 10)) return false;
+	if (card.minimumPaymentCents === 0) return false;
+	if (card.currentBalanceCents !== null && card.currentBalanceCents <= 0) return false;
+	if (
+		card.minimumPaymentCents === null &&
+		card.statementBalanceCents !== null &&
+		card.statementBalanceCents <= 0
+	) {
+		return false;
+	}
+	return true;
+}
+
 function foldLine(line: string): string[] {
 	const lines: string[] = [];
 	let current = '';
@@ -78,13 +92,14 @@ export function createCalendar(cards: Card[], now = new Date(), includeAmounts =
 	];
 
 	for (const card of cards) {
-		if (!card.dueDate) continue;
+		const dueDate = card.dueDate;
+		if (!dueDate || !hasUpcomingPaymentDueDate(card, now)) continue;
 		logicalLines.push(
 			'BEGIN:VEVENT',
 			`UID:${card.id}@carddue.local`,
 			`DTSTAMP:${formatUtcTimestamp(now)}`,
-			`DTSTART;VALUE=DATE:${compactDate(card.dueDate)}`,
-			`DTEND;VALUE=DATE:${compactDate(nextDate(card.dueDate))}`,
+			`DTSTART;VALUE=DATE:${compactDate(dueDate)}`,
+			`DTEND;VALUE=DATE:${compactDate(nextDate(dueDate))}`,
 			`SUMMARY:${escapeText(`${card.nickname} payment due`)}`
 		);
 		const details = description(card, includeAmounts);

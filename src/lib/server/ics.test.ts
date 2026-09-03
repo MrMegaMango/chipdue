@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Card } from '$lib/types';
-import { createCalendar } from './ics';
+import { createCalendar, hasUpcomingPaymentDueDate } from './ics';
 
 const card: Card = {
 	id: '67f7bfb3-cafb-4522-a151-38807138230a',
@@ -59,5 +59,24 @@ describe('calendar export', () => {
 		);
 		expect(calendar).toContain('SUMMARY:Safe card\\nX-INJECTED:YES payment due');
 		expect(calendar).not.toContain('\rX-INJECTED:YES');
+	});
+
+	it('excludes passed and non-payable dates from payment reminders', () => {
+		const now = new Date('2027-01-15T12:00:00.000Z');
+		expect(hasUpcomingPaymentDueDate({ ...card, dueDate: '2027-01-14' }, now)).toBe(false);
+		expect(hasUpcomingPaymentDueDate({ ...card, minimumPaymentCents: 0 }, now)).toBe(false);
+		expect(hasUpcomingPaymentDueDate(card, now)).toBe(true);
+
+		const calendar = createCalendar(
+			[
+				{ ...card, id: 'passed', dueDate: '2027-01-14' },
+				{ ...card, id: 'paid', minimumPaymentCents: 0 },
+				card
+			],
+			now
+		);
+		expect(calendar).not.toContain(`UID:passed${'@'}carddue.local`);
+		expect(calendar).not.toContain(`UID:paid${'@'}carddue.local`);
+		expect(calendar).toContain(`UID:${card.id}@carddue.local`);
 	});
 });

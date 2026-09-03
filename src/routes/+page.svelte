@@ -160,6 +160,33 @@
 		);
 	}
 
+	export function isUpcomingPaymentDueDate(
+		statementBalanceCents: number | null,
+		minimumPaymentCents: number | null,
+		currentBalanceCents: number | null,
+		dueDate: string | null,
+		daysUntilDueDate: number
+	): boolean {
+		return (
+			daysUntilDueDate >= 0 &&
+			hasPaymentDue(statementBalanceCents, minimumPaymentCents, currentBalanceCents, dueDate)
+		);
+	}
+
+	export function isAwaitingNextDueDate(
+		statementBalanceCents: number | null,
+		minimumPaymentCents: number | null,
+		currentBalanceCents: number | null,
+		dueDate: string | null,
+		daysUntilDueDate: number
+	): boolean {
+		return (
+			dueDate !== null &&
+			daysUntilDueDate < 0 &&
+			!hasPaymentDue(statementBalanceCents, minimumPaymentCents, currentBalanceCents, dueDate)
+		);
+	}
+
 	export type CardRewardType = 'points' | 'miles' | 'cash_back';
 	export type CardRewardCategoryMatch =
 		| 'dining'
@@ -658,21 +685,29 @@
 	);
 	const calendarCards = $derived(
 		cards
-			.filter((card): card is CardView & { dueDate: string } => Boolean(card.dueDate))
+			.filter(
+				(card): card is CardView & { dueDate: string } =>
+					Boolean(card.dueDate) &&
+					isUpcomingPaymentDueDate(
+						card.statementBalanceCents,
+						card.minimumPaymentCents,
+						card.currentBalanceCents,
+						card.dueDate,
+						daysUntil(card.dueDate)
+					)
+			)
 			.toSorted((left, right) => left.dueDate.localeCompare(right.dueDate))
 	);
 	const nextCard = $derived(
 		cards
-			.filter(
-				(card) =>
-					card.dueDate &&
-					hasPaymentDue(
-						card.statementBalanceCents,
-						card.minimumPaymentCents,
-						card.currentBalanceCents,
-						card.dueDate
-					) &&
-					daysUntil(card.dueDate) >= 0
+			.filter((card) =>
+				isUpcomingPaymentDueDate(
+					card.statementBalanceCents,
+					card.minimumPaymentCents,
+					card.currentBalanceCents,
+					card.dueDate,
+					daysUntil(card.dueDate)
+				)
 			)
 			.toSorted((a, b) => (a.dueDate ?? '').localeCompare(b.dueDate ?? ''))[0] ?? null
 	);
@@ -1695,7 +1730,7 @@
 
 	async function openCalendarDialog(): Promise<void> {
 		if (calendarCards.length === 0) {
-			showNotice('Add a due date to a card first.', 'error');
+			showNotice('No upcoming payment due dates are available yet.', 'error');
 			return;
 		}
 		prepareDialog();
@@ -3080,6 +3115,13 @@
 								card.minimumPaymentCents,
 								card.currentBalanceCents
 							)}
+							{@const awaitingNextDueDate = isAwaitingNextDueDate(
+								card.statementBalanceCents,
+								card.minimumPaymentCents,
+								card.currentBalanceCents,
+								card.dueDate,
+								daysUntil(card.dueDate)
+							)}
 							{@const linkedBonuses = bonusesForCard(card.id)}
 							<div class="card-stack">
 								<article class:overdue={status.tone === 'danger'} class="credit-card">
@@ -3145,8 +3187,16 @@
 
 									<div class="payment-details">
 										<div class="payment-deadline">
-											<span>{payment.source === 'statement' ? 'Pay by' : 'Reported due date'}</span>
-											<strong>{formatDate(card.dueDate)}</strong>
+											<span
+												>{awaitingNextDueDate
+													? 'Next due date'
+													: payment.source === 'statement'
+														? 'Pay by'
+														: 'Reported due date'}</span
+											>
+											<strong class:unavailable={awaitingNextDueDate}
+												>{awaitingNextDueDate ? 'Pending update' : formatDate(card.dueDate)}</strong
+											>
 										</div>
 										<div class="minimum-payment-detail">
 											<span>Minimum payment</span>

@@ -12,6 +12,8 @@ import {
 	formatRewardRate,
 	googleCalendarEventUrl,
 	hasPaymentDue,
+	isAwaitingNextDueDate,
+	isUpcomingPaymentDueDate,
 	inputToCents,
 	inputToRewardRate,
 	isApprovedBootstrapContinuation,
@@ -318,7 +320,10 @@ describe('credit-card payment status', () => {
 		expect(source).not.toContain('Pay to avoid interest');
 		expect(source).not.toContain('Minimum payments due');
 		expect(source).toContain('Statement balances to pay');
-		expect(source).toContain("payment.source === 'statement' ? 'Pay by' : 'Reported due date'");
+		expect(source).toContain("? 'Next due date'");
+		expect(source).toContain("? 'Pay by'");
+		expect(source).toContain(": 'Reported due date'");
+		expect(source).toContain("? 'Pending update'");
 	});
 
 	it('uses the statement balance as the pay-in-full target', () => {
@@ -364,6 +369,14 @@ describe('credit-card payment status', () => {
 		expect(hasPaymentDue(12_000, null, 15_000, '2026-09-01')).toBe(true);
 		expect(hasPaymentDue(null, null, null, '2026-09-01')).toBe(true);
 		expect(hasPaymentDue(12_000, null, 15_000, null)).toBe(false);
+	});
+
+	it('waits for the issuer instead of presenting a passed non-payable date as upcoming', () => {
+		expect(isAwaitingNextDueDate(19_977, 0, 1_689, '2026-09-01', -2)).toBe(true);
+		expect(isUpcomingPaymentDueDate(19_977, 0, 1_689, '2026-09-01', -2)).toBe(false);
+		expect(isAwaitingNextDueDate(19_977, 0, 1_689, '2026-10-01', 28)).toBe(false);
+		expect(isUpcomingPaymentDueDate(19_977, 0, 1_689, '2026-10-01', 28)).toBe(false);
+		expect(isUpcomingPaymentDueDate(19_977, 2_500, 1_689, '2026-10-01', 28)).toBe(true);
 	});
 });
 
