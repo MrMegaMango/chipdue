@@ -1,7 +1,13 @@
 import type { AccountBonus, FinancialAccount, FinancialAccountTransaction } from '$lib/types';
 
 export type BonusTransactionRule =
-	'balance-only' | 'capital-one-business' | 'wells-fargo-business' | 'us-bank-business';
+	| 'balance-only'
+	| 'recent-posted'
+	| 'capital-one-business'
+	| 'wells-fargo-business'
+	| 'us-bank-business';
+
+export type BonusActivityMode = 'none' | 'qualifying' | 'recent';
 
 export interface BonusOfferTier {
 	thresholdCents: number;
@@ -13,8 +19,11 @@ export interface BonusOfferTemplate {
 	id: string;
 	institution: string;
 	institutionAliases: string[];
+	accountTypes: FinancialAccount['accountType'][];
+	ownerTypes: FinancialAccount['ownerType'][];
 	name: string;
 	accountProduct: string;
+	startDateLabel: string;
 	versionLabel: string;
 	validFrom: string | null;
 	validThrough: string | null;
@@ -27,12 +36,15 @@ export interface BonusOfferTemplate {
 	qualificationDay: number;
 	transactionTarget: number;
 	transactionRule: BonusTransactionRule;
+	activityMode: BonusActivityMode;
 	qualificationLabel: string;
 	payoutRule:
 		| 'qualification-plus-14'
 		| 'qualification-plus-30'
 		| 'qualification-plus-90'
+		| 'qualification-plus-7-business-days'
 		| 'qualification-month-end-plus-30';
+	safeToCloseRule: 'payout-plus-1' | 'qualification-plus-1-year-plus-1';
 	requirements(openedDate: string): string[];
 	notes: string;
 	activityNote: string;
@@ -78,6 +90,7 @@ const US_BANK_SOURCE =
 const CAPITAL_ONE_SOURCE = 'https://www.capitalone.com/small-business/bank/bizchecking500/';
 const BMO_SOURCE =
 	'https://www.bmo.com/en-us/main/business-banking/bank-accounts/bb-checking-offer/';
+const ETRADE_ALERT_SOURCE = 'https://us.etrade.com/e/t/alerts/Alertinbox';
 
 export const WELLS_FARGO_BUSINESS_BONUS_TIERS: BonusOfferTier[] = [
 	{ thresholdCents: 250_000, rewardCents: 40_000, label: '$2,500 balance' },
@@ -104,6 +117,19 @@ export const BMO_BUSINESS_BONUS_TIERS: BonusOfferTier[] = [
 	{ thresholdCents: 10_000_000, rewardCents: 150_000, label: '$100,000 daily balance' }
 ];
 
+export const ETRADE_TARGETED_BROKERAGE_BONUS_TIERS: BonusOfferTier[] = [
+	{ thresholdCents: 2_500_000, rewardCents: 25_000, label: '$25,000 deposit' },
+	{ thresholdCents: 10_000_000, rewardCents: 62_500, label: '$100,000 deposit' },
+	{ thresholdCents: 20_000_000, rewardCents: 100_000, label: '$200,000 deposit' },
+	{ thresholdCents: 50_000_000, rewardCents: 200_000, label: '$500,000 deposit' },
+	{ thresholdCents: 100_000_000, rewardCents: 500_000, label: '$1,000,000 deposit' },
+	{ thresholdCents: 200_000_000, rewardCents: 800_000, label: '$2,000,000 deposit' },
+	{ thresholdCents: 500_000_000, rewardCents: 1_500_000, label: '$5,000,000 deposit' },
+	{ thresholdCents: 1_000_000_000, rewardCents: 2_000_000, label: '$10,000,000 deposit' },
+	{ thresholdCents: 1_500_000_000, rewardCents: 3_000_000, label: '$15,000,000 deposit' },
+	{ thresholdCents: 2_000_000_000, rewardCents: 4_000_000, label: '$20,000,000 deposit' }
+];
+
 function addDays(value: string, days: number): string {
 	const date = new Date(`${value}T00:00:00Z`);
 	if (!Number.isFinite(date.getTime())) return '';
@@ -113,6 +139,24 @@ function addDays(value: string, days: number): string {
 
 function dayOfOffer(openedDate: string, day: number): string {
 	return addDays(openedDate, day - 1);
+}
+
+function addBusinessDays(value: string, days: number): string {
+	let result = value;
+	let remaining = days;
+	while (remaining > 0) {
+		result = addDays(result, 1);
+		const weekday = new Date(`${result}T00:00:00Z`).getUTCDay();
+		if (weekday !== 0 && weekday !== 6) remaining -= 1;
+	}
+	return result;
+}
+
+function addYears(value: string, years: number): string {
+	const date = new Date(`${value}T00:00:00Z`);
+	if (!Number.isFinite(date.getTime())) return '';
+	date.setUTCFullYear(date.getUTCFullYear() + years);
+	return date.toISOString().slice(0, 10);
 }
 
 function endOfMonthPlusDays(value: string, days: number): string {
@@ -183,13 +227,29 @@ function bmoRequirements(openedDate: string): string[] {
 	];
 }
 
+function etradeRequirements(enrollmentDate: string): string[] {
+	const fundingDeadline = dayOfOffer(enrollmentDate, 61);
+	const payoutDate = addBusinessDays(fundingDeadline, 7);
+	const retentionDeadline = addYears(fundingDeadline, 1);
+	return [
+		'Confirm you were the original recipient and enrolled in this targeted E*TRADE offer',
+		`Deposit or transfer at least $25,000 of new cash or securities from outside E*TRADE and Morgan Stanley by ${formatDate(fundingDeadline)}; $100,000 qualifies for $625`,
+		`Do not remove qualifying deposits or cash from E*TRADE or eligible linked accounts through ${formatDate(fundingDeadline)}`,
+		`Keep the qualifying assets at E*TRADE through ${formatDate(retentionDeadline)} (trading losses are allowed) or the cash credit may be surrendered`,
+		`Confirm the cash credit posts by ${formatDate(payoutDate)}`
+	];
+}
+
 export const BONUS_OFFER_CATALOG: BonusOfferTemplate[] = [
 	{
 		id: 'bmo-business-checking-2026-08-31',
 		institution: 'BMO',
 		institutionAliases: ['BMO', 'BMO (US)', 'BMO Bank', 'BMO Bank N.A.'],
+		accountTypes: ['checking'],
+		ownerTypes: ['business'],
 		name: 'BMO business checking bonus (up to $1,500)',
 		accountProduct: 'Digital, Simple, Premium, or Elite Business Checking',
+		startDateLabel: 'Account opened',
 		versionLabel: 'Offer ending Aug 31, 2026',
 		validFrom: '2026-05-01',
 		validThrough: '2026-08-31',
@@ -202,8 +262,10 @@ export const BONUS_OFFER_CATALOG: BonusOfferTemplate[] = [
 		qualificationDay: 90,
 		transactionTarget: 0,
 		transactionRule: 'balance-only',
+		activityMode: 'none',
 		qualificationLabel: 'Maintain through',
 		payoutRule: 'qualification-plus-14',
+		safeToCloseRule: 'payout-plus-1',
 		requirements: bmoRequirements,
 		notes:
 			'Official terms require an eligible BMO business checking account opened online through the offer page or in branch with a promo code between May 1 and August 31, 2026. The day-30 balance sets the maximum tier: $4,000 for $400, $25,000 for $750, $50,000 for $1,000, or $100,000 for $1,500. Maintain at least that balance every day from day 31 through day 90; dropping to a lower tier reduces the bonus, and dropping below $4,000 forfeits it. BMO expects payment within 14 days after qualification. Existing business checking customers and businesses that closed a BMO business checking account within the prior 12 months are not eligible; one bonus per business entity, and taxes may apply.',
@@ -214,8 +276,11 @@ export const BONUS_OFFER_CATALOG: BonusOfferTemplate[] = [
 		id: 'wells-fargo-business-checking-2026-09-08',
 		institution: 'Wells Fargo',
 		institutionAliases: ['Wells Fargo'],
+		accountTypes: ['checking'],
+		ownerTypes: ['business'],
 		name: 'Wells Fargo business checking bonus (up to $825)',
 		accountProduct: 'Initiate, Navigate, or Optimize Business Checking',
+		startDateLabel: 'Account opened',
 		versionLabel: 'Offer ending Sep 8, 2026',
 		validFrom: null,
 		validThrough: '2026-09-08',
@@ -228,8 +293,10 @@ export const BONUS_OFFER_CATALOG: BonusOfferTemplate[] = [
 		qualificationDay: 60,
 		transactionTarget: 5,
 		transactionRule: 'wells-fargo-business',
+		activityMode: 'qualifying',
 		qualificationLabel: 'Maintain through',
 		payoutRule: 'qualification-plus-30',
+		safeToCloseRule: 'payout-plus-1',
 		requirements: wellsFargoRequirements,
 		notes:
 			'Official terms require a qualifying Wells Fargo business checking account and a bonus offer code at opening. The day-30 balance sets the maximum tier; maintain that tier through day 60 and complete 5 qualifying posted transactions. New business checking customers only; eligibility restrictions apply. Bonus may be taxable.',
@@ -240,8 +307,11 @@ export const BONUS_OFFER_CATALOG: BonusOfferTemplate[] = [
 		id: 'us-bank-business-essentials-q3-2026',
 		institution: 'U.S. Bank',
 		institutionAliases: ['U.S. Bank', 'US Bank', 'U.S. Bancorp'],
+		accountTypes: ['checking'],
+		ownerTypes: ['business'],
 		name: 'U.S. Bank Business Essentials bonus ($400)',
 		accountProduct: 'Business Essentials',
+		startDateLabel: 'Account opened',
 		versionLabel: 'Q3 2026 · Q3DIG26',
 		validFrom: '2026-07-01',
 		validThrough: '2026-09-27',
@@ -254,8 +324,10 @@ export const BONUS_OFFER_CATALOG: BonusOfferTemplate[] = [
 		qualificationDay: 60,
 		transactionTarget: 6,
 		transactionRule: 'us-bank-business',
+		activityMode: 'qualifying',
 		qualificationLabel: 'Maintain through',
 		payoutRule: 'qualification-month-end-plus-30',
+		safeToCloseRule: 'payout-plus-1',
 		requirements: (openedDate) => usBankRequirements('$5,000', openedDate),
 		notes:
 			'Official Q3DIG26 terms require $5,000 in new money from outside U.S. Bank within 30 days, a $5,000 daily balance through day 60, and 6 qualifying posted transactions. For weekend or federal-holiday openings, U.S. Bank treats the next business day as the opening date. Existing businesses with a U.S. Bank business checking account, or one closed in the prior 12 months, are not eligible. Limit one bonus per business; other restrictions and taxes may apply.',
@@ -266,8 +338,11 @@ export const BONUS_OFFER_CATALOG: BonusOfferTemplate[] = [
 		id: 'us-bank-platinum-business-checking-q3-2026',
 		institution: 'U.S. Bank',
 		institutionAliases: ['U.S. Bank', 'US Bank', 'U.S. Bancorp'],
+		accountTypes: ['checking'],
+		ownerTypes: ['business'],
 		name: 'U.S. Bank Platinum Business Checking bonus ($1,200)',
 		accountProduct: 'Platinum Business Checking Package',
+		startDateLabel: 'Account opened',
 		versionLabel: 'Q3 2026 · Q3DIG26',
 		validFrom: '2026-07-01',
 		validThrough: '2026-09-27',
@@ -280,8 +355,10 @@ export const BONUS_OFFER_CATALOG: BonusOfferTemplate[] = [
 		qualificationDay: 60,
 		transactionTarget: 6,
 		transactionRule: 'us-bank-business',
+		activityMode: 'qualifying',
 		qualificationLabel: 'Maintain through',
 		payoutRule: 'qualification-month-end-plus-30',
+		safeToCloseRule: 'payout-plus-1',
 		requirements: (openedDate) => usBankRequirements('$25,000', openedDate),
 		notes:
 			'Official Q3DIG26 terms require $25,000 in new money from outside U.S. Bank within 30 days, a $25,000 daily balance through day 60, and 6 qualifying posted transactions. For weekend or federal-holiday openings, U.S. Bank treats the next business day as the opening date. Existing businesses with a U.S. Bank business checking account, or one closed in the prior 12 months, are not eligible. Limit one bonus per business; other restrictions and taxes may apply.',
@@ -292,8 +369,11 @@ export const BONUS_OFFER_CATALOG: BonusOfferTemplate[] = [
 		id: 'capital-one-business-checking-sboffer500-2026',
 		institution: 'Capital One',
 		institutionAliases: ['Capital One', 'Capital One Bank'],
+		accountTypes: ['checking'],
+		ownerTypes: ['business'],
 		name: 'Capital One business checking bonus ($500)',
 		accountProduct: 'Basic or Enhanced Business Checking',
+		startDateLabel: 'Account opened',
 		versionLabel: 'SBOFFER500 · active Aug 29, 2026',
 		validFrom: null,
 		validThrough: null,
@@ -306,13 +386,52 @@ export const BONUS_OFFER_CATALOG: BonusOfferTemplate[] = [
 		qualificationDay: 90,
 		transactionTarget: 10,
 		transactionRule: 'capital-one-business',
+		activityMode: 'qualifying',
 		qualificationLabel: 'Complete by',
 		payoutRule: 'qualification-plus-90',
+		safeToCloseRule: 'payout-plus-1',
 		requirements: capitalOneRequirements,
 		notes:
 			'Official SBOFFER500 terms require an online Basic or Enhanced Business Checking opening, at least $5,000 from outside Capital One within 30 days, a $5,000 minimum end-of-day balance for at least 60 days within the first 90 days, and 10 qualifying electronic transactions within 90 days. Capital One may end or change the offer before acceptance, and eligibility restrictions and taxes may apply.',
 		activityNote:
 			'Verify all ten transactions in Capital One. Only electronic wires, remote check deposits, ACH, and qualifying instant transfers count; internal Capital One transfers do not.'
+	},
+	{
+		id: 'etrade-targeted-existing-brokerage-2026-08-19',
+		institution: 'E*TRADE',
+		institutionAliases: [
+			'E*TRADE',
+			'ETRADE',
+			'E Trade',
+			'Morgan Stanley E*TRADE',
+			'E*TRADE from Morgan Stanley'
+		],
+		accountTypes: ['brokerage'],
+		ownerTypes: ['personal'],
+		name: 'E*TRADE targeted brokerage bonus (up to $40,000)',
+		accountProduct: 'Existing self-directed non-retirement brokerage',
+		startDateLabel: 'Offer enrolled',
+		versionLabel: 'Targeted offer · enrolled Aug 19, 2026',
+		validFrom: '2026-08-19',
+		validThrough: '2026-08-19',
+		sourceUrl: ETRADE_ALERT_SOURCE,
+		sourceVerifiedAt: '2026-09-03',
+		promoCode: null,
+		rewardCents: 4_000_000,
+		tiers: ETRADE_TARGETED_BROKERAGE_BONUS_TIERS,
+		fundingDay: 61,
+		qualificationDay: 61,
+		transactionTarget: 0,
+		transactionRule: 'recent-posted',
+		activityMode: 'recent',
+		qualificationLabel: 'Funding period ends',
+		payoutRule: 'qualification-plus-7-business-days',
+		safeToCloseRule: 'qualification-plus-1-year-plus-1',
+		requirements: etradeRequirements,
+		notes:
+			'This targeted offer applies to an existing E*TRADE self-directed, non-retirement brokerage account. Eligible deposits are new cash or securities transferred from outside E*TRADE and Morgan Stanley within 60 days of enrollment, aggregated across eligible linked brokerage accounts. Bank, retirement, advisory, futures, Morgan Stanley AAA, business, and other excluded accounts do not count. Qualifying assets must remain at E*TRADE for 12 months after the funding period, except for trading losses; removing deposits or cash can reduce or forfeit the reward. The original recipient requirement and other limitations still apply.',
+		activityNote:
+			'Recent posted investment activity is shown for review only. Confirm external funding and the 12-month asset hold directly with E*TRADE; synced activity cannot prove the source of assets or continuous retention.'
 	}
 ];
 
@@ -327,6 +446,14 @@ function institutionMatches(offer: BonusOfferTemplate, institution: string | nul
 		const candidate = normalizeInstitution(alias);
 		return normalized.includes(candidate) || candidate.includes(normalized);
 	});
+}
+
+function accountMatchesOffer(offer: BonusOfferTemplate, account: FinancialAccount): boolean {
+	return (
+		offer.accountTypes.includes(account.accountType) &&
+		offer.ownerTypes.includes(account.ownerType) &&
+		institutionMatches(offer, account.institution)
+	);
 }
 
 export function getBonusOfferTemplate(id: string | null): BonusOfferTemplate | null {
@@ -345,10 +472,9 @@ export function getCompatibleBonusOffers(
 	account: FinancialAccount | null,
 	openedDate: string | null = null
 ): BonusOfferTemplate[] {
-	if (!account || account.accountType !== 'checking' || account.ownerType !== 'business') return [];
+	if (!account) return [];
 	return BONUS_OFFER_CATALOG.filter(
-		(offer) =>
-			institutionMatches(offer, account.institution) && isOfferDateEligible(offer, openedDate)
+		(offer) => accountMatchesOffer(offer, account) && isOfferDateEligible(offer, openedDate)
 	);
 }
 
@@ -366,16 +492,22 @@ export function buildBonusOfferDraft(
 				? addDays(qualificationDeadline, 30)
 				: offer.payoutRule === 'qualification-plus-90'
 					? addDays(qualificationDeadline, 90)
-					: endOfMonthPlusDays(qualificationDeadline, 30);
+					: offer.payoutRule === 'qualification-plus-7-business-days'
+						? addBusinessDays(qualificationDeadline, 7)
+						: endOfMonthPlusDays(qualificationDeadline, 30);
+	const safeToCloseDate =
+		offer.safeToCloseRule === 'qualification-plus-1-year-plus-1'
+			? addDays(addYears(qualificationDeadline, 1), 1)
+			: addDays(expectedPayoutDate, 1);
 	return {
 		name: offer.name,
 		institution: offer.institution,
 		rewardCents: offer.rewardCents,
 		requirementDeadline: qualificationDeadline,
 		expectedPayoutDate,
-		safeToCloseDate: addDays(expectedPayoutDate, 1),
+		safeToCloseDate,
 		requirements: offer.requirements(openedDate),
-		notes: `${offer.notes}\n\nOfficial terms: ${offer.sourceUrl}\nTemplate verified ${offer.sourceVerifiedAt}. Always follow the terms provided when you opened the account.`
+		notes: `${offer.notes}\n\nOfficial terms: ${offer.sourceUrl}\nTemplate verified ${offer.sourceVerifiedAt}. Always follow the terms provided when you enrolled in the offer or opened the account.`
 	};
 }
 
@@ -423,6 +555,15 @@ function isInQualificationWindow(
 		transaction.date >= openedDate &&
 		transaction.date <= qualificationDeadline
 	);
+}
+
+export function isRecentPostedTransaction(
+	transaction: FinancialAccountTransaction,
+	startDate: string,
+	qualificationDeadline: string
+): boolean {
+	void qualificationDeadline;
+	return !transaction.pending && transaction.amountCents !== 0 && transaction.date >= startDate;
 }
 
 export function isLikelyWellsFargoQualifyingTransaction(
@@ -536,11 +677,10 @@ export function resolveBonusOffer(
 	bonus: AccountBonus,
 	account: FinancialAccount | null
 ): BonusOfferTemplate | null {
-	if (!account || account.accountType !== 'checking' || account.ownerType !== 'business')
-		return null;
+	if (!account) return null;
 	const offer = resolveOffer(bonus, account);
 	return offer &&
-		institutionMatches(offer, account.institution) &&
+		accountMatchesOffer(offer, account) &&
 		(isOfferDateEligible(offer, bonus.openedDate) || bonus.offerDateOverrideConfirmed)
 		? offer
 		: null;
@@ -569,11 +709,13 @@ export function buildBonusTracker(
 	const classifier =
 		offer.transactionRule === 'balance-only'
 			? () => false
-			: offer.transactionRule === 'wells-fargo-business'
-				? isLikelyWellsFargoQualifyingTransaction
-				: offer.transactionRule === 'capital-one-business'
-					? isLikelyCapitalOneQualifyingTransaction
-					: isLikelyUsBankQualifyingTransaction;
+			: offer.transactionRule === 'recent-posted'
+				? isRecentPostedTransaction
+				: offer.transactionRule === 'wells-fargo-business'
+					? isLikelyWellsFargoQualifyingTransaction
+					: offer.transactionRule === 'capital-one-business'
+						? isLikelyCapitalOneQualifyingTransaction
+						: isLikelyUsBankQualifyingTransaction;
 	return {
 		offer,
 		account,

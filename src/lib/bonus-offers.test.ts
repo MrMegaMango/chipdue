@@ -8,7 +8,8 @@ import {
 	getCompatibleBonusOffers,
 	isLikelyCapitalOneQualifyingTransaction,
 	isLikelyUsBankQualifyingTransaction,
-	isLikelyWellsFargoQualifyingTransaction
+	isLikelyWellsFargoQualifyingTransaction,
+	isRecentPostedTransaction
 } from './bonus-offers';
 
 const account: FinancialAccount = {
@@ -81,7 +82,7 @@ function transaction(
 	};
 }
 
-describe('versioned business bonus offer catalog', () => {
+describe('versioned bonus offer catalog', () => {
 	it('keeps the existing Wells Fargo record on its verified legacy template', () => {
 		const tracker = buildBonusTracker(bonus, account, []);
 		expect(tracker).toMatchObject({
@@ -255,6 +256,76 @@ describe('versioned business bonus offer catalog', () => {
 		});
 	});
 
+	it('tracks the targeted E*TRADE brokerage offer with recent posted activity', () => {
+		const etradeAccount: FinancialAccount = {
+			...account,
+			institution: 'E*TRADE',
+			nickname: 'Individual Brokerage',
+			accountType: 'brokerage',
+			ownerType: 'personal',
+			currentBalanceCents: 12_500_000,
+			openedDate: null
+		};
+		const offers = getCompatibleBonusOffers(etradeAccount, '2026-08-19');
+		expect(offers.map((offer) => offer.id)).toEqual([
+			'etrade-targeted-existing-brokerage-2026-08-19'
+		]);
+		expect(getCompatibleBonusOffers(etradeAccount, '2026-08-20')).toEqual([]);
+		expect(
+			getCompatibleBonusOffers({ ...etradeAccount, ownerType: 'business' }, '2026-08-19')
+		).toEqual([]);
+
+		const offer = offers[0]!;
+		const draft = buildBonusOfferDraft(offer, '2026-08-19');
+		expect(draft).toMatchObject({
+			rewardCents: 4_000_000,
+			requirementDeadline: '2026-10-18',
+			expectedPayoutDate: '2026-10-27',
+			safeToCloseDate: '2027-10-19',
+			requirements: [
+				expect.stringContaining('original recipient'),
+				expect.stringContaining('$100,000 qualifies for $625'),
+				expect.stringContaining('Oct 18, 2026'),
+				expect.stringContaining('Oct 18, 2027'),
+				expect.stringContaining('Oct 27, 2026')
+			]
+		});
+
+		const etradeBonus: AccountBonus = {
+			...bonus,
+			accountId: etradeAccount.id,
+			offerTemplateId: offer.id,
+			name: offer.name,
+			institution: offer.institution,
+			rewardCents: 62_500,
+			openedDate: '2026-08-19',
+			requirementDeadline: draft!.requirementDeadline,
+			expectedPayoutDate: draft!.expectedPayoutDate,
+			safeToCloseDate: draft!.safeToCloseDate
+		};
+		const tracker = buildBonusTracker(etradeBonus, etradeAccount, [
+			transaction({
+				name: 'Cash contribution',
+				merchantName: null,
+				amountCents: -10_000_000,
+				date: '2026-08-20',
+				categoryPrimary: 'INVESTMENT'
+			}),
+			transaction({ name: 'Security purchase', date: '2026-11-02' }),
+			transaction({ name: 'Before enrollment', date: '2026-08-18' }),
+			transaction({ name: 'Pending trade', pending: true })
+		]);
+		expect(tracker).toMatchObject({
+			currentTier: { thresholdCents: 10_000_000, rewardCents: 62_500 },
+			nextTier: { thresholdCents: 20_000_000, rewardCents: 100_000 },
+			fundingDeadline: '2026-10-18',
+			latestPayoutDate: '2026-10-27',
+			safeToCloseDate: '2027-10-19',
+			offer: { activityMode: 'recent', startDateLabel: 'Offer enrolled' }
+		});
+		expect(tracker?.likelyQualifyingTransactions).toHaveLength(2);
+	});
+
 	it('counts earned value only after a posted bonus reward reaches the connected account', () => {
 		const capitalOneAccount = {
 			...account,
@@ -318,6 +389,17 @@ describe('versioned business bonus offer catalog', () => {
 });
 
 describe('conservative posted-activity classifiers', () => {
+	it('shows any non-pending activity posted since the offer start date', () => {
+		expect(
+			[
+				transaction({ date: '2026-08-19' }),
+				transaction({ date: '2026-11-01' }),
+				transaction({ date: '2026-08-18' }),
+				transaction({ pending: true })
+			].filter((entry) => isRecentPostedTransaction(entry, '2026-08-19', '2026-10-18'))
+		).toHaveLength(2);
+	});
+
 	it('counts likely Wells Fargo purchases, deposits, and Bill Pay activity', () => {
 		const candidates = [
 			transaction(),

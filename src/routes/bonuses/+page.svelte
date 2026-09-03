@@ -420,7 +420,7 @@
 		const offer = getBonusOfferTemplate(form.offerTemplateId);
 		const openedDate = form.openedDate || formAccount?.openedDate || '';
 		if (!offer || !openedDate) {
-			formError = 'Enter the account opening date before applying a verified offer.';
+			formError = 'Enter the offer start date before applying a verified offer.';
 			return;
 		}
 		const draft = buildBonusOfferDraft(offer, openedDate);
@@ -732,7 +732,7 @@
 
 									<div
 										class="tracker-metrics"
-										class:balance-only={tracker.offer.transactionTarget === 0}
+										class:balance-only={tracker.offer.activityMode === 'none'}
 									>
 										<div>
 											<span>
@@ -754,13 +754,19 @@
 												{/if}
 											</small>
 										</div>
-										{#if tracker.offer.transactionTarget > 0}
+										{#if tracker.offer.activityMode !== 'none'}
 											<div>
-												<span>Likely qualifying activity</span>
+												<span>
+													{tracker.offer.activityMode === 'recent'
+														? 'Recent activity'
+														: 'Likely qualifying activity'}
+												</span>
 												<strong
 													>{activityLoadingByAccount[tracker.account.id]
 														? '—'
-														: `${tracker.likelyQualifyingTransactions.length} / ${tracker.offer.transactionTarget}`}</strong
+														: tracker.offer.activityMode === 'recent'
+															? `${tracker.likelyQualifyingTransactions.length} posted`
+															: `${tracker.likelyQualifyingTransactions.length} / ${tracker.offer.transactionTarget}`}</strong
 												>
 												<small>
 													{#if activityLoadingByAccount[tracker.account.id]}
@@ -823,8 +829,13 @@
 										</div>
 									</dl>
 
-									{#if tracker.offer.transactionTarget > 0 && tracker.likelyQualifyingTransactions.length > 0}
-										<ul class="tracker-activity" aria-label="Likely qualifying posted activity">
+									{#if tracker.offer.activityMode !== 'none' && tracker.likelyQualifyingTransactions.length > 0}
+										<ul
+											class="tracker-activity"
+											aria-label={tracker.offer.activityMode === 'recent'
+												? 'Recent posted activity'
+												: 'Likely qualifying posted activity'}
+										>
 											{#each tracker.likelyQualifyingTransactions.slice(0, 5) as transaction (transaction.id)}
 												<li>
 													<strong>{transaction.merchantName ?? transaction.name}</strong>
@@ -858,7 +869,7 @@
 											</small>
 										{:else}
 											<small>
-												{tracker.offer.transactionTarget === 0
+												{tracker.offer.activityMode === 'none'
 													? 'Connect this account to a provider to update its balance automatically.'
 													: 'Connect this account to a provider to estimate posted activity.'}
 											</small>
@@ -869,11 +880,15 @@
 											<strong>Bank-confirmed enrollment date exception.</strong>
 										{/if}
 										Balances are snapshots and cannot prove new-money sources or uninterrupted minimums.
-										{tracker.offer.transactionTarget === 0
+										{tracker.offer.activityMode === 'none'
 											? 'This promotion is balance-based.'
-											: tracker.account.source === 'connected'
-												? 'Activity is a conservative estimate from posted provider transactions.'
-												: 'Activity remains a manual check until the account is connected to a provider.'}
+											: tracker.offer.activityMode === 'recent'
+												? tracker.account.source === 'connected'
+													? 'Recent activity comes from posted provider investment transactions.'
+													: 'Recent activity remains a manual check until the account is connected to a provider.'
+												: tracker.account.source === 'connected'
+													? 'Activity is a conservative estimate from posted provider transactions.'
+													: 'Activity remains a manual check until the account is connected to a provider.'}
 										{tracker.offer.activityNote}
 										<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- Provider terms are an external URL. -->
 										<a href={tracker.offer.sourceUrl} target="_blank" rel="noreferrer"
@@ -1071,13 +1086,18 @@
 						</select>
 					</div>
 					<div class="finance-field">
-						<label for="bonus-opened">Account opened</label>
+						<label for="bonus-opened">{selectedOffer?.startDateLabel ?? 'Account opened'}</label>
 						<input
 							id="bonus-opened"
 							type="date"
 							bind:value={form.openedDate}
 							onchange={handleOpenedDateChange}
 						/>
+						{#if selectedOffer?.startDateLabel === 'Offer enrolled'}
+							<small
+								>Use the promotion enrollment date, not the brokerage account opening date.</small
+							>
+						{/if}
 					</div>
 					<div class="finance-field">
 						<label for="bonus-deadline">Requirement deadline</label>
