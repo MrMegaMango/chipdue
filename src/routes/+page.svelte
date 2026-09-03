@@ -3081,89 +3081,285 @@
 								card.currentBalanceCents
 							)}
 							{@const linkedBonuses = bonusesForCard(card.id)}
-							<article class:overdue={status.tone === 'danger'} class="credit-card">
-								<header class="card-header">
-									<div class="card-identity">
-										{#if card.issuerLogoUrl}
-											<img
-												class="issuer-logo"
-												src={card.issuerLogoUrl}
-												alt={`${card.issuer ?? card.nickname} logo`}
-											/>
-										{:else if cardBrand}
-											<img
-												class:issuer-logo-venmo={cardBrand === 'venmo'}
-												class="issuer-logo"
-												src={fallbackInstitutionLogoUrl(card.issuer)}
-												alt={`${card.issuer ?? card.nickname} logo`}
-											/>
-										{/if}
-										<h3>{card.nickname}</h3>
-										<p>{cardSubtitle(card)}</p>
-									</div>
-									<span class:plaid-source={card.source === 'connected'} class="source-pill">
-										{card.source === 'connected'
-											? financialProviderName(card.connectionProvider)
-											: 'Manual'}
-									</span>
-								</header>
-
-								<div class="balance-block">
-									<span>{payment.label}</span>
-									<strong class:unavailable={payment.amountCents === null}>
-										{formatMoney(payment.amountCents)}
-									</strong>
-									{#if payment.source === 'statement' && card.currentBalanceCents !== null}
-										<small>Current balance {formatMoney(card.currentBalanceCents)}</small>
-									{:else if payment.source === 'statement'}
-										<small>Current balance not reported</small>
-									{:else if payment.source === 'unavailable' && card.currentBalanceCents !== null}
-										<small>
-											Current balance {formatMoney(card.currentBalanceCents)} · Check the issuer for the
-											pay-in-full amount
-										</small>
-									{:else if payment.source === 'unavailable'}
-										<small>Check the issuer for the pay-in-full amount</small>
-									{:else if card.currentBalanceCents !== null}
-										<small>
-											{card.currentBalanceCents < 0
-												? `Current credit ${formatMoney(Math.abs(card.currentBalanceCents))}`
-												: `Current balance ${formatMoney(card.currentBalanceCents)}`}{card.statementBalanceCents !==
-											null
-												? ` · Last statement ${formatMoney(card.statementBalanceCents)} (historical)`
-												: ''}
-										</small>
-									{:else if card.statementBalanceCents !== null}
-										<small
-											>Last statement {formatMoney(card.statementBalanceCents)} (historical)</small
-										>
-									{:else}
-										<small>Current and statement balances are not reported</small>
-									{/if}
-								</div>
-
-								<div class="payment-details">
-									<div class="payment-deadline">
-										<span>{payment.source === 'statement' ? 'Pay by' : 'Reported due date'}</span>
-										<strong>{formatDate(card.dueDate)}</strong>
-									</div>
-									<div class="minimum-payment-detail">
-										<span>Minimum payment</span>
-										<strong>{formatMoney(card.minimumPaymentCents)}</strong>
-									</div>
-								</div>
-
-								<div class="card-flags">
-									<span class="due-pill {status.tone}">{status.label}</span>
-									{#if card.autopayEnabled}
-										<span class="autopay-pill">
-											<svg aria-hidden="true" viewBox="0 0 16 16"
-												><path d="m4 8 2.4 2.4L12 5"></path></svg
-											>
-											Autopay
+							<div class="card-stack">
+								<article class:overdue={status.tone === 'danger'} class="credit-card">
+									<header class="card-header">
+										<div class="card-identity">
+											{#if card.issuerLogoUrl}
+												<img
+													class="issuer-logo"
+													src={card.issuerLogoUrl}
+													alt={`${card.issuer ?? card.nickname} logo`}
+												/>
+											{:else if cardBrand}
+												<img
+													class:issuer-logo-venmo={cardBrand === 'venmo'}
+													class="issuer-logo"
+													src={fallbackInstitutionLogoUrl(card.issuer)}
+													alt={`${card.issuer ?? card.nickname} logo`}
+												/>
+											{/if}
+											<h3>{card.nickname}</h3>
+											<p>{cardSubtitle(card)}</p>
+										</div>
+										<span class:plaid-source={card.source === 'connected'} class="source-pill">
+											{card.source === 'connected'
+												? financialProviderName(card.connectionProvider)
+												: 'Manual'}
 										</span>
+									</header>
+
+									<div class="balance-block">
+										<span>{payment.label}</span>
+										<strong class:unavailable={payment.amountCents === null}>
+											{formatMoney(payment.amountCents)}
+										</strong>
+										{#if payment.source === 'statement' && card.currentBalanceCents !== null}
+											<small>Current balance {formatMoney(card.currentBalanceCents)}</small>
+										{:else if payment.source === 'statement'}
+											<small>Current balance not reported</small>
+										{:else if payment.source === 'unavailable' && card.currentBalanceCents !== null}
+											<small>
+												Current balance {formatMoney(card.currentBalanceCents)} · Check the issuer for
+												the pay-in-full amount
+											</small>
+										{:else if payment.source === 'unavailable'}
+											<small>Check the issuer for the pay-in-full amount</small>
+										{:else if card.currentBalanceCents !== null}
+											<small>
+												{card.currentBalanceCents < 0
+													? `Current credit ${formatMoney(Math.abs(card.currentBalanceCents))}`
+													: `Current balance ${formatMoney(card.currentBalanceCents)}`}{card.statementBalanceCents !==
+												null
+													? ` · Last statement ${formatMoney(card.statementBalanceCents)} (historical)`
+													: ''}
+											</small>
+										{:else if card.statementBalanceCents !== null}
+											<small
+												>Last statement {formatMoney(card.statementBalanceCents)} (historical)</small
+											>
+										{:else}
+											<small>Current and statement balances are not reported</small>
+										{/if}
+									</div>
+
+									<div class="payment-details">
+										<div class="payment-deadline">
+											<span>{payment.source === 'statement' ? 'Pay by' : 'Reported due date'}</span>
+											<strong>{formatDate(card.dueDate)}</strong>
+										</div>
+										<div class="minimum-payment-detail">
+											<span>Minimum payment</span>
+											<strong>{formatMoney(card.minimumPaymentCents)}</strong>
+										</div>
+									</div>
+
+									<div class="card-flags">
+										<span class="due-pill {status.tone}">{status.label}</span>
+										{#if card.autopayEnabled}
+											<span class="autopay-pill">
+												<svg aria-hidden="true" viewBox="0 0 16 16"
+													><path d="m4 8 2.4 2.4L12 5"></path></svg
+												>
+												Autopay
+											</span>
+										{/if}
+									</div>
+
+									{#if card.source === 'connected' && card.transactionHistoryEnabled}
+										<section
+											class="card-activity-preview"
+											aria-label={`Recent activity for ${card.nickname}`}
+										>
+											<header class="activity-preview-header">
+												<h4>Recent activity</h4>
+												<button
+													type="button"
+													onclick={() => openTransactionHistory(card)}
+													disabled={busyAction !== null}
+												>
+													View all activity
+													<svg aria-hidden="true" viewBox="0 0 16 16"
+														><path d="m6 3 5 5-5 5"></path></svg
+													>
+												</button>
+											</header>
+
+											{#if recentActivityLoadingByCard[card.id]}
+												<div
+													class="activity-preview-loading"
+													aria-label="Loading recent activity"
+													aria-busy="true"
+												>
+													<span></span><span></span><span></span>
+												</div>
+											{:else if recentActivityErrorByCard[card.id]}
+												<p class="activity-preview-message">Recent activity is unavailable.</p>
+											{:else if recentActivityByCard[card.id]?.length > 0}
+												<ul class="activity-preview-list">
+													{#each recentActivityByCard[card.id].slice(0, RECENT_ACTIVITY_LIMIT) as transaction (transaction.id)}
+														<li>
+															<div>
+																<strong>{transaction.merchantName ?? transaction.name}</strong>
+																<span>
+																	{new Date(`${transaction.date}T12:00:00`).toLocaleDateString(
+																		'en-US',
+																		{
+																			month: 'short',
+																			day: 'numeric'
+																		}
+																	)}
+																	{transaction.pending ? ' · Pending' : ''}
+																</span>
+																{#if transaction.rewardEstimate}
+																	<span class="activity-preview-reward">
+																		{formatRewardEstimate(transaction.rewardEstimate)} · {formatRewardRate(
+																			transaction.rewardEstimate.rate,
+																			transaction.rewardEstimate.type
+																		)}{transaction.rewardEstimate.categoryName
+																			? ` ${transaction.rewardEstimate.categoryName}`
+																			: ' base'}
+																	</span>
+																{/if}
+															</div>
+															<strong
+																class:credit={transaction.amountCents < 0}
+																class="activity-preview-amount"
+															>
+																{formatTransactionAmount(transaction)}
+															</strong>
+														</li>
+													{/each}
+												</ul>
+											{:else}
+												<p class="activity-preview-message">No recent activity yet.</p>
+											{/if}
+										</section>
 									{/if}
-								</div>
+
+									{#if card.rewardProgramName || card.rewardValueCents !== null || card.rewardType || card.rewardBaseRate !== null || card.rewardCategories.length > 0}
+										<section class="card-rewards" aria-label={`Rewards for ${card.nickname}`}>
+											<header class="reward-preview-header">
+												<div class="reward-program">
+													<span class="reward-kicker"
+														>Rewards <span class="reward-separator" aria-hidden="true"></span>
+														{rewardTypeLabel(card.rewardType)}</span
+													>
+													<strong>{card.rewardProgramName ?? 'Card rewards'}</strong>
+													{#if card.rewardValueCents !== null}
+														<small>Cash value {formatMoney(card.rewardValueCents)}</small>
+													{/if}
+												</div>
+												{#if card.rewardBaseRate !== null}
+													<div class="reward-base">
+														<span>Base</span>
+														<strong>{formatRewardRate(card.rewardBaseRate, card.rewardType)}</strong
+														>
+													</div>
+												{/if}
+											</header>
+											{#if card.rewardCategories.length > 0}
+												<ul>
+													{#each card.rewardCategories.slice(0, CARD_REWARD_PREVIEW_LIMIT) as category (category.id)}
+														{@const categorySpending =
+															rewardCategorySpendingByCard[card.id]?.[category.id]}
+														<li>
+															<strong
+																>{formatRewardRate(category.multiplier, card.rewardType)}</strong
+															>
+															<div>
+																<span>{category.name}</span>
+																{#if category.annualSpendCapCents}
+																	{#if categorySpending}
+																		<small>{formatRewardCategorySpending(categorySpending)}</small>
+																		<span
+																			class="reward-cap-meter"
+																			role="progressbar"
+																			aria-label={`${category.name}: ${formatRewardCategorySpending(categorySpending)}`}
+																			aria-valuemin="0"
+																			aria-valuemax="100"
+																			aria-valuenow={rewardCategorySpendPercent(categorySpending)}
+																		>
+																			<span
+																				style:width={`${rewardCategorySpendPercent(categorySpending)}%`}
+																			></span>
+																		</span>
+																	{:else}
+																		<small
+																			>{formatAnnualSpendCap(category.annualSpendCapCents)}</small
+																		>
+																	{/if}
+																{/if}
+															</div>
+														</li>
+													{/each}
+												</ul>
+												{#if card.rewardCategories.length > CARD_REWARD_PREVIEW_LIMIT}
+													<button
+														class="reward-more-button"
+														type="button"
+														onclick={() => openRewardsDialog(card)}
+													>
+														+{card.rewardCategories.length - CARD_REWARD_PREVIEW_LIMIT} more rates
+														<svg aria-hidden="true" viewBox="0 0 16 16"
+															><path d="m6 3 5 5-5 5"></path></svg
+														>
+													</button>
+												{/if}
+											{/if}
+										</section>
+									{/if}
+
+									<footer class="card-footer">
+										<span>
+											<span class="mini-dot"></span>
+											<SyncedTime
+												value={card.source === 'connected'
+													? (card.lastSyncedAt ?? card.updatedAt)
+													: card.updatedAt}
+												action={card.source === 'connected' ? 'Synced' : 'Updated'}
+											/>
+										</span>
+										<div class="card-actions">
+											<button
+												class="rewards-button"
+												type="button"
+												onclick={() => openRewardsDialog(card)}
+												disabled={busyAction !== null}>Reward details</button
+											>
+											{#if card.source === 'manual'}
+												<button
+													type="button"
+													onclick={() => openEditDialog(card)}
+													disabled={busyAction !== null}>Edit</button
+												>
+												<button
+													class="delete-button"
+													type="button"
+													onclick={() => deleteCard(card)}
+													disabled={busyAction !== null}
+												>
+													{deletingId === card.id ? 'Deleting…' : 'Delete'}
+												</button>
+											{:else if card.connectionProvider === 'plaid' && !card.transactionHistoryEnabled}
+												<button
+													class="history-button"
+													type="button"
+													onclick={() => enableTransactionHistory(card)}
+													disabled={busyAction !== null}
+													aria-busy={busyAction === 'enable-history' &&
+														plaidItemActionId === card.connectionId}
+													aria-describedby="plaid-consent-copy"
+												>
+													{busyAction === 'enable-history' &&
+													plaidItemActionId === card.connectionId
+														? 'Opening…'
+														: 'Enable activity'}
+												</button>
+											{/if}
+										</div>
+									</footer>
+								</article>
 
 								{#if linkedBonuses.length > 0}
 									{#each linkedBonuses as bonus (bonus.id)}
@@ -3236,197 +3432,7 @@
 										</section>
 									{/each}
 								{/if}
-
-								{#if card.source === 'connected' && card.transactionHistoryEnabled}
-									<section
-										class="card-activity-preview"
-										aria-label={`Recent activity for ${card.nickname}`}
-									>
-										<header class="activity-preview-header">
-											<h4>Recent activity</h4>
-											<button
-												type="button"
-												onclick={() => openTransactionHistory(card)}
-												disabled={busyAction !== null}
-											>
-												View all activity
-												<svg aria-hidden="true" viewBox="0 0 16 16"
-													><path d="m6 3 5 5-5 5"></path></svg
-												>
-											</button>
-										</header>
-
-										{#if recentActivityLoadingByCard[card.id]}
-											<div
-												class="activity-preview-loading"
-												aria-label="Loading recent activity"
-												aria-busy="true"
-											>
-												<span></span><span></span><span></span>
-											</div>
-										{:else if recentActivityErrorByCard[card.id]}
-											<p class="activity-preview-message">Recent activity is unavailable.</p>
-										{:else if recentActivityByCard[card.id]?.length > 0}
-											<ul class="activity-preview-list">
-												{#each recentActivityByCard[card.id].slice(0, RECENT_ACTIVITY_LIMIT) as transaction (transaction.id)}
-													<li>
-														<div>
-															<strong>{transaction.merchantName ?? transaction.name}</strong>
-															<span>
-																{new Date(`${transaction.date}T12:00:00`).toLocaleDateString(
-																	'en-US',
-																	{
-																		month: 'short',
-																		day: 'numeric'
-																	}
-																)}
-																{transaction.pending ? ' · Pending' : ''}
-															</span>
-															{#if transaction.rewardEstimate}
-																<span class="activity-preview-reward">
-																	{formatRewardEstimate(transaction.rewardEstimate)} · {formatRewardRate(
-																		transaction.rewardEstimate.rate,
-																		transaction.rewardEstimate.type
-																	)}{transaction.rewardEstimate.categoryName
-																		? ` ${transaction.rewardEstimate.categoryName}`
-																		: ' base'}
-																</span>
-															{/if}
-														</div>
-														<strong
-															class:credit={transaction.amountCents < 0}
-															class="activity-preview-amount"
-														>
-															{formatTransactionAmount(transaction)}
-														</strong>
-													</li>
-												{/each}
-											</ul>
-										{:else}
-											<p class="activity-preview-message">No recent activity yet.</p>
-										{/if}
-									</section>
-								{/if}
-
-								{#if card.rewardProgramName || card.rewardValueCents !== null || card.rewardType || card.rewardBaseRate !== null || card.rewardCategories.length > 0}
-									<section class="card-rewards" aria-label={`Rewards for ${card.nickname}`}>
-										<header class="reward-preview-header">
-											<div class="reward-program">
-												<span class="reward-kicker"
-													>Rewards <span class="reward-separator" aria-hidden="true"></span>
-													{rewardTypeLabel(card.rewardType)}</span
-												>
-												<strong>{card.rewardProgramName ?? 'Card rewards'}</strong>
-												{#if card.rewardValueCents !== null}
-													<small>Cash value {formatMoney(card.rewardValueCents)}</small>
-												{/if}
-											</div>
-											{#if card.rewardBaseRate !== null}
-												<div class="reward-base">
-													<span>Base</span>
-													<strong>{formatRewardRate(card.rewardBaseRate, card.rewardType)}</strong>
-												</div>
-											{/if}
-										</header>
-										{#if card.rewardCategories.length > 0}
-											<ul>
-												{#each card.rewardCategories.slice(0, CARD_REWARD_PREVIEW_LIMIT) as category (category.id)}
-													{@const categorySpending =
-														rewardCategorySpendingByCard[card.id]?.[category.id]}
-													<li>
-														<strong>{formatRewardRate(category.multiplier, card.rewardType)}</strong
-														>
-														<div>
-															<span>{category.name}</span>
-															{#if category.annualSpendCapCents}
-																{#if categorySpending}
-																	<small>{formatRewardCategorySpending(categorySpending)}</small>
-																	<span
-																		class="reward-cap-meter"
-																		role="progressbar"
-																		aria-label={`${category.name}: ${formatRewardCategorySpending(categorySpending)}`}
-																		aria-valuemin="0"
-																		aria-valuemax="100"
-																		aria-valuenow={rewardCategorySpendPercent(categorySpending)}
-																	>
-																		<span
-																			style:width={`${rewardCategorySpendPercent(categorySpending)}%`}
-																		></span>
-																	</span>
-																{:else}
-																	<small>{formatAnnualSpendCap(category.annualSpendCapCents)}</small
-																	>
-																{/if}
-															{/if}
-														</div>
-													</li>
-												{/each}
-											</ul>
-											{#if card.rewardCategories.length > CARD_REWARD_PREVIEW_LIMIT}
-												<button
-													class="reward-more-button"
-													type="button"
-													onclick={() => openRewardsDialog(card)}
-												>
-													+{card.rewardCategories.length - CARD_REWARD_PREVIEW_LIMIT} more rates
-													<svg aria-hidden="true" viewBox="0 0 16 16"
-														><path d="m6 3 5 5-5 5"></path></svg
-													>
-												</button>
-											{/if}
-										{/if}
-									</section>
-								{/if}
-
-								<footer class="card-footer">
-									<span>
-										<span class="mini-dot"></span>
-										<SyncedTime
-											value={card.source === 'connected'
-												? (card.lastSyncedAt ?? card.updatedAt)
-												: card.updatedAt}
-											action={card.source === 'connected' ? 'Synced' : 'Updated'}
-										/>
-									</span>
-									<div class="card-actions">
-										<button
-											class="rewards-button"
-											type="button"
-											onclick={() => openRewardsDialog(card)}
-											disabled={busyAction !== null}>Reward details</button
-										>
-										{#if card.source === 'manual'}
-											<button
-												type="button"
-												onclick={() => openEditDialog(card)}
-												disabled={busyAction !== null}>Edit</button
-											>
-											<button
-												class="delete-button"
-												type="button"
-												onclick={() => deleteCard(card)}
-												disabled={busyAction !== null}
-											>
-												{deletingId === card.id ? 'Deleting…' : 'Delete'}
-											</button>
-										{:else if card.connectionProvider === 'plaid' && !card.transactionHistoryEnabled}
-											<button
-												class="history-button"
-												type="button"
-												onclick={() => enableTransactionHistory(card)}
-												disabled={busyAction !== null}
-												aria-busy={busyAction === 'enable-history' &&
-													plaidItemActionId === card.connectionId}
-												aria-describedby="plaid-consent-copy"
-											>
-												{busyAction === 'enable-history' && plaidItemActionId === card.connectionId
-													? 'Opening…'
-													: 'Enable activity'}
-											</button>
-										{/if}
-									</div>
-								</footer>
-							</article>
+							</div>
 						{/each}
 					</div>
 				{:else}
@@ -5547,6 +5553,14 @@
 		display: grid;
 		grid-template-columns: repeat(4, minmax(0, 1fr));
 		gap: 1rem;
+		align-items: start;
+	}
+
+	.card-stack {
+		display: grid;
+		min-width: 0;
+		gap: 0.8rem;
+		align-content: start;
 	}
 
 	.credit-card {
@@ -5776,11 +5790,11 @@
 	.card-bonus {
 		display: grid;
 		gap: 0.58rem;
-		margin: 0 1.25rem 1rem;
-		padding: 0.8rem;
+		padding: 1rem;
 		border: 1px solid #c8cff8;
-		border-radius: 7px;
+		border-radius: 10px;
 		background: #f5f6ff;
+		box-shadow: 5px 5px 0 rgba(17, 24, 39, 0.07);
 	}
 
 	.card-bonus > header {

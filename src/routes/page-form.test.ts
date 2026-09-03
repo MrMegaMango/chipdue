@@ -203,13 +203,15 @@ describe('card activity preview', () => {
 		expect(source).toContain('rewardCategorySpendingByCard');
 	});
 
-	it('shows linked card bonuses before activity with posted-spend progress', () => {
+	it('shows linked card bonuses below their card with posted-spend progress', () => {
 		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
 		const bonusIndex = source.indexOf('class="card-bonus"');
-		const activityIndex = source.indexOf('class="card-activity-preview"');
+		const cardFooterIndex = source.indexOf('class="card-footer"');
 
+		expect(source).toContain('class="card-stack"');
 		expect(bonusIndex).toBeGreaterThan(-1);
-		expect(bonusIndex).toBeLessThan(activityIndex);
+		expect(bonusIndex).toBeGreaterThan(cardFooterIndex);
+		expect(source).toContain('align-items: start;');
 		expect(source).toContain('Eligible spend');
 		expect(source).toContain('Safe to downgrade');
 		expect(source).toContain('Estimated from posted Plaid activity');
