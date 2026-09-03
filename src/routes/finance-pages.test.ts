@@ -90,6 +90,15 @@ describe('financial workspace navigation', () => {
 		expect(netWorthChartSource).toContain('Older gaps use the earliest known balance');
 	});
 
+	it('keeps the net worth chart and its details usable on phones', () => {
+		expect(netWorthChartSource).toContain('bind:clientWidth={chartContainerWidth}');
+		expect(netWorthChartSource).toContain('dateAxisUsesMonths');
+		expect(netWorthChartSource).toContain("event.pointerType !== 'mouse'");
+		expect(netWorthChartSource).toContain("'(hover: hover) and (pointer: fine)'");
+		expect(netWorthChartSource).not.toContain('min-width: 620px');
+		expect(netWorthChartSource).not.toContain('.chart-wrap {\n\t\t\toverflow-x: auto;');
+	});
+
 	it('supports personal, business, and brokerage account tracking', () => {
 		expect(accountsSource).toContain('<option value="business">Business</option>');
 		expect(accountsSource).toContain('<option value="brokerage">Brokerage</option>');

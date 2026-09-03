@@ -26,9 +26,8 @@
 	} = $props();
 
 	const WIDTH = 960;
+	const MIN_CHART_WIDTH = 280;
 	const HEIGHT = 270;
-	const PLOT_LEFT = 72;
-	const PLOT_RIGHT = 22;
 	const PLOT_TOP = 22;
 	const PLOT_BOTTOM = 38;
 	const ranges: Array<{ id: NetWorthHistoryRange; label: string }> = [
@@ -75,11 +74,23 @@
 	let selectedRange = $state<NetWorthHistoryRange>('1Y');
 	let hoveredIndex = $state<number | null>(null);
 	let selectedRecordedAt = $state<string | null>(null);
+	let chartContainerWidth = $state(0);
+	const chartWidth = $derived(
+		Math.min(WIDTH, Math.max(MIN_CHART_WIDTH, chartContainerWidth || WIDTH))
+	);
+	const plotLeft = $derived(chartWidth < 520 ? 54 : 72);
+	const plotRight = $derived(chartWidth < 520 ? 8 : 22);
 	const history = $derived(buildNetWorthHistory(accounts, cardBalanceCents));
 	const visibleHistory = $derived(netWorthPointsForRange(history.points, selectedRange));
 	const chart = $derived(chartFor(visibleHistory));
 	const firstPoint = $derived(visibleHistory[0]);
 	const latestPoint = $derived(visibleHistory.at(-1));
+	const dateAxisUsesMonths = $derived(
+		firstPoint && latestPoint
+			? new Date(latestPoint.recordedAt).getTime() - new Date(firstPoint.recordedAt).getTime() >=
+					60 * 24 * 60 * 60 * 1_000
+			: false
+	);
 	const changeCents = $derived(
 		firstPoint && latestPoint ? latestPoint.netWorthCents - firstPoint.netWorthCents : null
 	);
@@ -135,7 +146,7 @@
 		const firstTime = new Date(sampled[0].recordedAt).getTime();
 		const lastTime = new Date(sampled.at(-1)!.recordedAt).getTime();
 		const timeRange = lastTime - firstTime;
-		const plotWidth = WIDTH - PLOT_LEFT - PLOT_RIGHT;
+		const plotWidth = chartWidth - plotLeft - plotRight;
 		const plotHeight = HEIGHT - PLOT_TOP - PLOT_BOTTOM;
 		const scaled = sampled.map<ChartPoint>((point) => {
 			const time = new Date(point.recordedAt).getTime();
@@ -143,8 +154,8 @@
 				...point,
 				x:
 					sampled.length === 1 || timeRange === 0
-						? PLOT_LEFT + plotWidth / 2
-						: PLOT_LEFT + ((time - firstTime) / timeRange) * plotWidth,
+						? plotLeft + plotWidth / 2
+						: plotLeft + ((time - firstTime) / timeRange) * plotWidth,
 				y: PLOT_TOP + ((max - point.netWorthCents) / (max - min)) * plotHeight
 			};
 		});
@@ -162,7 +173,7 @@
 		}));
 		const dateTicks = netWorthDateAxisTicks(sampled).map((tick) => ({
 			recordedAt: tick.recordedAt,
-			x: PLOT_LEFT + tick.position * plotWidth
+			x: plotLeft + tick.position * plotWidth
 		}));
 		return { points: scaled, linePath, areaPath, ticks, dateTicks };
 	}
@@ -193,9 +204,7 @@
 	}
 
 	function formatAxisDate(value: string): string {
-		return (
-			selectedRange === '1Y' || selectedRange === 'ALL' ? axisMonthYearLabel : axisDayLabel
-		).format(new Date(value));
+		return (dateAxisUsesMonths ? axisMonthYearLabel : axisDayLabel).format(new Date(value));
 	}
 
 	function accountTypeLabel(value: NetWorthAccountBreakdown['accountType']): string {
@@ -218,7 +227,7 @@
 
 	function nearestPointIndex(clientX: number, target: SVGSVGElement): number {
 		const bounds = target.getBoundingClientRect();
-		const x = ((clientX - bounds.left) / bounds.width) * WIDTH;
+		const x = ((clientX - bounds.left) / bounds.width) * chartWidth;
 		let nearest = 0;
 		for (let index = 1; index < chart.points.length; index += 1) {
 			if (Math.abs(chart.points[index].x - x) < Math.abs(chart.points[nearest].x - x)) {
@@ -229,20 +238,24 @@
 	}
 
 	function handlePointerMove(event: PointerEvent): void {
-		if (chart.points.length === 0) return;
+		if (chart.points.length === 0 || event.pointerType !== 'mouse') return;
 		hoveredIndex = nearestPointIndex(event.clientX, event.currentTarget as SVGSVGElement);
 	}
 
-	function selectPoint(index: number): void {
+	function selectPoint(index: number, showTooltip = true): void {
 		const point = chart.points[index];
 		if (!point) return;
 		selectedRecordedAt = point.recordedAt;
-		hoveredIndex = index;
+		hoveredIndex = showTooltip ? index : null;
 	}
 
 	function handleChartClick(event: MouseEvent): void {
 		if (chart.points.length === 0) return;
-		selectPoint(nearestPointIndex(event.clientX, event.currentTarget as SVGSVGElement));
+		const supportsHover = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+		selectPoint(
+			nearestPointIndex(event.clientX, event.currentTarget as SVGSVGElement),
+			supportsHover
+		);
 	}
 
 	function handleChartKeydown(event: KeyboardEvent): void {
@@ -335,10 +348,10 @@
 			</div>
 		</div>
 
-		<div class="chart-wrap">
+		<div class="chart-wrap" bind:clientWidth={chartContainerWidth}>
 			<svg
 				class="net-worth-chart"
-				viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+				viewBox={`0 0 ${chartWidth} ${HEIGHT}`}
 				role="button"
 				tabindex="0"
 				aria-describedby="net-worth-chart-help"
@@ -357,9 +370,9 @@
 					</linearGradient>
 				</defs>
 				{#each chart.ticks as tick (tick.y)}
-					<line x1={PLOT_LEFT} x2={WIDTH - PLOT_RIGHT} y1={tick.y} y2={tick.y} class="grid-line"
+					<line x1={plotLeft} x2={chartWidth - plotRight} y1={tick.y} y2={tick.y} class="grid-line"
 					></line>
-					<text x={PLOT_LEFT - 10} y={tick.y + 4} text-anchor="end">
+					<text x={plotLeft - 10} y={tick.y + 4} text-anchor="end">
 						{formatCompactMoney(tick.value)}
 					</text>
 				{/each}
@@ -379,8 +392,8 @@
 				{/if}
 				{#if chart.points.length === 1}
 					<line
-						x1={PLOT_LEFT}
-						x2={WIDTH - PLOT_RIGHT}
+						x1={plotLeft}
+						x2={chartWidth - plotRight}
 						y1={chart.points[0].y}
 						y2={chart.points[0].y}
 						class="value-line"
@@ -401,8 +414,8 @@
 				{/each}
 				{#if chart.dateTicks.length > 0}
 					<line
-						x1={PLOT_LEFT}
-						x2={WIDTH - PLOT_RIGHT}
+						x1={plotLeft}
+						x2={chartWidth - plotRight}
 						y1={HEIGHT - PLOT_BOTTOM}
 						y2={HEIGHT - PLOT_BOTTOM}
 						class="date-axis-line"
@@ -434,7 +447,7 @@
 			{#if hoveredPoint}
 				<div
 					class="chart-tooltip"
-					style={`left: ${(hoveredPoint.x / WIDTH) * 100}%; top: ${(hoveredPoint.y / HEIGHT) * 100}%`}
+					style={`left: clamp(72px, ${(hoveredPoint.x / chartWidth) * 100}%, calc(100% - 72px)); top: ${(hoveredPoint.y / HEIGHT) * 100}%`}
 				>
 					<span>{formatDate(hoveredPoint.recordedAt, true)}</span>
 					<strong>{formatMoney(hoveredPoint.netWorthCents)}</strong>
@@ -729,6 +742,7 @@
 
 	.chart-tooltip {
 		position: absolute;
+		z-index: 1;
 		display: grid;
 		min-width: 128px;
 		gap: 0.15rem;
@@ -1034,15 +1048,6 @@
 		.net-worth-panel footer {
 			align-items: flex-start;
 			flex-direction: column;
-		}
-
-		.net-worth-chart {
-			min-width: 620px;
-		}
-
-		.chart-wrap {
-			overflow-x: auto;
-			padding-bottom: 0.25rem;
 		}
 
 		.date-breakdown > header {
