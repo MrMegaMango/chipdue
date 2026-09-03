@@ -86,6 +86,30 @@ describe.sequential('financial workspace API contract', () => {
 		expect((await (await listBonusesEndpoint({} as never)).json()).bonuses).toHaveLength(1);
 	});
 
+	it('creates a card-linked spend bonus for card-level progress', async () => {
+		const cardId = '6ac7c447-c302-4b28-a38a-98626af9aace';
+		const bonusRequest = mutationRequest('/api/bonuses', {
+			cardId,
+			name: 'Targeted card upgrade',
+			rewardCents: 15_000,
+			spendTargetCents: 100_000,
+			openedDate: '2026-08-27',
+			requirementDeadline: '2027-02-27'
+		});
+		const response = (await createBonusEndpoint({
+			request: bonusRequest,
+			url: new URL(bonusRequest.url)
+		} as never)) as Response;
+
+		expect(response.status).toBe(201);
+		expect((await response.json()).bonus).toMatchObject({
+			accountId: null,
+			cardId,
+			rewardCents: 15_000,
+			spendTargetCents: 100_000
+		});
+	});
+
 	it('rejects cross-origin financial mutations', async () => {
 		const request = mutationRequest('/api/accounts', {
 			nickname: 'Private account',

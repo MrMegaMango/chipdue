@@ -79,6 +79,8 @@ describe.sequential('encrypted financial records', () => {
 			completed: false
 		});
 		expect(bonus.offerDateOverrideConfirmed).toBe(false);
+		expect(bonus.cardId).toBeNull();
+		expect(bonus.spendTargetCents).toBeNull();
 		expect(bonus.requirements[0].id).toMatch(/^[0-9a-f-]{36}$/);
 
 		const durableRows = getDatabase().prepare('SELECT payload_enc FROM cards').all();

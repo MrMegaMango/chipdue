@@ -46,11 +46,13 @@ const account: FinancialAccount = {
 const bonus: AccountBonus = {
 	id: '00000000-0000-4000-8000-000000000003',
 	accountId: account.id,
+	cardId: null,
 	offerTemplateId: null,
 	offerDateOverrideConfirmed: false,
 	name: 'Wells Fargo business checking bonus (up to $825)',
 	institution: 'Wells Fargo',
 	rewardCents: 82_500,
+	spendTargetCents: null,
 	currency: 'USD',
 	status: 'active',
 	openedDate: '2026-08-27',

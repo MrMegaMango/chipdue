@@ -215,6 +215,45 @@
 		);
 		return `Est. ${units} ${unit}${estimate.amount === 1 ? '' : 's'}`;
 	}
+
+	export type CardBonusSpendWindow = {
+		openedDate: string | null;
+		requirementDeadline: string | null;
+	};
+
+	export type CardBonusSpendTransaction = {
+		amountCents: number;
+		date: string;
+		pending: boolean;
+		categoryPrimary: string | null;
+	};
+
+	const NON_QUALIFYING_CARD_BONUS_CATEGORIES = new Set([
+		'BANK_FEES',
+		'INCOME',
+		'LOAN_PAYMENTS',
+		'TRANSFER_IN',
+		'TRANSFER_OUT'
+	]);
+
+	export function cardBonusSpendCents(
+		bonus: CardBonusSpendWindow,
+		transactions: CardBonusSpendTransaction[]
+	): number {
+		const total = transactions.reduce((sum, transaction) => {
+			if (transaction.pending) return sum;
+			if (bonus.openedDate && transaction.date < bonus.openedDate) return sum;
+			if (bonus.requirementDeadline && transaction.date > bonus.requirementDeadline) return sum;
+			if (
+				transaction.categoryPrimary &&
+				NON_QUALIFYING_CARD_BONUS_CATEGORIES.has(transaction.categoryPrimary.toUpperCase())
+			) {
+				return sum;
+			}
+			return sum + transaction.amountCents;
+		}, 0);
+		return Math.max(0, total);
+	}
 </script>
 
 <script lang="ts">
@@ -375,10 +414,15 @@
 	type WorkspaceAccount = FinancialAccount;
 	type WorkspaceBonus = {
 		id: string;
+		cardId: string | null;
 		name: string;
 		status: 'planned' | 'active' | 'qualified' | 'pending' | 'paid' | 'closed' | 'abandoned';
 		rewardCents: number | null;
+		spendTargetCents: number | null;
+		openedDate: string | null;
 		requirementDeadline: string | null;
+		expectedPayoutDate: string | null;
+		safeToCloseDate: string | null;
 	};
 
 	type CardForm = {
@@ -458,6 +502,7 @@
 		year: 'numeric'
 	});
 	const RECENT_ACTIVITY_LIMIT = 3;
+	const CARD_ACTIVITY_LIMIT = 500;
 	const CARD_REWARD_PREVIEW_LIMIT = 4;
 	const REWARD_CATEGORY_MATCH_OPTIONS: Array<{
 		value: CardRewardCategoryMatch;
@@ -935,7 +980,11 @@
 			return;
 		}
 		if (currentSection === 'cards') {
-			void Promise.all([refreshCards(false, epoch), refreshPlaidStatus(false, epoch)]);
+			void Promise.all([
+				refreshCards(false, epoch),
+				refreshPlaidStatus(false, epoch),
+				refreshWorkspaceOverview(epoch)
+			]);
 			return;
 		}
 		void Promise.all([
@@ -1248,7 +1297,7 @@
 		await Promise.all(
 			eligibleCards.map(async (card) => {
 				try {
-					const endpoint = `${resolve('/api/cards/[id]/transactions', { id: card.id })}?limit=${RECENT_ACTIVITY_LIMIT}`;
+					const endpoint = `${resolve('/api/cards/[id]/transactions', { id: card.id })}?limit=${CARD_ACTIVITY_LIMIT}`;
 					const payload = await requestJson<TransactionHistoryResponse>(
 						endpoint,
 						{},
@@ -1363,6 +1412,24 @@
 
 	function rewardCategorySpendPercent(spending: CardRewardCategorySpend): number {
 		return Math.min(100, Math.round((spending.spentCents / spending.capCents) * 100));
+	}
+
+	function bonusesForCard(cardId: string): WorkspaceBonus[] {
+		return workspaceBonuses.filter(
+			(bonus) => bonus.cardId === cardId && !['closed', 'abandoned'].includes(bonus.status)
+		);
+	}
+
+	function bonusSpendPercent(spentCents: number, targetCents: number): number {
+		return targetCents > 0 ? Math.min(100, Math.round((spentCents / targetCents) * 100)) : 0;
+	}
+
+	function bonusStatusLabel(status: WorkspaceBonus['status']): string {
+		if (status === 'active') return 'In progress';
+		if (status === 'qualified') return 'Qualified';
+		if (status === 'pending') return 'Payout pending';
+		if (status === 'paid') return 'Paid';
+		return status === 'planned' ? 'Planned' : status;
 	}
 
 	function formatDate(value: string | null): string {
@@ -3013,6 +3080,7 @@
 								card.minimumPaymentCents,
 								card.currentBalanceCents
 							)}
+							{@const linkedBonuses = bonusesForCard(card.id)}
 							<article class:overdue={status.tone === 'danger'} class="credit-card">
 								<header class="card-header">
 									<div class="card-identity">
@@ -3097,6 +3165,78 @@
 									{/if}
 								</div>
 
+								{#if linkedBonuses.length > 0}
+									{#each linkedBonuses as bonus (bonus.id)}
+										{@const targetCents = bonus.spendTargetCents}
+										{@const spentCents = cardBonusSpendCents(
+											bonus,
+											recentActivityByCard[card.id] ?? []
+										)}
+										<section class="card-bonus" aria-label={`Bonus progress for ${bonus.name}`}>
+											<header>
+												<div>
+													<span>Card bonus</span>
+													<strong>{bonus.name}</strong>
+												</div>
+												<div class="card-bonus-value">
+													<strong>{formatMoney(bonus.rewardCents)}</strong>
+													<span>{bonusStatusLabel(bonus.status)}</span>
+												</div>
+											</header>
+
+											{#if targetCents !== null && targetCents > 0}
+												<div class="card-bonus-progress-copy">
+													<span>Eligible spend</span>
+													{#if recentActivityLoadingByCard[card.id]}
+														<strong>Calculating…</strong>
+													{:else if recentActivityErrorByCard[card.id] || !card.transactionHistoryEnabled}
+														<strong>Unavailable</strong>
+													{:else}
+														<strong
+															>{compactMoney.format(spentCents / 100)} / {wholeDollarMoney.format(
+																targetCents / 100
+															)}</strong
+														>
+													{/if}
+												</div>
+												<span
+													class="card-bonus-meter"
+													role="progressbar"
+													aria-label={`${compactMoney.format(spentCents / 100)} of ${wholeDollarMoney.format(targetCents / 100)} eligible spend`}
+													aria-valuemin="0"
+													aria-valuemax="100"
+													aria-valuenow={bonusSpendPercent(spentCents, targetCents)}
+												>
+													<span style:width={`${bonusSpendPercent(spentCents, targetCents)}%`}
+													></span>
+												</span>
+												<p>
+													{#if !recentActivityLoadingByCard[card.id] && !recentActivityErrorByCard[card.id] && card.transactionHistoryEnabled}
+														{compactMoney.format(Math.max(0, targetCents - spentCents) / 100)} remaining
+														·
+													{/if}
+													Spend by {formatDate(bonus.requirementDeadline)}
+												</p>
+											{/if}
+
+											<div class="card-bonus-dates">
+												<span
+													>Expected payout <strong>{formatDate(bonus.expectedPayoutDate)}</strong
+													></span
+												>
+												<span
+													>Safe to downgrade <strong>{formatDate(bonus.safeToCloseDate)}</strong
+													></span
+												>
+											</div>
+											<a href={resolve('/bonuses')}>Manage bonus</a>
+											<small
+												>Estimated from posted Plaid activity; verify qualifying spend with Amex.</small
+											>
+										</section>
+									{/each}
+								{/if}
+
 								{#if card.source === 'connected' && card.transactionHistoryEnabled}
 									<section
 										class="card-activity-preview"
@@ -3128,7 +3268,7 @@
 											<p class="activity-preview-message">Recent activity is unavailable.</p>
 										{:else if recentActivityByCard[card.id]?.length > 0}
 											<ul class="activity-preview-list">
-												{#each recentActivityByCard[card.id] as transaction (transaction.id)}
+												{#each recentActivityByCard[card.id].slice(0, RECENT_ACTIVITY_LIMIT) as transaction (transaction.id)}
 													<li>
 														<div>
 															<strong>{transaction.merchantName ?? transaction.name}</strong>
@@ -5631,6 +5771,132 @@
 		fill: none;
 		stroke: var(--positive);
 		stroke-width: 2;
+	}
+
+	.card-bonus {
+		display: grid;
+		gap: 0.58rem;
+		margin: 0 1.25rem 1rem;
+		padding: 0.8rem;
+		border: 1px solid #c8cff8;
+		border-radius: 7px;
+		background: #f5f6ff;
+	}
+
+	.card-bonus > header {
+		display: flex;
+		gap: 0.8rem;
+		align-items: flex-start;
+		justify-content: space-between;
+	}
+
+	.card-bonus > header > div:first-child {
+		display: grid;
+		min-width: 0;
+		gap: 0.16rem;
+	}
+
+	.card-bonus > header span,
+	.card-bonus-progress-copy span {
+		color: #606b84;
+		font-size: 0.58rem;
+		font-weight: 740;
+		letter-spacing: 0.07em;
+		text-transform: uppercase;
+	}
+
+	.card-bonus > header > div:first-child strong {
+		font-size: 0.76rem;
+		line-height: 1.3;
+	}
+
+	.card-bonus-value {
+		display: grid;
+		flex: 0 0 auto;
+		gap: 0.05rem;
+		text-align: right;
+	}
+
+	.card-bonus-value strong {
+		color: var(--accent);
+		font-size: 0.86rem;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.card-bonus-value span {
+		color: var(--positive);
+		font-size: 0.54rem;
+		letter-spacing: 0;
+		text-transform: none;
+	}
+
+	.card-bonus-progress-copy {
+		display: flex;
+		gap: 0.75rem;
+		align-items: baseline;
+		justify-content: space-between;
+	}
+
+	.card-bonus-progress-copy strong {
+		font-size: 0.82rem;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.card-bonus-meter {
+		display: block;
+		height: 7px;
+		overflow: hidden;
+		border-radius: 999px;
+		background: #dfe3fb;
+	}
+
+	.card-bonus-meter > span {
+		display: block;
+		height: 100%;
+		border-radius: inherit;
+		background: var(--accent);
+		transition: width 180ms ease;
+	}
+
+	.card-bonus p,
+	.card-bonus > small {
+		margin: 0;
+		color: var(--faint);
+		font-size: 0.58rem;
+		line-height: 1.4;
+	}
+
+	.card-bonus-dates {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.5rem;
+		padding-top: 0.52rem;
+		border-top: 1px solid #d8dcf5;
+	}
+
+	.card-bonus-dates span {
+		display: grid;
+		gap: 0.1rem;
+		color: var(--faint);
+		font-size: 0.56rem;
+	}
+
+	.card-bonus-dates strong {
+		color: var(--ink);
+		font-size: 0.63rem;
+	}
+
+	.card-bonus > a {
+		width: fit-content;
+		color: var(--accent);
+		font-size: 0.62rem;
+		font-weight: 700;
+		text-decoration: none;
+	}
+
+	.card-bonus > a:hover {
+		text-decoration: underline;
+		text-underline-offset: 2px;
 	}
 
 	.card-rewards {

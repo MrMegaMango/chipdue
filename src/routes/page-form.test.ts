@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
 	authorizeGoogleCallbackResult,
+	cardBonusSpendCents,
 	cardBrandForIssuer,
 	canOfferGoogleLogin,
 	canShowGoogleBootstrap,
@@ -192,11 +193,60 @@ describe('card activity preview', () => {
 		expect(source).toContain('const RECENT_ACTIVITY_LIMIT = 3');
 		expect(source).toContain('Recent activity');
 		expect(source).toContain('View all activity');
-		expect(source).toContain('?limit=${RECENT_ACTIVITY_LIMIT}');
+		expect(source).toContain('?limit=${CARD_ACTIVITY_LIMIT}');
+		expect(source).toContain(
+			'recentActivityByCard[card.id].slice(0, RECENT_ACTIVITY_LIMIT) as transaction'
+		);
 		expect(source).toContain('onclick={() => openTransactionHistory(card)}');
 		expect(source).toContain('of ${wholeDollarMoney.format(spending.capCents / 100)} spent in');
 		expect(source).toContain('role="progressbar"');
 		expect(source).toContain('rewardCategorySpendingByCard');
+	});
+
+	it('shows linked card bonuses before activity with posted-spend progress', () => {
+		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
+		const bonusIndex = source.indexOf('class="card-bonus"');
+		const activityIndex = source.indexOf('class="card-activity-preview"');
+
+		expect(bonusIndex).toBeGreaterThan(-1);
+		expect(bonusIndex).toBeLessThan(activityIndex);
+		expect(source).toContain('Eligible spend');
+		expect(source).toContain('Safe to downgrade');
+		expect(source).toContain('Estimated from posted Plaid activity');
+	});
+
+	it('totals posted purchases inside the bonus window and nets eligible refunds', () => {
+		const bonus = { openedDate: '2026-08-27', requirementDeadline: '2027-02-27' };
+		const transactions = [
+			{
+				amountCents: 14_300,
+				date: '2026-09-02',
+				pending: false,
+				categoryPrimary: 'FOOD_AND_DRINK'
+			},
+			{ amountCents: 8_000, date: '2026-08-26', pending: false, categoryPrimary: 'FOOD_AND_DRINK' },
+			{
+				amountCents: 5_000,
+				date: '2026-09-03',
+				pending: true,
+				categoryPrimary: 'GENERAL_MERCHANDISE'
+			},
+			{
+				amountCents: -2_500,
+				date: '2026-09-02',
+				pending: false,
+				categoryPrimary: 'GENERAL_MERCHANDISE'
+			},
+			{
+				amountCents: -17_522,
+				date: '2026-09-01',
+				pending: false,
+				categoryPrimary: 'LOAN_PAYMENTS'
+			},
+			{ amountCents: 900, date: '2027-02-28', pending: false, categoryPrimary: 'FOOD_AND_DRINK' }
+		];
+
+		expect(cardBonusSpendCents(bonus, transactions)).toBe(11_800);
 	});
 
 	it('keeps the card reward preview compact and rate-first', () => {

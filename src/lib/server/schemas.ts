@@ -184,11 +184,13 @@ export const updateFinancialAccountSchema = z
 export const createBonusSchema = z
 	.object({
 		accountId: z.uuid().nullable().optional().default(null),
+		cardId: z.uuid().nullable().optional().default(null),
 		offerTemplateId: z.string().trim().min(1).max(100).nullable().optional().default(null),
 		offerDateOverrideConfirmed: z.boolean().optional().default(false),
 		name: labelSchema,
 		institution: optionalNameSchema.optional().default(null),
 		rewardCents: nonnegativeCentsSchema.optional().default(null),
+		spendTargetCents: nonnegativeCentsSchema.optional().default(null),
 		currency: currencySchema.optional().default('USD'),
 		status: bonusStatusSchema.optional().default('active'),
 		openedDate: isoDateSchema.nullable().optional().default(null),
@@ -204,11 +206,13 @@ export const createBonusSchema = z
 export const updateBonusSchema = z
 	.object({
 		accountId: z.uuid().nullable().optional(),
+		cardId: z.uuid().nullable().optional(),
 		offerTemplateId: z.string().trim().min(1).max(100).nullable().optional(),
 		offerDateOverrideConfirmed: z.boolean().optional(),
 		name: labelSchema.optional(),
 		institution: optionalNameSchema.optional(),
 		rewardCents: nonnegativeCentsSchema.optional(),
+		spendTargetCents: nonnegativeCentsSchema.optional(),
 		currency: currencySchema.optional(),
 		status: bonusStatusSchema.optional(),
 		openedDate: isoDateSchema.nullable().optional(),

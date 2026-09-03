@@ -240,11 +240,13 @@ export interface BonusRequirement {
 export interface AccountBonus {
 	id: string;
 	accountId: string | null;
+	cardId: string | null;
 	offerTemplateId: string | null;
 	offerDateOverrideConfirmed: boolean;
 	name: string;
 	institution: string | null;
 	rewardCents: number | null;
+	spendTargetCents: number | null;
 	currency: string;
 	status: BonusStatus;
 	openedDate: string | null;

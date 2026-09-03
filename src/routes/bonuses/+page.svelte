@@ -17,6 +17,7 @@
 	import type {
 		AccountBonus,
 		BonusStatus,
+		Card,
 		FinancialAccount,
 		FinancialAccountTransaction,
 		TransactionHistoryStatus
@@ -42,7 +43,9 @@
 		name: string;
 		institution: string;
 		accountId: string;
+		cardId: string;
 		reward: number | undefined;
+		spendTarget: number | undefined;
 		status: BonusStatus;
 		openedDate: string;
 		requirementDeadline: string;
@@ -68,6 +71,7 @@
 	let mode = $state<RuntimeMode | null>(null);
 	let bonuses = $state<AccountBonus[]>([]);
 	let accounts = $state<FinancialAccount[]>([]);
+	let cards = $state<Card[]>([]);
 	let loading = $state(true);
 	let pageError = $state('');
 	let dialogOpen = $state(false);
@@ -132,7 +136,9 @@
 			name: '',
 			institution: '',
 			accountId: '',
+			cardId: '',
 			reward: undefined,
+			spendTarget: undefined,
 			status: 'active',
 			openedDate: '',
 			requirementDeadline: '',
@@ -154,12 +160,14 @@
 				window.location.assign(resolve('/'));
 				return;
 			}
-			const [bonusResponse, accountResponse] = await Promise.all([
+			const [bonusResponse, accountResponse, cardResponse] = await Promise.all([
 				requestJson<{ bonuses: AccountBonus[] }>(resolve('/api/bonuses')),
-				requestJson<{ accounts: FinancialAccount[] }>(resolve('/api/accounts'))
+				requestJson<{ accounts: FinancialAccount[] }>(resolve('/api/accounts')),
+				requestJson<{ cards: Card[] }>(resolve('/api/cards'))
 			]);
 			bonuses = bonusResponse.bonuses;
 			accounts = accountResponse.accounts;
+			cards = cardResponse.cards;
 			void loadLinkedAccountActivity(bonusResponse.bonuses, accountResponse.accounts);
 			if (!queryPrefillHandled) {
 				queryPrefillHandled = true;
@@ -261,6 +269,10 @@
 
 	function linkedAccount(bonus: AccountBonus): FinancialAccount | null {
 		return accounts.find((account) => account.id === bonus.accountId) ?? null;
+	}
+
+	function linkedCard(bonus: AccountBonus): Card | null {
+		return cards.find((card) => card.id === bonus.cardId) ?? null;
 	}
 
 	function trackerFor(bonus: AccountBonus): BonusTracker | null {
@@ -384,7 +396,9 @@
 			name: bonus.name,
 			institution: bonus.institution ?? '',
 			accountId: bonus.accountId ?? '',
+			cardId: bonus.cardId ?? '',
 			reward: bonus.rewardCents === null ? undefined : bonus.rewardCents / 100,
+			spendTarget: bonus.spendTargetCents === null ? undefined : bonus.spendTargetCents / 100,
 			status: bonus.status,
 			openedDate: bonus.openedDate ?? '',
 			requirementDeadline: bonus.requirementDeadline ?? '',
@@ -405,6 +419,7 @@
 			form.offerTemplateId = '';
 			return;
 		}
+		form.cardId = '';
 		form.institution = account.institution ?? form.institution;
 		if (!form.openedDate && account.openedDate) form.openedDate = account.openedDate;
 		if (
@@ -460,6 +475,15 @@
 		if (form.offerTemplateId) applySelectedOffer(true);
 	}
 
+	function handleCardChange(): void {
+		const card = cards.find((candidate) => candidate.id === form.cardId);
+		if (!card) return;
+		form.accountId = '';
+		form.offerTemplateId = '';
+		form.offerDateOverrideConfirmed = false;
+		form.institution = card.issuer ?? form.institution;
+	}
+
 	function closeDialog(): void {
 		if (busy) return;
 		dialogOpen = false;
@@ -505,11 +529,13 @@
 		formError = '';
 		const payload = {
 			accountId: form.accountId || null,
+			cardId: form.cardId || null,
 			offerTemplateId: form.offerTemplateId || null,
 			offerDateOverrideConfirmed: Boolean(form.offerTemplateId) && form.offerDateOverrideConfirmed,
 			name: form.name.trim(),
 			institution: form.institution.trim() || null,
 			rewardCents: cents(form.reward),
+			spendTargetCents: cents(form.spendTarget),
 			currency: 'USD',
 			status: form.status,
 			openedDate: form.openedDate || null,
@@ -694,7 +720,10 @@
 								<div>
 									<h3>{bonus.name}</h3>
 									<p>
-										{linkedAccount(bonus)?.nickname ?? bonus.institution ?? 'No account linked'}
+										{linkedCard(bonus)?.nickname ??
+											linkedAccount(bonus)?.nickname ??
+											bonus.institution ??
+											'No account linked'}
 									</p>
 								</div>
 								<span class="finance-pill {statusTone(bonus.status)}">
@@ -1016,12 +1045,43 @@
 					</div>
 					<div class="finance-field">
 						<label for="bonus-account">Linked account</label>
-						<select id="bonus-account" bind:value={form.accountId} onchange={handleAccountChange}>
+						<select
+							id="bonus-account"
+							bind:value={form.accountId}
+							onchange={handleAccountChange}
+							disabled={Boolean(form.cardId)}
+						>
 							<option value="">No linked account</option>
 							{#each accounts as account (account.id)}
 								<option value={account.id}>{account.nickname}</option>
 							{/each}
 						</select>
+					</div>
+					<div class="finance-field">
+						<label for="bonus-card">Linked credit card</label>
+						<select
+							id="bonus-card"
+							bind:value={form.cardId}
+							onchange={handleCardChange}
+							disabled={Boolean(form.accountId)}
+						>
+							<option value="">No linked card</option>
+							{#each cards as card (card.id)}
+								<option value={card.id}>{card.nickname}</option>
+							{/each}
+						</select>
+						<small>Link card bonuses here to track eligible spending on the Cards page.</small>
+					</div>
+					<div class="finance-field">
+						<label for="bonus-spend-target">Required card spend</label>
+						<input
+							id="bonus-spend-target"
+							type="number"
+							min="0"
+							step="0.01"
+							bind:value={form.spendTarget}
+							placeholder="1000.00"
+						/>
 					</div>
 					<div class="finance-field wide offer-picker">
 						<label for="bonus-offer">Verified offer</label>

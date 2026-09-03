@@ -117,10 +117,13 @@ describe('financial workspace validation', () => {
 	});
 
 	it('validates bonus milestones and bounded requirements', () => {
+		const cardId = '6ac7c447-c302-4b28-a38a-98626af9aace';
 		expect(
 			createBonusSchema.safeParse({
 				name: 'New account bonus',
+				cardId,
 				rewardCents: 50_000,
+				spendTargetCents: 100_000,
 				requirementDeadline: '2028-04-30',
 				requirements: [
 					{ label: 'Fund the account' },
@@ -129,7 +132,11 @@ describe('financial workspace validation', () => {
 			}).success
 		).toBe(true);
 		expect(createBonusSchema.parse({ name: 'Bonus' }).offerDateOverrideConfirmed).toBe(false);
+		expect(createBonusSchema.parse({ name: 'Bonus' }).cardId).toBeNull();
+		expect(createBonusSchema.parse({ name: 'Bonus' }).spendTargetCents).toBeNull();
 		expect(updateBonusSchema.safeParse({ offerDateOverrideConfirmed: true }).success).toBe(true);
+		expect(updateBonusSchema.safeParse({ cardId, spendTargetCents: 100_000 }).success).toBe(true);
+		expect(updateBonusSchema.safeParse({ spendTargetCents: -1 }).success).toBe(false);
 		expect(createBonusSchema.safeParse({ name: 'Bonus', rewardCents: -1 }).success).toBe(false);
 		expect(updateFinancialAccountSchema.safeParse({ hidden: true }).success).toBe(true);
 		expect(updateFinancialAccountSchema.safeParse({ netContributionsCents: -50_000 }).success).toBe(

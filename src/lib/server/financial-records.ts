@@ -201,11 +201,13 @@ const bonusPayloadSchema = z.object({
 		.optional(),
 	recordType: z.literal('bonus'),
 	accountId: z.string().uuid().nullable(),
+	cardId: z.string().uuid().nullable().optional().default(null),
 	offerTemplateId: z.string().max(100).nullable().optional().default(null),
 	offerDateOverrideConfirmed: z.boolean().optional().default(false),
 	name: z.string(),
 	institution: nullableTextSchema,
 	rewardCents: nullableCentsSchema,
+	spendTargetCents: nullableCentsSchema.optional().default(null),
 	currency: z.string(),
 	status: bonusStatusSchema,
 	openedDate: dateSchema,
@@ -515,11 +517,13 @@ function rowToBonus(row: PrivateRecordRow, payload: BonusPayload): AccountBonus 
 	return {
 		id: row.id,
 		accountId: payload.accountId,
+		cardId: payload.cardId,
 		offerTemplateId: payload.offerTemplateId,
 		offerDateOverrideConfirmed: payload.offerDateOverrideConfirmed,
 		name: payload.name,
 		institution: payload.institution,
 		rewardCents: payload.rewardCents,
+		spendTargetCents: payload.spendTargetCents,
 		currency: payload.currency,
 		status: payload.status,
 		openedDate: payload.openedDate,
@@ -1241,6 +1245,7 @@ export async function updateBonus(id: string, changes: UpdateBonusData): Promise
 	const payload: BonusPayload = {
 		recordType: 'bonus',
 		accountId: changes.accountId === undefined ? existing.accountId : changes.accountId,
+		cardId: changes.cardId === undefined ? existing.cardId : changes.cardId,
 		offerTemplateId:
 			changes.offerTemplateId === undefined ? existing.offerTemplateId : changes.offerTemplateId,
 		offerDateOverrideConfirmed:
@@ -1250,6 +1255,8 @@ export async function updateBonus(id: string, changes: UpdateBonusData): Promise
 		name: changes.name ?? existing.name,
 		institution: changes.institution === undefined ? existing.institution : changes.institution,
 		rewardCents: changes.rewardCents === undefined ? existing.rewardCents : changes.rewardCents,
+		spendTargetCents:
+			changes.spendTargetCents === undefined ? existing.spendTargetCents : changes.spendTargetCents,
 		currency: changes.currency ?? existing.currency,
 		status: changes.status ?? existing.status,
 		openedDate: changes.openedDate === undefined ? existing.openedDate : changes.openedDate,
