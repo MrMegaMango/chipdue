@@ -708,6 +708,7 @@
 				</div>
 				<div class="finance-grid bonus-grid">
 					{#each bonuses as bonus (bonus.id)}
+						{@const bonusAccount = linkedAccount(bonus)}
 						{@const tracker = trackerFor(bonus)}
 						{@const targetTier = tracker ? targetTierFor(bonus, tracker) : null}
 						{@const amountToTargetCents =
@@ -721,7 +722,7 @@
 									<h3>{bonus.name}</h3>
 									<p>
 										{linkedCard(bonus)?.nickname ??
-											linkedAccount(bonus)?.nickname ??
+											bonusAccount?.nickname ??
 											bonus.institution ??
 											'No account linked'}
 									</p>
@@ -730,10 +731,37 @@
 									{statusLabel(bonus.status)}
 								</span>
 							</header>
-							<div class="finance-card-value">
-								<span>Bonus value</span>
-								<strong>{formatMoney(bonus.rewardCents)}</strong>
-							</div>
+							{#if bonusAccount && !tracker}
+								<div
+									class="bonus-live-metrics"
+									aria-label={`${bonusAccount.nickname} balance and bonus value`}
+								>
+									<div class="bonus-account-balance">
+										<span>
+											{bonusAccount.source === 'connected'
+												? 'Current synced balance'
+												: 'Current manual balance'}
+										</span>
+										<strong>{formatMoney(bonusAccount.currentBalanceCents)}</strong>
+										<small>
+											{#if bonusAccount.source === 'connected'}
+												<SyncedTime value={bonusAccount.lastSyncedAt} fallback="Not synced yet" />
+											{:else}
+												Saved in ChipDue
+											{/if}
+										</small>
+									</div>
+									<div class="finance-card-value">
+										<span>Bonus value</span>
+										<strong>{formatMoney(bonus.rewardCents)}</strong>
+									</div>
+								</div>
+							{:else}
+								<div class="finance-card-value">
+									<span>Bonus value</span>
+									<strong>{formatMoney(bonus.rewardCents)}</strong>
+								</div>
+							{/if}
 
 							<div class="bonus-deadline">
 								<span class="finance-pill {deadlineTone(bonus.requirementDeadline)}">
@@ -933,8 +961,8 @@
 									<div>
 										<span>Tracker setup needed</span>
 										<strong>
-											Choose the exact {linkedAccount(bonus)?.institution ?? bonus.institution} offer
-											you enrolled in.
+											Choose the exact {bonusAccount?.institution ?? bonus.institution} offer you enrolled
+											in.
 										</strong>
 										<small>
 											{trackerSetupOffers.length} verified {trackerSetupOffers.length === 1
@@ -1243,6 +1271,43 @@
 
 	.bonus-card.has-tracker {
 		grid-column: span 2;
+	}
+
+	.bonus-live-metrics {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 1rem;
+		margin: 1.2rem 0 1rem;
+	}
+
+	.bonus-live-metrics > div {
+		min-width: 0;
+		margin: 0;
+		padding: 0.8rem;
+		border: 1px solid var(--line);
+		border-radius: 10px;
+		background: rgba(255, 255, 255, 0.62);
+	}
+
+	.bonus-live-metrics span,
+	.bonus-live-metrics small {
+		display: block;
+		color: var(--faint);
+		font-size: 0.6rem;
+		font-weight: 680;
+	}
+
+	.bonus-live-metrics strong {
+		display: block;
+		margin-top: 0.32rem;
+		font-size: 1.45rem;
+		font-weight: 760;
+		letter-spacing: -0.05em;
+	}
+
+	.bonus-live-metrics small {
+		margin-top: 0.25rem;
+		font-weight: 560;
 	}
 
 	.bonus-deadline {
@@ -1576,6 +1641,10 @@
 
 	@media (max-width: 620px) {
 		.bonus-grid {
+			grid-template-columns: 1fr;
+		}
+
+		.bonus-live-metrics {
 			grid-template-columns: 1fr;
 		}
 

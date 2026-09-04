@@ -413,6 +413,14 @@ describe('financial workspace navigation', () => {
 		expect(bonusesSource).toContain("tracker.account.source === 'connected'");
 	});
 
+	it('shows the current account balance on linked bonuses without a verified tracker', () => {
+		expect(bonusesSource).toContain('{#if bonusAccount && !tracker}');
+		expect(bonusesSource).toContain('class="bonus-account-balance"');
+		expect(bonusesSource).toContain('formatMoney(bonusAccount.currentBalanceCents)');
+		expect(bonusesSource).toContain('value={bonusAccount.lastSyncedAt}');
+		expect(bonusesSource).toContain('Current synced balance');
+	});
+
 	it('keeps new financial data out of persistent browser storage', () => {
 		for (const source of [accountsSource, bonusesSource, etradeSource]) {
 			expect(source).not.toContain('localStorage');
