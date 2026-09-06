@@ -19,11 +19,12 @@ Choose one of two deployment modes:
 - Build clearly labeled estimated daily history for Plaid-connected brokerage accounts—including Chase Self-Directed—from current holdings, up to 24 months of investment activity, and public market closes.
 - Load current E*TRADE open orders and use E*TRADE positions and activity as alternate reconstruction inputs without enabling trade placement, changes, or cancellation.
 - Track statement balance, minimum due, current balance, due date, statement date, and autopay status.
+- Record private credit score readings by bureau, scoring model, source, and date, with like-for-like change tracking and a visual history.
 - Automatically identify supported linked cards from provider metadata, populate their reward type, base earning rate, and bonus categories, and show estimated points, miles, or cash back beside eligible transactions. Manual overrides remain available for unmatched cards.
 - Create isolated cloud accounts with Google sign-in without storing an email, profile, Google token, or refresh token.
 - Let each cloud account encrypt and use its own Plaid Production credentials, so Plaid Items and plan allowances are not shared between users.
 - Connect Plaid only when you explicitly choose to; manual mode never contacts Plaid.
-- Encrypt account and bonus records, card payloads, transaction history, Plaid cursors, provider credentials and tokens, Item IDs, and institution names with AES-256-GCM.
+- Encrypt account, bonus, and credit score records, card payloads, transaction history, Plaid cursors, provider credentials and tokens, Item IDs, and institution names with AES-256-GCM.
 - Request Plaid Accounts, Investments, Liabilities, and up to 24 months of Transactions data—never identity or full account numbers.
 - Add due dates through Google Calendar event drafts without balances, amounts, or card numbers; keep an iCalendar download as a fallback.
 - Keep financial data out of browser persistence, logs, source code, CI, and Git history.

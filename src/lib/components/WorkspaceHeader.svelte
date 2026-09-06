@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { asset, resolve } from '$app/paths';
 
-	type WorkspaceSection = 'overview' | 'cards' | 'accounts' | 'bonuses' | 'settings';
+	type WorkspaceSection =
+		'overview' | 'cards' | 'accounts' | 'bonuses' | 'credit-score' | 'settings';
 	type Props = {
 		current: WorkspaceSection;
 		mode: 'local' | 'cloud' | null;
@@ -14,12 +15,13 @@
 	const links: {
 		id: WorkspaceSection;
 		label: string;
-		href: '/' | '/cards' | '/accounts' | '/bonuses';
+		href: '/' | '/cards' | '/accounts' | '/bonuses' | '/credit-score';
 	}[] = [
 		{ id: 'overview', label: 'Overview', href: '/' },
 		{ id: 'cards', label: 'Cards', href: '/cards' },
 		{ id: 'accounts', label: 'Accounts', href: '/accounts' },
-		{ id: 'bonuses', label: 'Bonuses', href: '/bonuses' }
+		{ id: 'bonuses', label: 'Bonuses', href: '/bonuses' },
+		{ id: 'credit-score', label: 'Score', href: '/credit-score' }
 	];
 </script>
 
@@ -233,7 +235,7 @@
 		nav {
 			display: grid;
 			width: 100%;
-			grid-template-columns: repeat(4, 1fr);
+			grid-template-columns: repeat(5, 1fr);
 		}
 
 		nav a {

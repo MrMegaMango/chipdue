@@ -417,7 +417,13 @@ function decodePayload(row: CardRow): CardPayload | null {
 		row.payload_enc,
 		`card:${row.id}`
 	);
-	if (payload && (payload.recordType === 'account' || payload.recordType === 'bonus')) return null;
+	if (
+		payload &&
+		(payload.recordType === 'account' ||
+			payload.recordType === 'bonus' ||
+			payload.recordType === 'credit_score')
+	)
+		return null;
 	if (
 		!payload ||
 		typeof payload.nickname !== 'string' ||

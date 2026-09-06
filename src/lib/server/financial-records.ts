@@ -353,6 +353,7 @@ function decodeRecord(row: PrivateRecordRow): PrivateRecordPayload | null {
 	if (!payload || typeof payload !== 'object' || !('recordType' in payload)) return null;
 	if (!payloadBelongsToCurrentTenant(payload as { tenantRef?: unknown })) return null;
 	const recordType = (payload as { recordType?: unknown }).recordType;
+	if (recordType === 'credit_score') return null;
 	const parsed =
 		recordType === 'account'
 			? accountPayloadSchema.safeParse(payload)
