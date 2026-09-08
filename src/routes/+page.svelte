@@ -2378,6 +2378,46 @@
 		}
 	}
 
+	async function retryConnectionSync(connection: FinancialConnection): Promise<void> {
+		if (busyAction) return;
+		const epoch = privateStateEpoch;
+		if (!isPrivateEpochCurrent(epoch)) return;
+		const label = connectionLabel(connection);
+		busyAction = 'sync';
+		plaidItemActionId = connection.id;
+		try {
+			await requestJson(
+				resolve('/api/connections/[id]/sync', { id: connection.id }),
+				{ method: 'POST' },
+				{ privateEpoch: epoch }
+			);
+			if (!isPrivateEpochCurrent(epoch)) return;
+			const [cardsRefreshed, statusRefreshed] = await Promise.all([
+				refreshCards(true, epoch),
+				refreshPlaidStatus(true, epoch),
+				refreshWorkspaceOverview(epoch)
+			]);
+			if (!isPrivateEpochCurrent(epoch)) return;
+			const refreshed = cardsRefreshed && statusRefreshed;
+			showNotice(
+				refreshed ? `${label} synced.` : `${label} synced, but the dashboard could not refresh.`,
+				refreshed ? 'success' : 'error'
+			);
+		} catch (error) {
+			if (isPrivateEpochCurrent(epoch)) {
+				showNotice(
+					`${readableError(error, `${label} could not be synced.`)} Diagnostic details were recorded.`,
+					'error'
+				);
+			}
+		} finally {
+			if (isPrivateEpochCurrent(epoch)) {
+				busyAction = null;
+				plaidItemActionId = null;
+			}
+		}
+	}
+
 	function connectionLabel(connection: FinancialConnection): string {
 		return connection.institutionName?.trim() || 'Connected institution';
 	}
@@ -3830,6 +3870,21 @@
 											</div>
 											<div class="connection-actions">
 												{#if connection.provider === 'plaid'}
+													{#if connection.status === 'needs_update'}
+														<button
+															class="retry-connection"
+															type="button"
+															onclick={() => retryConnectionSync(connection)}
+															disabled={busyAction !== null}
+															aria-busy={busyAction === 'sync' &&
+																plaidItemActionId === connection.id}
+															aria-label={`Retry ${connectionLabel(connection)} sync without repairing`}
+														>
+															{busyAction === 'sync' && plaidItemActionId === connection.id
+																? 'Checking…'
+																: 'Retry sync'}
+														</button>
+													{/if}
 													<button
 														class="update-connection"
 														class:repair-connection={connection.status === 'needs_update'}
@@ -7008,6 +7063,11 @@
 	.update-connection {
 		border: 1px solid #dfbd87;
 		color: #734713;
+	}
+
+	.retry-connection {
+		border: 1px solid #aeb7c3;
+		color: #405064;
 	}
 
 	.update-connection.repair-connection {

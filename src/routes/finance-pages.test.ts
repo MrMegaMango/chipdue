@@ -267,6 +267,15 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain("syncing ? 'Syncing…' : 'Sync connections'");
 	});
 
+	it('can retry an unhealthy connection without opening the repair flow', () => {
+		expect(dashboardSource).toContain('async function retryConnectionSync');
+		expect(dashboardSource).toContain("resolve('/api/connections/[id]/sync'");
+		expect(dashboardSource).toContain("connection.status === 'needs_update'");
+		expect(dashboardSource).toContain('onclick={() => retryConnectionSync(connection)}');
+		expect(dashboardSource).toContain('Diagnostic details were recorded.');
+		expect(dashboardSource).toContain("'Retry sync'");
+	});
+
 	it('reuses private responses and avoids work that the active tab does not display', () => {
 		for (const source of [dashboardSource, accountsSource, bonusesSource]) {
 			expect(source).toContain('reusePrivateApiGet');
