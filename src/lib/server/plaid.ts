@@ -222,6 +222,39 @@ function plaidErrorCode(error: unknown): string | null {
 	return typeof code === 'string' && /^[A-Z0-9_]{1,64}$/.test(code) ? code : null;
 }
 
+function safePlaidDiagnosticText(value: unknown, maximum: number): string | null {
+	if (typeof value !== 'string') return null;
+	const normalized = [...value]
+		.map((character) => {
+			const codePoint = character.codePointAt(0) ?? 0;
+			return codePoint < 32 || codePoint === 127 ? ' ' : character;
+		})
+		.join('')
+		.replace(/\s+/g, ' ')
+		.trim();
+	return normalized ? normalized.slice(0, maximum) : null;
+}
+
+function plaidConnectionLogReference(itemId: string): string {
+	return privateFingerprint(itemId, 'plaid-diagnostic-v1').slice(0, 12);
+}
+
+function plaidErrorDiagnostic(error: unknown): Record<string, string | number | null> {
+	const response = (error as { response?: { data?: unknown; status?: unknown } })?.response;
+	const data = response?.data;
+	const fields = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
+	const status = response?.status;
+	return {
+		errorCode: plaidErrorCode(error),
+		errorType: safePlaidDiagnosticText(fields.error_type, 64),
+		requestId: safePlaidDiagnosticText(fields.request_id, 128),
+		errorMessage: safePlaidDiagnosticText(fields.error_message, 240),
+		displayMessage: safePlaidDiagnosticText(fields.display_message, 240),
+		suggestedAction: safePlaidDiagnosticText(fields.suggested_action, 240),
+		status: typeof status === 'number' && Number.isInteger(status) ? status : null
+	};
+}
+
 function optionalLinkProductUnavailable(error: unknown): boolean {
 	return new Set(['INVALID_PRODUCT', 'PRODUCT_NOT_ENABLED', 'PRODUCTS_NOT_SUPPORTED']).has(
 		plaidErrorCode(error) ?? ''
@@ -230,6 +263,10 @@ function optionalLinkProductUnavailable(error: unknown): boolean {
 
 async function sanitizedPlaidError(error: unknown, itemId?: string): Promise<AppError> {
 	const code = plaidErrorCode(error);
+	console.error('Plaid request failed', {
+		...plaidErrorDiagnostic(error),
+		...(itemId ? { connectionRef: plaidConnectionLogReference(itemId) } : {})
+	});
 	if (code === 'ITEM_LOGIN_REQUIRED' && itemId) {
 		await markPlaidItemNeedsUpdate(itemId);
 		return new AppError('PLAID_LOGIN_REQUIRED', 'This connection needs to be updated.', 409);
@@ -1101,19 +1138,45 @@ export async function refreshPlaidInvestments(localItemId: string): Promise<
 
 export async function syncAllPlaidItems(): Promise<{
 	syncedItems: number;
+	failedItems: number;
 	cardCount: number;
 	accountCount: number;
 	transactionCount: number;
 	lastSyncedAt: string | null;
 }> {
 	const connections = await listPlaidConnectionTenants();
-	const results = await Promise.all(
+	const outcomes = await Promise.allSettled(
 		connections.map(({ tenantId, connection }) =>
 			runAsTenant(tenantId, () => syncPlaidItem(connection.id))
 		)
 	);
+	const results: Array<Awaited<ReturnType<typeof syncPlaidItem>>> = [];
+	let firstFailure: unknown;
+	let failedItems = 0;
+	for (const [index, outcome] of outcomes.entries()) {
+		if (outcome.status === 'fulfilled') {
+			results.push(outcome.value);
+			continue;
+		}
+		failedItems += 1;
+		firstFailure ??= outcome.reason;
+		const appError =
+			outcome.reason instanceof AppError
+				? outcome.reason
+				: new AppError('INTERNAL_ERROR', 'The connection could not be synced.', 500);
+		const connection = connections[index].connection;
+		console.error('Plaid scheduled connection sync failed', {
+			institutionName:
+				safePlaidDiagnosticText(connection.institutionName, 80) ?? 'Unknown institution',
+			connectionRef: plaidConnectionLogReference(connection.id),
+			errorCode: appError.code,
+			status: appError.status
+		});
+	}
+	if (failedItems > 0 && results.length === 0) throw firstFailure;
 	return {
 		syncedItems: results.length,
+		failedItems,
 		cardCount: results.reduce((total, result) => total + result.count, 0),
 		accountCount: results.reduce((total, result) => total + result.accountCount, 0),
 		transactionCount: results.reduce((total, result) => total + result.transactionCount, 0),

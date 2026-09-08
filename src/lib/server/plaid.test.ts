@@ -120,6 +120,7 @@ import {
 	refreshPlaidInvestments,
 	refreshPlaidTransactions,
 	resetPlaidClientForTests,
+	syncAllPlaidItems,
 	syncPlaidItem
 } from './plaid';
 import { listPlaidConnections, markPlaidItemNeedsUpdate, savePlaidItem } from './plaid-store';
@@ -1890,6 +1891,74 @@ describe.sequential('Plaid transaction history', () => {
 			transactionHistoryStatus: 'preparing'
 		});
 		expect((await listCardTransactions(card.id)).transactions).toEqual([]);
+	});
+
+	it('keeps scheduled syncs running when one Plaid connection requires repair', async () => {
+		await savePlaidItem('provider-item-bmo', 'bmo-access-value', 'BMO (US)');
+		await savePlaidItem('provider-item-healthy', 'healthy-access-value', 'Healthy Bank');
+		plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
+		plaidMocks.accountsBalanceGet.mockImplementation((request: { access_token?: string }) => {
+			if (request.access_token === 'bmo-access-value') {
+				return Promise.reject({
+					response: {
+						status: 400,
+						data: {
+							error_code: 'ITEM_LOGIN_REQUIRED',
+							error_type: 'ITEM_ERROR',
+							request_id: 'bmo-request-id',
+							error_message: 'the login details need attention',
+							display_message: 'Reconnect this institution.',
+							suggested_action: 'Prompt the user to update the Item.'
+						}
+					}
+				});
+			}
+			return Promise.resolve(liabilityResponse());
+		});
+		const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+		const result = await syncAllPlaidItems();
+
+		expect(result).toMatchObject({
+			syncedItems: 1,
+			failedItems: 1,
+			cardCount: 1,
+			accountCount: 0,
+			transactionCount: 0
+		});
+		expect(result.lastSyncedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+		expect(await listPlaidConnections()).toMatchObject([
+			{ institutionName: 'BMO (US)', status: 'needs_update', lastSyncedAt: null },
+			{ institutionName: 'Healthy Bank', status: 'healthy', lastSyncedAt: result.lastSyncedAt }
+		]);
+		const serializedLogs = JSON.stringify(errorLog.mock.calls);
+		expect(serializedLogs).toContain('bmo-request-id');
+		expect(serializedLogs).toContain('ITEM_ERROR');
+		expect(serializedLogs).toContain('BMO (US)');
+		expect(serializedLogs).not.toContain('bmo-access-value');
+		errorLog.mockRestore();
+	});
+
+	it('still fails a scheduled sync when every Plaid connection fails', async () => {
+		await savePlaidItem('provider-item-bmo', 'bmo-access-value', 'BMO (US)');
+		plaidMocks.accountsBalanceGet.mockRejectedValue({
+			response: {
+				status: 400,
+				data: {
+					error_code: 'ITEM_LOGIN_REQUIRED',
+					error_type: 'ITEM_ERROR',
+					request_id: 'all-failed-request-id'
+				}
+			}
+		});
+		const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+		await expect(syncAllPlaidItems()).rejects.toMatchObject({
+			code: 'PLAID_LOGIN_REQUIRED',
+			status: 409
+		});
+		expect(JSON.stringify(errorLog.mock.calls)).toContain('all-failed-request-id');
+		errorLog.mockRestore();
 	});
 
 	it('restarts pagination from the original cursor when Plaid data changes mid-sync', async () => {

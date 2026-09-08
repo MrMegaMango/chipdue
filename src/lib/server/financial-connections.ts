@@ -28,6 +28,7 @@ export type ConnectionTransactionRefreshResult = ConnectionSyncResult & {
 
 export interface ConnectionsSyncResult {
 	syncedConnections: number;
+	failedConnections: number;
 	cardCount: number;
 	accountCount: number;
 	transactionCount: number;
@@ -73,6 +74,7 @@ const plaidAdapter: FinancialProviderAdapter = {
 		const result = await syncAllPlaidItems();
 		return {
 			syncedConnections: result.syncedItems,
+			failedConnections: result.failedItems,
 			cardCount: result.cardCount,
 			accountCount: result.accountCount,
 			transactionCount: result.transactionCount,
@@ -97,6 +99,7 @@ export function installationFinancialConnectionsStatus(): {
 function summarize(results: ConnectionSyncResult[]): ConnectionsSyncResult {
 	return {
 		syncedConnections: results.length,
+		failedConnections: 0,
 		cardCount: results.reduce((total, result) => total + result.cardCount, 0),
 		accountCount: results.reduce((total, result) => total + result.accountCount, 0),
 		transactionCount: results.reduce((total, result) => total + result.transactionCount, 0),
@@ -199,6 +202,7 @@ export async function syncAllTenantFinancialConnections(): Promise<ConnectionsSy
 	const results = await Promise.all(PROVIDERS.map((adapter) => adapter.syncAllTenants()));
 	return {
 		syncedConnections: results.reduce((total, result) => total + result.syncedConnections, 0),
+		failedConnections: results.reduce((total, result) => total + result.failedConnections, 0),
 		cardCount: results.reduce((total, result) => total + result.cardCount, 0),
 		accountCount: results.reduce((total, result) => total + result.accountCount, 0),
 		transactionCount: results.reduce((total, result) => total + result.transactionCount, 0),
