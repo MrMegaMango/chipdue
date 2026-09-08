@@ -26,6 +26,14 @@ describe('credit score workspace', () => {
 		expect(chartSource).toContain('score-band');
 	});
 
+	it('makes automatic score monitoring primary and manual entry a backup', () => {
+		expect(pageSource).toContain('Connect automatic score');
+		expect(pageSource).toContain("resolve('/api/credit-scores/connection')");
+		expect(pageSource).toContain('Equifax VantageScore 4.0 via Method');
+		expect(pageSource).toContain('<summary>Manual backup</summary>');
+		expect(pageSource).toContain('identity_verification.identity.completed');
+	});
+
 	it('keeps score data out of persistent browser storage', () => {
 		expect(pageSource).not.toContain('localStorage');
 		expect(pageSource).not.toContain('sessionStorage');

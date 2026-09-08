@@ -1,6 +1,6 @@
 # ChipDue
 
-ChipDue is a privacy-first financial workspace for tracking bank and brokerage accounts, signup bonuses, investment performance, credit-card payments, and the deadlines that connect them. Optional financial-data connections can automatically sync eligible accounts, while manual entry remains available for every institution and bonus detail. Plaid handles account sync and can provide inputs for estimated brokerage history; the official E*TRADE API can add read-only open orders and alternate reconstruction inputs. Neither is required.
+ChipDue is a privacy-first financial workspace for tracking bank and brokerage accounts, signup bonuses, investment performance, credit-card payments, credit scores, and the deadlines that connect them. Optional connections can automatically sync eligible accounts and an Equifax VantageScore 4.0, while manual entry remains available as a fallback. Plaid handles account sync, Method handles consent-based score monitoring, and the official E*TRADE API can add read-only open orders and alternate reconstruction inputs. None is required.
 
 Choose one of two deployment modes:
 
@@ -19,7 +19,7 @@ Choose one of two deployment modes:
 - Build clearly labeled estimated daily history for Plaid-connected brokerage accounts—including Chase Self-Directed—from current holdings, up to 24 months of investment activity, and public market closes.
 - Load current E*TRADE open orders and use E*TRADE positions and activity as alternate reconstruction inputs without enabling trade placement, changes, or cancellation.
 - Track statement balance, minimum due, current balance, due date, statement date, and autopay status.
-- Record private credit score readings by bureau, scoring model, source, and date, with like-for-like change tracking and a visual history.
+- Automatically import an Equifax VantageScore 4.0 and its score factors after one secure identity-verification flow, then retain encrypted history as Method monitors for changes. Manual entry is only a backup.
 - Automatically identify supported linked cards from provider metadata, populate their reward type, base earning rate, and bonus categories, and show estimated points, miles, or cash back beside eligible transactions. Manual overrides remain available for unmatched cards.
 - Create isolated cloud accounts with Google sign-in without storing an email, profile, Google token, or refresh token.
 - Let each cloud account encrypt and use its own Plaid Production credentials, so Plaid Items and plan allowances are not shared between users.
@@ -40,6 +40,7 @@ Private cloud mode
 Browser memory -> authenticated Vercel Function -> encrypted Neon Postgres rows
                                       |
                                       +-> Plaid, only when configured and used
+                                      +-> Method, only when automatic score monitoring is connected
                                       +-> E*TRADE, only when configured and its data is requested
                                       +-> Yahoo Finance, only when estimated history is built
                                       +-> Google, only during optional sign-in
@@ -73,6 +74,7 @@ Cloud encryption protects against a database-only disclosure. It is not zero-kno
 - npm
 - Git
 - Optional account sync: a Plaid account
+- Optional automatic credit score monitoring: a Method account with Credit Score access
 - Optional E*TRADE open orders and E*TRADE-sourced estimates: an E*TRADE developer account with a live individual key
 - Optional cloud hosting: personal Vercel and Neon accounts
 - Optional Google sign-in: a Google Cloud project and Web OAuth client
@@ -163,6 +165,23 @@ Official references:
 - [Plaid Liabilities](https://plaid.com/docs/liabilities/)
 - [Plaid Transactions](https://plaid.com/docs/transactions/)
 - [Plaid Link security flow](https://plaid.com/docs/link/)
+
+## Optional automatic credit score setup
+
+ChipDue can retrieve a real Equifax VantageScore 4.0; it does not estimate a score from bank activity. Once connected, Method's Credit Score subscription monitors for changes and ChipDue's scheduled sync imports new score records and factors automatically.
+
+1. Create a Method team and request Credit Score Product and Subscription access. Method notes that some subscriptions require team-by-team enablement and elevated account verification.
+2. Add `METHOD_API_KEY` and `METHOD_ENV=production` to Vercel's **Production** environment only. Use `development` for synthetic local testing.
+3. In ChipDue, open **Score**, choose **Connect**, and complete Method's embedded consent and identity-verification flow. ChipDue sends the legal name and phone used to create the session; additional identity details are entered directly into Method's flow.
+4. After verification, ChipDue enrolls the entity in continuous credit-score monitoring, requests the initial score, and catches up automatically during scheduled syncs. **Sync now** remains available for an immediate refresh.
+
+The Method entity ID, subscription ID, session state, errors, score history, and factors are encrypted at rest. The API key stays server-side. ChipDue does not persist the legal name, phone, date of birth, address, or SSN in its own database. Method receives identity information and may perform a soft inquiry; a soft inquiry does not affect the credit score. Availability and pricing depend on Method approval and terms.
+
+Official references:
+
+- [Method Credit Scores](https://docs.methodfi.com/2026-03-30/reference/entities/credit-scores/overview)
+- [Method Entity Subscriptions](https://docs.methodfi.com/2026-03-30/reference/entities/subscriptions/overview)
+- [Method Opal identity verification](https://docs.methodfi.com/opal/identity/overview)
 
 ## Optional E*TRADE orders and estimated history
 

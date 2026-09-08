@@ -19,6 +19,8 @@ function entry(
 		bureau,
 		model: 'FICO Score 8',
 		source: 'Issuer',
+		origin: 'manual',
+		factors: [],
 		recordedDate,
 		notes: null,
 		createdAt: `${recordedDate}T12:00:00.000Z`,

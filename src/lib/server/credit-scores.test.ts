@@ -11,6 +11,7 @@ import {
 	createCreditScore,
 	deleteCreditScore,
 	listCreditScores,
+	upsertConnectedCreditScore,
 	updateCreditScore
 } from './credit-scores';
 
@@ -93,5 +94,48 @@ describe.sequential('encrypted credit score records', () => {
 
 		await deleteCreditScore(older.id);
 		expect(await listCreditScores()).toHaveLength(1);
+	});
+
+	it('upserts automatic readings by provider id and keeps them read-only', async () => {
+		const first = await upsertConnectedCreditScore({
+			externalId: 'crs_example123:equifax:vantage_4',
+			score: 742,
+			bureau: 'equifax',
+			model: 'VantageScore 4.0',
+			source: 'Method',
+			recordedDate: '2026-09-07',
+			factors: [{ code: '00034', description: 'Revolving balances are too high' }]
+		});
+		const updated = await upsertConnectedCreditScore({
+			externalId: 'crs_example123:equifax:vantage_4',
+			score: 746,
+			bureau: 'equifax',
+			model: 'VantageScore 4.0',
+			source: 'Method',
+			recordedDate: '2026-09-07',
+			factors: [{ code: '00012', description: 'Oldest account is too recent' }]
+		});
+
+		expect(first.created).toBe(true);
+		expect(updated.created).toBe(false);
+		expect(updated.entry).toMatchObject({
+			id: first.entry.id,
+			score: 746,
+			origin: 'automatic',
+			factors: [{ code: '00012', description: 'Oldest account is too recent' }]
+		});
+		expect(await listCreditScores()).toHaveLength(1);
+		await expect(updateCreditScore(first.entry.id, { score: 750 })).rejects.toMatchObject({
+			code: 'CREDIT_SCORE_READ_ONLY'
+		});
+		await expect(deleteCreditScore(first.entry.id)).rejects.toMatchObject({
+			code: 'CREDIT_SCORE_READ_ONLY'
+		});
+
+		const durableText = JSON.stringify(
+			getDatabase().prepare('SELECT payload_enc FROM cards').all()
+		);
+		expect(durableText).not.toContain('crs_example123');
+		expect(durableText).not.toContain('Oldest account is too recent');
 	});
 });

@@ -3,7 +3,11 @@
 	import { onMount } from 'svelte';
 	import CreditScoreChart from '$lib/components/CreditScoreChart.svelte';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
-	import type { CreditBureau, CreditScoreEntry } from '$lib/credit-score-types';
+	import type {
+		CreditBureau,
+		CreditScoreConnectionStatus,
+		CreditScoreEntry
+	} from '$lib/credit-score-types';
 	import {
 		creditBureauLabel,
 		creditScoreChange,
@@ -21,6 +25,17 @@
 		source: string;
 		recordedDate: string;
 		notes: string;
+	};
+	type AutomaticSetupForm = {
+		firstName: string;
+		lastName: string;
+		phone: string;
+	};
+	type OpalSession = {
+		token: string;
+		sessionId: string;
+		opalUrl: string;
+		opalOrigin: string;
 	};
 
 	const fullDate = new Intl.DateTimeFormat('en-US', {
@@ -53,6 +68,7 @@
 
 	let mode = $state<RuntimeMode | null>(null);
 	let entries = $state<CreditScoreEntry[]>([]);
+	let connection = $state<CreditScoreConnectionStatus | null>(null);
 	let loading = $state(true);
 	let pageError = $state('');
 	let dialogOpen = $state(false);
@@ -61,6 +77,12 @@
 	let formError = $state('');
 	let busy = $state(false);
 	let deletingId = $state<string | null>(null);
+	let automaticSetupOpen = $state(false);
+	let automaticSetupForm = $state<AutomaticSetupForm>({ firstName: '', lastName: '', phone: '' });
+	let automaticSetupError = $state('');
+	let automaticSetupBusy = $state(false);
+	let automaticSyncing = $state(false);
+	let opalSession = $state<OpalSession | null>(null);
 	let loggingOut = $state(false);
 	let toast = $state('');
 	let toastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -138,6 +160,16 @@
 		return value ? fullDate.format(new Date(`${value}T12:00:00`)) : 'No reading yet';
 	}
 
+	function formatTimestamp(value: string | null): string {
+		if (!value) return 'Not synced yet';
+		return new Intl.DateTimeFormat('en-US', {
+			month: 'short',
+			day: 'numeric',
+			hour: 'numeric',
+			minute: '2-digit'
+		}).format(new Date(value));
+	}
+
 	function formatChange(value: number | null): string {
 		if (value === null) return 'Baseline';
 		if (value === 0) return 'No change';
@@ -167,6 +199,105 @@
 
 	function closeDialog(): void {
 		if (!busy) dialogOpen = false;
+	}
+
+	async function openAutomaticSetup(): Promise<void> {
+		automaticSetupError = '';
+		if (connection?.state === 'onboarding') {
+			automaticSetupBusy = true;
+			try {
+				const response = await requestJson<{ session: OpalSession }>(
+					resolve('/api/credit-scores/connection'),
+					{ method: 'POST', body: JSON.stringify({ action: 'resume' }) }
+				);
+				opalSession = response.session;
+				automaticSetupOpen = true;
+			} catch (error) {
+				automaticSetupError = readableError(error, 'Automatic setup could not be resumed.');
+				automaticSetupOpen = true;
+			} finally {
+				automaticSetupBusy = false;
+			}
+			return;
+		}
+		opalSession = null;
+		automaticSetupOpen = true;
+	}
+
+	function closeAutomaticSetup(): void {
+		if (!automaticSetupBusy) automaticSetupOpen = false;
+	}
+
+	async function startAutomaticSetup(event: SubmitEvent): Promise<void> {
+		event.preventDefault();
+		automaticSetupBusy = true;
+		automaticSetupError = '';
+		try {
+			const response = await requestJson<{ session: OpalSession }>(
+				resolve('/api/credit-scores/connection'),
+				{
+					method: 'POST',
+					body: JSON.stringify({ action: 'start', ...automaticSetupForm })
+				}
+			);
+			opalSession = response.session;
+			await reloadEntries();
+		} catch (error) {
+			automaticSetupError = readableError(error, 'Automatic setup could not be started.');
+		} finally {
+			automaticSetupBusy = false;
+		}
+	}
+
+	function handleOpalMessage(event: MessageEvent): void {
+		if (!opalSession || event.origin !== opalSession.opalOrigin || automaticSetupBusy) return;
+		const payload = event.data as { type?: unknown } | null;
+		if (
+			payload?.type === 'identity_verification.identity.completed' ||
+			payload?.type === 'opal.session.completed'
+		) {
+			void activateAutomaticSetup();
+		}
+	}
+
+	async function activateAutomaticSetup(): Promise<void> {
+		if (automaticSetupBusy) return;
+		automaticSetupBusy = true;
+		automaticSetupError = '';
+		try {
+			await requestJson(resolve('/api/credit-scores/connection/activate'), { method: 'POST' });
+			automaticSetupOpen = false;
+			opalSession = null;
+			await reloadEntries();
+			showToast('Automatic credit score monitoring is connected.');
+		} catch (error) {
+			automaticSetupError = readableError(
+				error,
+				'Identity verification finished, but automatic monitoring could not be activated.'
+			);
+		} finally {
+			automaticSetupBusy = false;
+		}
+	}
+
+	async function refreshAutomaticScores(): Promise<void> {
+		if (automaticSyncing) return;
+		automaticSyncing = true;
+		pageError = '';
+		try {
+			const result = await requestJson<{ imported: number }>(
+				resolve('/api/credit-scores/connection/sync'),
+				{ method: 'POST' }
+			);
+			await reloadEntries();
+			showToast(
+				result.imported ? 'A new credit score was imported.' : 'Credit score is up to date.'
+			);
+		} catch (error) {
+			pageError = readableError(error, 'Automatic credit score sync could not finish.');
+		} finally {
+			automaticSyncing = false;
+		}
 	}
 
 	async function saveEntry(event: SubmitEvent): Promise<void> {
@@ -208,10 +339,12 @@
 	}
 
 	async function reloadEntries(): Promise<void> {
-		const response = await requestJson<{ entries: CreditScoreEntry[] }>(
-			resolve('/api/credit-scores')
-		);
+		const response = await requestJson<{
+			entries: CreditScoreEntry[];
+			connection: CreditScoreConnectionStatus;
+		}>(resolve('/api/credit-scores'));
 		entries = response.entries;
+		connection = response.connection;
 	}
 
 	async function deleteEntry(entry: CreditScoreEntry): Promise<void> {
@@ -250,7 +383,9 @@
 	}
 
 	function handleKeydown(event: KeyboardEvent): void {
-		if (event.key === 'Escape' && dialogOpen) closeDialog();
+		if (event.key !== 'Escape') return;
+		if (dialogOpen) closeDialog();
+		else if (automaticSetupOpen) closeAutomaticSetup();
 	}
 </script>
 
@@ -258,11 +393,11 @@
 	<title>Credit score — ChipDue</title>
 	<meta
 		name="description"
-		content="Privately track credit scores by bureau, scoring model, source, and date."
+		content="Automatically monitor an encrypted credit score history and the factors behind changes."
 	/>
 </svelte:head>
 
-<svelte:window onkeydown={handleKeydown} />
+<svelte:window onkeydown={handleKeydown} onmessage={handleOpalMessage} />
 
 <a class="skip-link" href="#credit-score-main">Skip to credit score</a>
 
@@ -275,12 +410,88 @@
 				<p class="finance-kicker">Credit health</p>
 				<h1 id="credit-score-title">Credit score</h1>
 				<p>
-					Record the score you see, where it came from, and its scoring model. ChipDue keeps each
-					reading private and compares like-for-like bureau updates.
+					Connect once. ChipDue then imports verified score changes automatically, keeps the history
+					encrypted, and explains what moved.
 				</p>
 			</div>
-			<button class="finance-button" type="button" onclick={openAdd}>+ Add reading</button>
+			{#if connection?.state === 'connected' || connection?.state === 'needs_attention'}
+				<button
+					class="finance-button"
+					type="button"
+					onclick={refreshAutomaticScores}
+					disabled={automaticSyncing}
+				>
+					{automaticSyncing ? 'Syncing…' : 'Sync now'}
+				</button>
+			{:else if connection?.state !== 'not_configured'}
+				<button
+					class="finance-button"
+					type="button"
+					onclick={openAutomaticSetup}
+					disabled={automaticSetupBusy}
+				>
+					{connection?.state === 'onboarding' ? 'Finish connection' : 'Connect automatic score'}
+				</button>
+			{/if}
 		</section>
+
+		{#if !loading && connection}
+			<section
+				class:attention={connection.state === 'needs_attention'}
+				class:connected={connection.state === 'connected'}
+				class="automatic-score-panel"
+				aria-labelledby="automatic-score-title"
+			>
+				<div class="automatic-score-icon" aria-hidden="true">
+					{connection.state === 'connected'
+						? '✓'
+						: connection.state === 'needs_attention'
+							? '!'
+							: '↻'}
+				</div>
+				<div>
+					<div class="automatic-score-heading">
+						<h2 id="automatic-score-title">Automatic score sync</h2>
+						<span
+							>{connection.state === 'connected'
+								? 'Monitoring'
+								: connection.state.replaceAll('_', ' ')}</span
+						>
+					</div>
+					<p>{connection.message}</p>
+					{#if connection.state === 'connected'}
+						<small>
+							Equifax VantageScore 4.0 via Method · Last checked {formatTimestamp(
+								connection.lastSyncedAt
+							)}
+						</small>
+					{:else if connection.state === 'not_configured'}
+						<small
+							>No score entry is required. The secure provider must be enabled once for ChipDue.</small
+						>
+					{:else}
+						<small>The identity check is a soft inquiry and does not lower your score.</small>
+					{/if}
+				</div>
+				{#if connection.state === 'disconnected' || connection.state === 'onboarding'}
+					<button
+						class="finance-button"
+						type="button"
+						onclick={openAutomaticSetup}
+						disabled={automaticSetupBusy}
+					>
+						{connection.state === 'onboarding' ? 'Continue' : 'Connect'}
+					</button>
+				{:else if connection.state === 'needs_attention'}
+					<button
+						class="finance-button"
+						type="button"
+						onclick={refreshAutomaticScores}
+						disabled={automaticSyncing}>Retry</button
+					>
+				{/if}
+			</section>
+		{/if}
 
 		<section class="finance-summary" aria-label="Credit score summary">
 			<article>
@@ -300,7 +511,7 @@
 				</strong>
 			</article>
 			<article>
-				<span>Common score range</span>
+				<span>Score range</span>
 				<strong>{loading || !latestEntry ? '—' : creditScoreRange(latestEntry.score)}</strong>
 			</article>
 			<article>
@@ -322,6 +533,20 @@
 		{:else}
 			<CreditScoreChart {entries} />
 
+			{#if latestEntry?.factors.length}
+				<section class="score-factors" aria-labelledby="score-factors-title">
+					<div>
+						<p class="finance-kicker">Latest report</p>
+						<h2 id="score-factors-title">What is affecting your score</h2>
+					</div>
+					<ul>
+						{#each latestEntry.factors as factor (factor.code ?? factor.description)}
+							<li>{factor.description}</li>
+						{/each}
+					</ul>
+				</section>
+			{/if}
+
 			<section aria-labelledby="score-history-title">
 				<div class="finance-section-heading">
 					<div>
@@ -336,13 +561,23 @@
 
 				{#if entries.length === 0}
 					<div class="finance-empty score-empty">
-						<h2>Start with the score you can see today</h2>
+						<h2>
+							{connection?.state === 'connected'
+								? 'Waiting for your first automatic score'
+								: 'Connect once—never type a score again'}
+						</h2>
 						<p>
-							Issuer apps and credit-monitoring services often show a bureau and scoring model
-							beside the number. Save those details for meaningful comparisons later.
+							{connection?.state === 'connected'
+								? 'Your initial score request is processing. New score changes will appear here automatically.'
+								: 'Method verifies your identity securely, retrieves an Equifax VantageScore 4.0, and monitors it for changes.'}
 						</p>
-						<button class="finance-button" type="button" onclick={openAdd}>Add first reading</button
-						>
+						{#if connection?.state === 'disconnected' || connection?.state === 'onboarding'}
+							<button class="finance-button" type="button" onclick={openAutomaticSetup}>
+								{connection.state === 'onboarding'
+									? 'Finish connection'
+									: 'Connect automatic score'}
+							</button>
+						{/if}
 					</div>
 				{:else}
 					<div class="score-reading-list">
@@ -353,7 +588,11 @@
 									<span>{creditScoreRange(entry.score)}</span>
 								</div>
 								<div class="score-reading-copy">
-									<h3>{creditBureauLabel(entry.bureau)}</h3>
+									<h3>
+										{creditBureauLabel(entry.bureau)}
+										{#if entry.origin === 'automatic'}<span class="automatic-badge">Automatic</span
+											>{/if}
+									</h3>
 									<p>
 										{entry.model ?? 'Scoring model not entered'} · {entry.source ??
 											'Source not entered'}
@@ -362,16 +601,30 @@
 								</div>
 								<time datetime={entry.recordedDate}>{formatDate(entry.recordedDate)}</time>
 								<div class="score-reading-actions">
-									<button type="button" onclick={() => openEdit(entry)}>Edit</button>
-									<button class="delete" type="button" onclick={() => deleteEntry(entry)}>
-										{deletingId === entry.id ? 'Deleting…' : 'Delete'}
-									</button>
+									{#if entry.origin === 'manual'}
+										<button type="button" onclick={() => openEdit(entry)}>Edit</button>
+										<button class="delete" type="button" onclick={() => deleteEntry(entry)}>
+											{deletingId === entry.id ? 'Deleting…' : 'Delete'}
+										</button>
+									{:else}
+										<span class="locked-reading" title="Managed by automatic sync">Encrypted</span>
+									{/if}
 								</div>
 							</article>
 						{/each}
 					</div>
 				{/if}
 			</section>
+
+			<details class="manual-fallback">
+				<summary>Manual backup</summary>
+				<div>
+					<p>Only use this if a score provider is temporarily unavailable.</p>
+					<button class="finance-button secondary" type="button" onclick={openAdd}>
+						Add a manual reading
+					</button>
+				</div>
+			</details>
 
 			<section class="preapproval-panel" aria-labelledby="preapproval-title">
 				<div>
@@ -397,6 +650,100 @@
 		{/if}
 	</main>
 </div>
+
+{#if automaticSetupOpen}
+	<div class="finance-dialog-layer" role="presentation">
+		<div
+			class="finance-dialog automatic-setup-dialog"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="automatic-setup-title"
+		>
+			<header class="finance-dialog-header">
+				<div>
+					<h2 id="automatic-setup-title">Connect automatic credit score</h2>
+					<p>One secure identity check turns on ongoing score monitoring.</p>
+				</div>
+				<button type="button" aria-label="Close" onclick={closeAutomaticSetup}>×</button>
+			</header>
+			{#if automaticSetupError}
+				<p class="finance-form-error automatic-setup-error" role="alert">{automaticSetupError}</p>
+			{/if}
+			{#if opalSession}
+				<div class="opal-frame-wrap" aria-busy={automaticSetupBusy}>
+					<iframe
+						src={opalSession.opalUrl}
+						title="Method secure identity verification"
+						sandbox="allow-forms allow-popups allow-same-origin allow-scripts"
+					></iframe>
+					{#if automaticSetupBusy}
+						<p class="opal-status" role="status">Turning on automatic monitoring…</p>
+					{/if}
+				</div>
+			{:else}
+				<form class="finance-form" onsubmit={startAutomaticSetup}>
+					<p class="automatic-setup-copy">
+						Your legal name and phone number are sent to Method to create the verification session.
+						Any additional identity details are entered directly in Method’s secure flow; ChipDue
+						does not store them.
+					</p>
+					<div class="finance-form-grid">
+						<div class="finance-field">
+							<label for="automatic-first-name">Legal first name</label>
+							<input
+								id="automatic-first-name"
+								bind:value={automaticSetupForm.firstName}
+								autocomplete="given-name"
+								maxlength="80"
+								required
+							/>
+						</div>
+						<div class="finance-field">
+							<label for="automatic-last-name">Legal last name</label>
+							<input
+								id="automatic-last-name"
+								bind:value={automaticSetupForm.lastName}
+								autocomplete="family-name"
+								maxlength="80"
+								required
+							/>
+						</div>
+						<div class="finance-field wide">
+							<label for="automatic-phone">Mobile phone</label>
+							<input
+								id="automatic-phone"
+								bind:value={automaticSetupForm.phone}
+								autocomplete="tel"
+								inputmode="tel"
+								placeholder="+14155550123"
+								required
+							/>
+						</div>
+					</div>
+					<p class="automatic-setup-legal">
+						Continuing opens Method’s consent and identity-verification flow. It uses a soft inquiry
+						and does not lower your score.
+						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- External provider policy. -->
+						<a href="https://methodfi.com/legal/privacy" target="_blank" rel="noreferrer"
+							>Method privacy</a
+						>
+					</p>
+					<div class="finance-form-actions">
+						<button
+							class="finance-button secondary"
+							type="button"
+							onclick={closeAutomaticSetup}
+							disabled={automaticSetupBusy}>Cancel</button
+						>
+						<button class="finance-button" type="submit" disabled={automaticSetupBusy}>
+							{automaticSetupBusy ? 'Connecting…' : 'Continue securely'}
+						</button>
+					</div>
+				</form>
+			{/if}
+		</div>
+	</div>
+{/if}
 
 {#if dialogOpen}
 	<div class="finance-dialog-layer" role="presentation">
@@ -512,6 +859,133 @@
 		color: var(--red);
 	}
 
+	.automatic-score-panel {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr) auto;
+		gap: 0.9rem;
+		align-items: center;
+		margin: 0 0 1rem;
+		padding: 1rem;
+		border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line));
+		border-radius: 12px;
+		background: color-mix(in srgb, var(--accent) 8%, var(--paper));
+		box-shadow: var(--shadow-sm);
+	}
+
+	.automatic-score-panel.connected {
+		border-color: color-mix(in srgb, var(--positive) 42%, var(--line));
+		background: color-mix(in srgb, var(--positive) 7%, var(--paper));
+	}
+
+	.automatic-score-panel.attention {
+		border-color: color-mix(in srgb, var(--red) 40%, var(--line));
+		background: color-mix(in srgb, var(--red) 5%, var(--paper));
+	}
+
+	.automatic-score-icon {
+		display: grid;
+		width: 2.1rem;
+		height: 2.1rem;
+		place-items: center;
+		border-radius: 999px;
+		color: white;
+		font-size: 0.82rem;
+		font-weight: 800;
+		background: var(--accent-dark);
+	}
+
+	.connected .automatic-score-icon {
+		background: var(--positive);
+	}
+
+	.attention .automatic-score-icon {
+		background: var(--red);
+	}
+
+	.automatic-score-heading {
+		display: flex;
+		gap: 0.55rem;
+		align-items: center;
+		flex-wrap: wrap;
+	}
+
+	.automatic-score-heading h2 {
+		margin: 0;
+		font-size: 0.88rem;
+	}
+
+	.automatic-score-heading span,
+	.automatic-badge {
+		padding: 0.2rem 0.42rem;
+		border-radius: 999px;
+		color: var(--accent-dark);
+		font-size: 0.52rem;
+		font-weight: 760;
+		line-height: 1;
+		text-transform: capitalize;
+		background: color-mix(in srgb, var(--accent) 14%, white);
+	}
+
+	.automatic-score-panel p {
+		margin: 0.3rem 0 0;
+		color: var(--ink-soft);
+		font-size: 0.69rem;
+		line-height: 1.45;
+	}
+
+	.automatic-score-panel small {
+		display: block;
+		margin-top: 0.22rem;
+		color: var(--muted);
+		font-size: 0.58rem;
+		line-height: 1.45;
+	}
+
+	.score-factors {
+		display: grid;
+		grid-template-columns: minmax(190px, 0.7fr) minmax(0, 1.3fr);
+		gap: 1rem;
+		margin: 1rem 0 2.4rem;
+		padding: 1.1rem;
+		border: 1px solid var(--line);
+		border-radius: 12px;
+		background: var(--paper);
+		box-shadow: var(--shadow-sm);
+	}
+
+	.score-factors h2 {
+		margin: 0;
+		font-size: 1rem;
+		letter-spacing: -0.02em;
+	}
+
+	.score-factors ul {
+		display: grid;
+		gap: 0.5rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	.score-factors li {
+		position: relative;
+		padding-left: 0.85rem;
+		color: var(--ink-soft);
+		font-size: 0.67rem;
+		line-height: 1.45;
+	}
+
+	.score-factors li::before {
+		position: absolute;
+		top: 0.55em;
+		left: 0;
+		width: 0.3rem;
+		height: 0.3rem;
+		border-radius: 999px;
+		background: var(--accent);
+		content: '';
+	}
+
 	.score-reading-list {
 		display: grid;
 		gap: 0.65rem;
@@ -551,6 +1025,10 @@
 	}
 
 	.score-reading-copy h3 {
+		display: flex;
+		gap: 0.45rem;
+		align-items: center;
+		flex-wrap: wrap;
 		margin: 0;
 		font-size: 0.85rem;
 	}
@@ -590,6 +1068,41 @@
 
 	.score-reading-actions button.delete {
 		color: var(--red);
+	}
+
+	.locked-reading {
+		color: var(--faint);
+		font-size: 0.58rem;
+		font-weight: 680;
+	}
+
+	.manual-fallback {
+		margin: -1.2rem 0 3rem;
+		padding: 0.75rem 0.9rem;
+		border: 1px dashed var(--line);
+		border-radius: 10px;
+		background: rgba(255, 255, 255, 0.38);
+	}
+
+	.manual-fallback summary {
+		color: var(--muted);
+		font-size: 0.65rem;
+		font-weight: 720;
+		cursor: pointer;
+	}
+
+	.manual-fallback > div {
+		display: flex;
+		gap: 0.8rem;
+		align-items: center;
+		justify-content: space-between;
+		padding-top: 0.8rem;
+	}
+
+	.manual-fallback p {
+		margin: 0;
+		color: var(--muted);
+		font-size: 0.63rem;
 	}
 
 	.preapproval-panel {
@@ -662,7 +1175,71 @@
 		width: min(100%, 620px);
 	}
 
+	.automatic-setup-dialog {
+		width: min(100%, 720px);
+	}
+
+	.automatic-setup-copy,
+	.automatic-setup-legal {
+		margin: 0 0 1rem;
+		color: var(--muted);
+		font-size: 0.66rem;
+		line-height: 1.55;
+	}
+
+	.automatic-setup-legal {
+		margin: 1rem 0 0;
+	}
+
+	.automatic-setup-legal a {
+		color: var(--accent-dark);
+		font-weight: 700;
+	}
+
+	.automatic-setup-error {
+		margin: 1rem;
+	}
+
+	.opal-frame-wrap {
+		position: relative;
+		min-height: 620px;
+		background: white;
+	}
+
+	.opal-frame-wrap iframe {
+		display: block;
+		width: 100%;
+		height: min(70vh, 680px);
+		min-height: 620px;
+		border: 0;
+	}
+
+	.opal-status {
+		position: absolute;
+		inset: 0;
+		display: grid;
+		place-items: center;
+		margin: 0;
+		color: var(--ink-soft);
+		font-size: 0.72rem;
+		font-weight: 700;
+		background: rgba(255, 253, 249, 0.94);
+	}
+
 	@media (max-width: 760px) {
+		.automatic-score-panel {
+			grid-template-columns: auto minmax(0, 1fr);
+		}
+
+		.automatic-score-panel > .finance-button {
+			grid-column: 2;
+			justify-self: start;
+		}
+
+		.score-factors {
+			grid-template-columns: 1fr;
+		}
+
 		.score-reading {
 			grid-template-columns: 72px minmax(0, 1fr) auto;
 		}
@@ -684,6 +1261,19 @@
 	}
 
 	@media (max-width: 520px) {
+		.automatic-score-panel {
+			grid-template-columns: 1fr;
+		}
+
+		.automatic-score-panel > .finance-button {
+			grid-column: 1;
+		}
+
+		.manual-fallback > div {
+			align-items: flex-start;
+			flex-direction: column;
+		}
+
 		.preapproval-grid {
 			grid-template-columns: 1fr;
 		}

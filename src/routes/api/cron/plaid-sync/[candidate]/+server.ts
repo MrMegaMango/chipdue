@@ -1,6 +1,7 @@
 import type { RequestHandler } from './$types';
 import { syncAllTenantFinancialConnections } from '$lib/server/financial-connections';
 import { apiError, apiJson } from '$lib/server/http';
+import { syncAllTenantMethodCreditScores } from '$lib/server/method-credit-score';
 import {
 	assertScheduledSyncRequest,
 	claimScheduledSync,
@@ -20,9 +21,12 @@ export const GET: RequestHandler = async ({ request, params }) => {
 			return apiJson({ ok: true, skipped: 'already-running-or-complete' });
 		}
 
-		const result = await syncAllTenantFinancialConnections();
+		const [result, creditScores] = await Promise.all([
+			syncAllTenantFinancialConnections(),
+			syncAllTenantMethodCreditScores()
+		]);
 		await completeScheduledSync(window);
-		return apiJson({ ok: true, period: window.period, ...result });
+		return apiJson({ ok: true, period: window.period, ...result, creditScores });
 	} catch (error) {
 		if (window) {
 			try {

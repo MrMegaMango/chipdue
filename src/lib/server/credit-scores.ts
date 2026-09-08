@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { CreditScoreEntry } from '$lib/credit-score-types';
+import type { CreditBureau, CreditScoreEntry, CreditScoreFactor } from '$lib/credit-score-types';
 import { cloudQuery } from './cloud-database';
 import {
 	creditBureauSchema,
@@ -31,6 +31,17 @@ const creditScorePayloadSchema = z.object({
 	bureau: creditBureauSchema,
 	model: z.string().max(80).nullable(),
 	source: z.string().max(80).nullable(),
+	origin: z.enum(['manual', 'automatic']).optional(),
+	externalId: z.string().min(1).max(200).nullable().optional(),
+	factors: z
+		.array(
+			z.object({
+				code: z.string().max(40).nullable(),
+				description: z.string().min(1).max(500)
+			})
+		)
+		.max(12)
+		.optional(),
 	recordedDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
 	notes: z.string().max(2_000).nullable()
 });
@@ -56,6 +67,8 @@ function toCreditScore(row: CreditScoreRow, payload: CreditScorePayload): Credit
 		bureau: payload.bureau,
 		model: payload.model,
 		source: payload.source,
+		origin: payload.origin ?? 'manual',
+		factors: payload.factors ?? [],
 		recordedDate: payload.recordedDate,
 		notes: payload.notes,
 		createdAt: row.created_at,
@@ -124,7 +137,10 @@ export async function createCreditScore(input: CreateCreditScoreData): Promise<C
 	const payload: CreditScorePayload = {
 		...tenantPayloadFields(),
 		recordType: 'credit_score',
-		...input
+		...input,
+		origin: 'manual',
+		externalId: null,
+		factors: []
 	};
 	const encrypted = encryptJson(payload, `card:${id}`);
 	if (getRuntimeMode() === 'cloud') {
@@ -153,6 +169,13 @@ export async function updateCreditScore(
 	changes: UpdateCreditScoreData
 ): Promise<CreditScoreEntry> {
 	const existing = await getCreditScore(id);
+	if (existing.origin === 'automatic') {
+		throw new AppError(
+			'CREDIT_SCORE_READ_ONLY',
+			'Automatically synced credit scores cannot be edited.',
+			409
+		);
+	}
 	const payload: CreditScorePayload = {
 		...tenantPayloadFields(),
 		recordType: 'credit_score',
@@ -160,6 +183,9 @@ export async function updateCreditScore(
 		bureau: changes.bureau ?? existing.bureau,
 		model: changes.model === undefined ? existing.model : changes.model,
 		source: changes.source === undefined ? existing.source : changes.source,
+		origin: 'manual',
+		externalId: null,
+		factors: [],
 		recordedDate: changes.recordedDate ?? existing.recordedDate,
 		notes: changes.notes === undefined ? existing.notes : changes.notes
 	};
@@ -188,7 +214,14 @@ export async function updateCreditScore(
 }
 
 export async function deleteCreditScore(id: string): Promise<void> {
-	await getCreditScore(id);
+	const existing = await getCreditScore(id);
+	if (existing.origin === 'automatic') {
+		throw new AppError(
+			'CREDIT_SCORE_READ_ONLY',
+			'Automatically synced credit scores are managed by their connection.',
+			409
+		);
+	}
 	if (getRuntimeMode() === 'cloud') {
 		await cloudQuery(
 			`DELETE FROM public.carddue_cards
@@ -198,4 +231,94 @@ export async function deleteCreditScore(id: string): Promise<void> {
 		return;
 	}
 	getDatabase().prepare(`DELETE FROM cards WHERE id = ? AND source = 'manual'`).run(id);
+}
+
+export interface ConnectedCreditScoreInput {
+	externalId: string;
+	score: number;
+	bureau: CreditBureau;
+	model: string;
+	source: string;
+	recordedDate: string;
+	factors: CreditScoreFactor[];
+}
+
+async function saveConnectedPayload(
+	id: string,
+	input: ConnectedCreditScoreInput,
+	createdAt?: string
+): Promise<CreditScoreEntry> {
+	const now = new Date().toISOString();
+	const payload: CreditScorePayload = creditScorePayloadSchema.parse({
+		...tenantPayloadFields(),
+		recordType: 'credit_score',
+		score: input.score,
+		bureau: input.bureau,
+		model: input.model,
+		source: input.source,
+		origin: 'automatic',
+		externalId: input.externalId,
+		factors: input.factors,
+		recordedDate: input.recordedDate,
+		notes: null
+	});
+	const encrypted = encryptJson(payload, `card:${id}`);
+	if (createdAt) {
+		if (getRuntimeMode() === 'cloud') {
+			await cloudQuery(
+				`INSERT INTO public.carddue_cards
+				 (id, source, plaid_item_id, external_account_ref, payload_enc,
+				  last_synced_at, created_at, updated_at, tenant_ref)
+				 VALUES ($1, 'manual', NULL, NULL, $2, NULL, $3, $4, $5)`,
+				[id, encrypted, createdAt, now, tenantReference()]
+			);
+		} else {
+			getDatabase()
+				.prepare(
+					`INSERT INTO cards
+					 (id, source, plaid_item_id, external_account_ref, payload_enc,
+					  last_synced_at, created_at, updated_at)
+					 VALUES (?, 'manual', NULL, NULL, ?, NULL, ?, ?)`
+				)
+				.run(id, encrypted, createdAt, now);
+		}
+	} else if (getRuntimeMode() === 'cloud') {
+		await cloudQuery(
+			`UPDATE public.carddue_cards SET payload_enc = $1, updated_at = $2
+			 WHERE tenant_ref = $3 AND id = $4 AND source = 'manual'`,
+			[encrypted, now, tenantReference(), id]
+		);
+	} else {
+		getDatabase()
+			.prepare(
+				`UPDATE cards SET payload_enc = ?, updated_at = ? WHERE id = ? AND source = 'manual'`
+			)
+			.run(encrypted, now, id);
+	}
+	return getCreditScore(id);
+}
+
+export async function upsertConnectedCreditScore(
+	input: ConnectedCreditScoreInput
+): Promise<{ entry: CreditScoreEntry; created: boolean }> {
+	const parsed = creditScorePayloadSchema
+		.pick({
+			score: true,
+			bureau: true,
+			model: true,
+			source: true,
+			recordedDate: true,
+			factors: true,
+			externalId: true
+		})
+		.parse(input);
+	const rows = await listRows();
+	for (const row of rows) {
+		const payload = decodeCreditScore(row);
+		if (payload?.origin === 'automatic' && payload.externalId === parsed.externalId) {
+			return { entry: await saveConnectedPayload(row.id, input), created: false };
+		}
+	}
+	const id = randomUUID();
+	return { entry: await saveConnectedPayload(id, input, new Date().toISOString()), created: true };
 }

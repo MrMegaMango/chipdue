@@ -25,7 +25,12 @@ export default defineConfig({
 					'style-src': ['self', 'unsafe-inline'],
 					'style-src-elem': ['self', 'unsafe-inline'],
 					'style-src-attr': ['unsafe-inline'],
-					'frame-src': ['https://cdn.plaid.com'],
+					'frame-src': [
+						'https://cdn.plaid.com',
+						'https://opal.dev.methodfi.com',
+						'https://opal.sandbox.methodfi.com',
+						'https://opal.production.methodfi.com'
+					],
 					'connect-src': [
 						'self',
 						'https://cdn.plaid.com',
