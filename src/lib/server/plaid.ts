@@ -246,6 +246,7 @@ function plaidErrorDiagnostic(error: unknown): Record<string, string | number | 
 	const status = response?.status;
 	return {
 		errorCode: plaidErrorCode(error),
+		errorCodeReason: safePlaidDiagnosticText(fields.error_code_reason, 64),
 		errorType: safePlaidDiagnosticText(fields.error_type, 64),
 		requestId: safePlaidDiagnosticText(fields.request_id, 128),
 		errorMessage: safePlaidDiagnosticText(fields.error_message, 240),
@@ -253,6 +254,36 @@ function plaidErrorDiagnostic(error: unknown): Record<string, string | number | 
 		suggestedAction: safePlaidDiagnosticText(fields.suggested_action, 240),
 		status: typeof status === 'number' && Number.isInteger(status) ? status : null
 	};
+}
+
+async function logPlaidItemStatusDiagnostic(
+	client: PlaidApi,
+	accessToken: string,
+	itemId: string
+): Promise<void> {
+	try {
+		const response = await client.itemGet({ access_token: accessToken });
+		const item = response.data.item;
+		const itemError = item.error;
+		console.error('Plaid Item status diagnostic', {
+			errorCode: safePlaidDiagnosticText(itemError?.error_code, 64),
+			errorCodeReason: safePlaidDiagnosticText(itemError?.error_code_reason, 64),
+			errorType: safePlaidDiagnosticText(itemError?.error_type, 64),
+			errorMessage: safePlaidDiagnosticText(itemError?.error_message, 240),
+			displayMessage: safePlaidDiagnosticText(itemError?.display_message, 240),
+			suggestedAction: safePlaidDiagnosticText(itemError?.suggested_action, 240),
+			authMethod: safePlaidDiagnosticText(item.auth_method, 64),
+			updateType: safePlaidDiagnosticText(item.update_type, 64),
+			consentExpirationTime: safePlaidDiagnosticText(item.consent_expiration_time, 64),
+			requestId: safePlaidDiagnosticText(response.data.request_id, 128),
+			connectionRef: plaidConnectionLogReference(itemId)
+		});
+	} catch (error) {
+		console.error('Plaid Item status diagnostic unavailable', {
+			...plaidErrorDiagnostic(error),
+			connectionRef: plaidConnectionLogReference(itemId)
+		});
+	}
 }
 
 function optionalLinkProductUnavailable(error: unknown): boolean {
@@ -1038,6 +1069,13 @@ export async function syncPlaidItem(
 		};
 	} catch (error) {
 		if (error instanceof AppError) throw error;
+		if (plaidErrorCode(error) === 'ITEM_LOGIN_REQUIRED') {
+			await logPlaidItemStatusDiagnostic(
+				await getPlaidClientForItem(item),
+				item.accessToken,
+				localItemId
+			);
+		}
 		throw await sanitizedPlaidError(error, localItemId);
 	}
 }

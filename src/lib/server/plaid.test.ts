@@ -1897,6 +1897,24 @@ describe.sequential('Plaid transaction history', () => {
 		await savePlaidItem('provider-item-bmo', 'bmo-access-value', 'BMO (US)');
 		await savePlaidItem('provider-item-healthy', 'healthy-access-value', 'Healthy Bank');
 		plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
+		plaidMocks.itemGet.mockResolvedValue({
+			data: {
+				request_id: 'bmo-item-status-request-id',
+				item: {
+					error: {
+						error_code: 'ITEM_LOGIN_REQUIRED',
+						error_code_reason: 'OAUTH_INVALID_TOKEN',
+						error_type: 'ITEM_ERROR',
+						error_message: 'the OAuth connection has been invalidated',
+						display_message: null,
+						suggested_action: null
+					},
+					auth_method: 'OAUTH',
+					update_type: 'user_present_required',
+					consent_expiration_time: null
+				}
+			}
+		});
 		plaidMocks.accountsBalanceGet.mockImplementation((request: { access_token?: string }) => {
 			if (request.access_token === 'bmo-access-value') {
 				return Promise.reject({
@@ -1933,6 +1951,9 @@ describe.sequential('Plaid transaction history', () => {
 		]);
 		const serializedLogs = JSON.stringify(errorLog.mock.calls);
 		expect(serializedLogs).toContain('bmo-request-id');
+		expect(serializedLogs).toContain('bmo-item-status-request-id');
+		expect(serializedLogs).toContain('OAUTH_INVALID_TOKEN');
+		expect(serializedLogs).toContain('user_present_required');
 		expect(serializedLogs).toContain('ITEM_ERROR');
 		expect(serializedLogs).toContain('BMO (US)');
 		expect(serializedLogs).not.toContain('bmo-access-value');
