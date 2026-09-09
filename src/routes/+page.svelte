@@ -730,9 +730,11 @@
 	onMount(() => {
 		pageMounted = true;
 		const shouldCleanCallbackUrl = new URL(window.location.href).searchParams.has('google');
-		const settingsAnchor =
-			currentSection === 'settings' &&
-			(window.location.hash === '#plaid-setup' || window.location.hash === '#plaid-connections')
+		const sectionAnchor =
+			(currentSection === 'settings' &&
+				(window.location.hash === '#plaid-setup' ||
+					window.location.hash === '#plaid-connections')) ||
+			(currentSection === 'cards' && window.location.hash === '#credit-score')
 				? window.location.hash.slice(1)
 				: null;
 		googleCallbackResult = readGoogleCallbackResult();
@@ -740,9 +742,9 @@
 			// SvelteKit's root is not assigned when onMount begins. Shallow routing is safe
 			// after the asynchronous session initialization yields back to the router.
 			if (pageMounted && shouldCleanCallbackUrl) replaceState(resolve('/'), {});
-			if (pageMounted && settingsAnchor) {
+			if (pageMounted && sectionAnchor) {
 				await tick();
-				document.getElementById(settingsAnchor)?.scrollIntoView({ block: 'start' });
+				document.getElementById(sectionAnchor)?.scrollIntoView({ block: 'start' });
 			}
 		});
 		document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -3960,6 +3962,23 @@
 						</div>
 					</div>
 				</article>
+
+				<article
+					id="credit-score"
+					class="info-panel credit-score-panel"
+					hidden={currentSection !== 'cards'}
+				>
+					<div class="panel-icon credit-score-icon" aria-hidden="true">
+						<svg viewBox="0 0 24 24">
+							<path d="M5 17a8 8 0 1 1 14 0"></path>
+							<path d="m12 13 4-4M4 20h16"></path>
+						</svg>
+					</div>
+					<div class="panel-content">
+						<p class="section-kicker">Credit score</p>
+						<h2>No free tracker yet</h2>
+					</div>
+				</article>
 			</section>
 		</main>
 
@@ -6532,6 +6551,11 @@
 	.calendar-icon {
 		color: var(--blue);
 		background: var(--blue-soft);
+	}
+
+	.credit-score-icon {
+		color: var(--muted);
+		background: var(--paper-soft);
 	}
 
 	.panel-content {

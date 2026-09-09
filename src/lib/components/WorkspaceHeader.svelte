@@ -1,8 +1,7 @@
 <script lang="ts">
 	import { asset, resolve } from '$app/paths';
 
-	type WorkspaceSection =
-		'overview' | 'cards' | 'accounts' | 'bonuses' | 'credit-score' | 'settings';
+	type WorkspaceSection = 'overview' | 'cards' | 'accounts' | 'bonuses' | 'settings';
 	type Props = {
 		current: WorkspaceSection;
 		mode: 'local' | 'cloud' | null;
@@ -15,13 +14,12 @@
 	const links: {
 		id: WorkspaceSection;
 		label: string;
-		href: '/' | '/cards' | '/accounts' | '/bonuses' | '/credit-score';
+		href: '/' | '/cards' | '/accounts' | '/bonuses';
 	}[] = [
 		{ id: 'overview', label: 'Overview', href: '/' },
 		{ id: 'cards', label: 'Cards', href: '/cards' },
 		{ id: 'accounts', label: 'Accounts', href: '/accounts' },
-		{ id: 'bonuses', label: 'Bonuses', href: '/bonuses' },
-		{ id: 'credit-score', label: 'Score', href: '/credit-score' }
+		{ id: 'bonuses', label: 'Bonuses', href: '/bonuses' }
 	];
 </script>
 

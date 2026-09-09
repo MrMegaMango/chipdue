@@ -1,6 +1,6 @@
 # ChipDue
 
-ChipDue is a privacy-first financial workspace for tracking bank and brokerage accounts, signup bonuses, investment performance, credit-card payments, credit scores, and the deadlines that connect them. Optional connections can automatically sync eligible accounts and an Equifax VantageScore 4.0, while manual entry remains available as a fallback. Plaid handles account sync, Method handles consent-based score monitoring, and the official E*TRADE API can add read-only open orders and alternate reconstruction inputs. None is required.
+ChipDue is a privacy-first financial workspace for tracking bank and brokerage accounts, signup bonuses, investment performance, credit-card payments, and the deadlines that connect them. Optional connections can automatically sync eligible accounts, while the official E*TRADE API can add read-only open orders and alternate reconstruction inputs. No free automatic credit-score provider is currently available.
 
 Choose one of two deployment modes:
 
@@ -19,7 +19,7 @@ Choose one of two deployment modes:
 - Build clearly labeled estimated daily history for Plaid-connected brokerage accounts—including Chase Self-Directed—from current holdings, up to 24 months of investment activity, and public market closes.
 - Load current E*TRADE open orders and use E*TRADE positions and activity as alternate reconstruction inputs without enabling trade placement, changes, or cancellation.
 - Track statement balance, minimum due, current balance, due date, statement date, and autopay status.
-- Automatically import an Equifax VantageScore 4.0 and its score factors after one secure identity-verification flow, then retain encrypted history as Method monitors for changes. Manual entry is only a backup.
+- Show credit-score tracker availability alongside cards without presenting a paid provider as a free feature.
 - Automatically identify supported linked cards from provider metadata, populate their reward type, base earning rate, and bonus categories, and show estimated points, miles, or cash back beside eligible transactions. Manual overrides remain available for unmatched cards.
 - Create isolated cloud accounts with Google sign-in without storing an email, profile, Google token, or refresh token.
 - Let each cloud account encrypt and use its own Plaid Production credentials, so Plaid Items and plan allowances are not shared between users.
@@ -40,7 +40,6 @@ Private cloud mode
 Browser memory -> authenticated Vercel Function -> encrypted Neon Postgres rows
                                       |
                                       +-> Plaid, only when configured and used
-                                      +-> Method, only when automatic score monitoring is connected
                                       +-> E*TRADE, only when configured and its data is requested
                                       +-> Yahoo Finance, only when estimated history is built
                                       +-> Google, only during optional sign-in
@@ -74,7 +73,6 @@ Cloud encryption protects against a database-only disclosure. It is not zero-kno
 - npm
 - Git
 - Optional account sync: a Plaid account
-- Optional automatic credit score monitoring: a Method account with Credit Score access
 - Optional E*TRADE open orders and E*TRADE-sourced estimates: an E*TRADE developer account with a live individual key
 - Optional cloud hosting: personal Vercel and Neon accounts
 - Optional Google sign-in: a Google Cloud project and Web OAuth client
