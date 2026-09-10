@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { NetWorthAccount } from './net-worth';
+import type { NetWorthAccount, NetWorthHistoryPoint } from './net-worth';
 import { buildNetWorthHistory, netWorthDateAxisTicks, netWorthPointsForRange } from './net-worth';
 
 function account(overrides: Partial<NetWorthAccount> = {}): NetWorthAccount {
@@ -24,6 +24,51 @@ function account(overrides: Partial<NetWorthAccount> = {}): NetWorthAccount {
 		...overrides
 	};
 }
+
+function historyPoints(dates: string[]): NetWorthHistoryPoint[] {
+	return dates.map((date, index) => ({
+		recordedAt: `${date}T12:00:00.000Z`,
+		netWorthCents: 100_000 + index * 1_000,
+		assetCents: 100_000 + index * 1_000,
+		changeCents: index === 0 ? null : 1_000,
+		estimated: false,
+		accounts: []
+	}));
+}
+
+describe('five-day net worth range', () => {
+	it('includes the latest recorded day and four preceding days, excluding the sixth day', () => {
+		const points = historyPoints([
+			'2026-01-28',
+			'2026-01-29',
+			'2026-01-30',
+			'2026-01-31',
+			'2026-02-01',
+			'2026-02-02'
+		]);
+
+		expect(
+			netWorthPointsForRange(points, '5D').map((point) => point.recordedAt.slice(0, 10))
+		).toEqual(['2026-01-29', '2026-01-30', '2026-01-31', '2026-02-01', '2026-02-02']);
+	});
+
+	it('preserves sparse history without filling missing days or pulling in older observations', () => {
+		const points = historyPoints(['2026-01-01', '2026-01-06', '2026-01-10']);
+
+		expect(netWorthPointsForRange(points, '5D')).toEqual([points[1], points[2]]);
+		expect(netWorthPointsForRange([points[0], points[2]], '5D')).toEqual([points[2]]);
+	});
+
+	it('preserves empty history', () => {
+		expect(netWorthPointsForRange([], '5D')).toEqual([]);
+	});
+
+	it('preserves a single recorded observation', () => {
+		const points = historyPoints(['2026-01-10']);
+
+		expect(netWorthPointsForRange(points, '5D')).toEqual(points);
+	});
+});
 
 describe('net worth history', () => {
 	it('supports a one-week view anchored to the latest history date', () => {

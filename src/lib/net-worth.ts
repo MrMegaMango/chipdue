@@ -44,7 +44,7 @@ export type NetWorthHistory = {
 	includesEstimates: boolean;
 };
 
-export type NetWorthHistoryRange = '1W' | '1M' | '3M' | '1Y' | 'ALL';
+export type NetWorthHistoryRange = '5D' | '1W' | '1M' | '3M' | '1Y' | 'ALL';
 
 export type NetWorthDateAxisTick = {
 	recordedAt: string;
@@ -94,7 +94,9 @@ export function netWorthPointsForRange(
 ): NetWorthHistoryPoint[] {
 	if (range === 'ALL' || points.length < 2) return points;
 	const latest = new Date(points.at(-1)!.recordedAt).getTime();
-	const days = range === '1W' ? 7 : range === '1M' ? 30 : range === '3M' ? 90 : 365;
+	// Five calendar days include the latest recorded day and the four preceding days.
+	const days =
+		range === '5D' ? 4 : range === '1W' ? 7 : range === '1M' ? 30 : range === '3M' ? 90 : 365;
 	const cutoff = latest - days * 24 * 60 * 60 * 1_000;
 	const filtered = points.filter((point) => new Date(point.recordedAt).getTime() >= cutoff);
 	return filtered.length > 0 ? filtered : points.slice(-1);

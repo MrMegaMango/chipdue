@@ -2957,6 +2957,14 @@
 				</div>
 			{/if}
 
+			{#if currentSection === 'overview'}
+				<NetWorthChart
+					accounts={workspaceAccounts}
+					cardBalanceCents={trackedCardBalanceCents}
+					loading={!hasLoadedWorkspace || !hasLoadedCards}
+				/>
+			{/if}
+
 			<section
 				class="summary-grid"
 				class:overview-summary={currentSection === 'overview'}
@@ -3039,14 +3047,6 @@
 					</div>
 				</article>
 			</section>
-
-			{#if currentSection === 'overview'}
-				<NetWorthChart
-					accounts={workspaceAccounts}
-					cardBalanceCents={trackedCardBalanceCents}
-					loading={!hasLoadedWorkspace || !hasLoadedCards}
-				/>
-			{/if}
 
 			<section
 				class="workspace-modules"
@@ -5439,6 +5439,7 @@
 
 	.summary-grid.overview-summary {
 		gap: 0.85rem;
+		margin-top: 1rem;
 		color: var(--ink);
 		border: 0;
 		background: transparent;

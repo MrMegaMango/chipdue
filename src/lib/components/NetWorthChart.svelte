@@ -31,6 +31,7 @@
 	const PLOT_TOP = 22;
 	const PLOT_BOTTOM = 38;
 	const ranges: Array<{ id: NetWorthHistoryRange; label: string }> = [
+		{ id: '5D', label: '5D' },
 		{ id: '1W', label: '1W' },
 		{ id: '1M', label: '1M' },
 		{ id: '3M', label: '3M' },
@@ -71,7 +72,7 @@
 		timeZone: 'UTC'
 	});
 
-	let selectedRange = $state<NetWorthHistoryRange>('1Y');
+	let selectedRange = $state<NetWorthHistoryRange>('5D');
 	let hoveredIndex = $state<number | null>(null);
 	let selectedRecordedAt = $state<string | null>(null);
 	let chartContainerWidth = $state(0);
@@ -92,7 +93,9 @@
 			: false
 	);
 	const changeCents = $derived(
-		firstPoint && latestPoint ? latestPoint.netWorthCents - firstPoint.netWorthCents : null
+		visibleHistory.length > 1 && firstPoint && latestPoint
+			? latestPoint.netWorthCents - firstPoint.netWorthCents
+			: null
 	);
 	const changePercent = $derived(
 		changeCents !== null && firstPoint?.netWorthCents
@@ -280,7 +283,9 @@
 	<header class="net-worth-heading">
 		<div>
 			<p>Tracked net worth</p>
-			<h2 id="net-worth-title">Net worth over time</h2>
+			<h2 id="net-worth-title">
+				{selectedRange === '5D' ? '5-day net worth overview' : 'Net worth over time'}
+			</h2>
 		</div>
 		{#if history.includesEstimates}
 			<span class="estimate-badge">Includes estimates</span>
@@ -310,12 +315,20 @@
 				<strong>{formatMoney(history.currentNetWorthCents)}</strong>
 			</div>
 			<div class:negative={changeCents !== null && changeCents < 0}>
-				<span>{selectedRange === 'ALL' ? 'All-time change' : `${selectedRange} change`}</span>
+				<span>
+					{selectedRange === 'ALL'
+						? 'All-time change'
+						: selectedRange === '5D'
+							? '5-day change'
+							: `${selectedRange} change`}
+				</span>
 				<strong>
 					{changeCents === null ? '—' : `${changeCents >= 0 ? '+' : ''}${formatMoney(changeCents)}`}
 				</strong>
 				{#if changePercent !== null}
 					<small>{changePercent >= 0 ? '+' : ''}{changePercent.toFixed(1)}%</small>
+				{:else if visibleHistory.length < 2}
+					<small>More history needed</small>
 				{/if}
 			</div>
 			<div>
