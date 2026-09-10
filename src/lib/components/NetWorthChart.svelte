@@ -18,13 +18,16 @@
 	let {
 		accounts,
 		cardBalanceCents,
-		loading
+		loading,
+		selectedRange = '5D'
 	}: {
 		accounts: NetWorthAccount[];
 		cardBalanceCents: number;
 		loading: boolean;
+		selectedRange?: NetWorthHistoryRange;
 	} = $props();
 
+	const componentId = $props.id();
 	const WIDTH = 960;
 	const MIN_CHART_WIDTH = 280;
 	const HEIGHT = 270;
@@ -72,7 +75,6 @@
 		timeZone: 'UTC'
 	});
 
-	let selectedRange = $state<NetWorthHistoryRange>('5D');
 	let hoveredIndex = $state<number | null>(null);
 	let selectedRecordedAt = $state<string | null>(null);
 	let chartContainerWidth = $state(0);
@@ -279,11 +281,11 @@
 	}
 </script>
 
-<section class="net-worth-panel" aria-labelledby="net-worth-title">
+<section class="net-worth-panel" aria-labelledby={`${componentId}-net-worth-title`}>
 	<header class="net-worth-heading">
 		<div>
 			<p>Tracked net worth</p>
-			<h2 id="net-worth-title">
+			<h2 id={`${componentId}-net-worth-title`}>
 				{selectedRange === '5D' ? '5-day net worth overview' : 'Net worth over time'}
 			</h2>
 		</div>
@@ -340,7 +342,7 @@
 		</div>
 
 		<div class="chart-toolbar">
-			<p id="net-worth-chart-help">
+			<p id={`${componentId}-net-worth-chart-help`}>
 				Active, visible USD account balances minus current credit-card balances. Click a date for
 				details.
 			</p>
@@ -367,7 +369,7 @@
 				viewBox={`0 0 ${chartWidth} ${HEIGHT}`}
 				role="button"
 				tabindex="0"
-				aria-describedby="net-worth-chart-help"
+				aria-describedby={`${componentId}-net-worth-chart-help`}
 				aria-label={firstPoint && latestPoint
 					? `Select a net worth date from ${formatDate(firstPoint.recordedAt, true)} to ${formatDate(latestPoint.recordedAt, true)}`
 					: 'Current net worth'}
@@ -377,7 +379,7 @@
 				onkeydown={handleChartKeydown}
 			>
 				<defs>
-					<linearGradient id="net-worth-fill" x1="0" x2="0" y1="0" y2="1">
+					<linearGradient id={`${componentId}-net-worth-fill`} x1="0" x2="0" y1="0" y2="1">
 						<stop offset="0%" stop-color="var(--accent)" stop-opacity="0.24"></stop>
 						<stop offset="100%" stop-color="var(--accent)" stop-opacity="0.02"></stop>
 					</linearGradient>
@@ -401,7 +403,7 @@
 					{/if}
 				{/each}
 				{#if chart.areaPath}
-					<path d={chart.areaPath} fill="url(#net-worth-fill)"></path>
+					<path d={chart.areaPath} fill={`url(#${componentId}-net-worth-fill)`}></path>
 				{/if}
 				{#if chart.points.length === 1}
 					<line
@@ -470,11 +472,17 @@
 		</div>
 
 		{#if selectedPoint}
-			<section class="date-breakdown" aria-labelledby="date-breakdown-title" aria-live="polite">
+			<section
+				class="date-breakdown"
+				aria-labelledby={`${componentId}-date-breakdown-title`}
+				aria-live="polite"
+			>
 				<header>
 					<div>
 						<p>Selected date</p>
-						<h3 id="date-breakdown-title">{formatDate(selectedPoint.recordedAt, true)}</h3>
+						<h3 id={`${componentId}-date-breakdown-title`}>
+							{formatDate(selectedPoint.recordedAt, true)}
+						</h3>
 					</div>
 					<div
 						class:negative={selectedPoint.changeCents !== null && selectedPoint.changeCents < 0}

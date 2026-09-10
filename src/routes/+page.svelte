@@ -2963,6 +2963,12 @@
 					cardBalanceCents={trackedCardBalanceCents}
 					loading={!hasLoadedWorkspace || !hasLoadedCards}
 				/>
+				<NetWorthChart
+					accounts={workspaceAccounts}
+					cardBalanceCents={trackedCardBalanceCents}
+					loading={!hasLoadedWorkspace || !hasLoadedCards}
+					selectedRange="1Y"
+				/>
 			{/if}
 
 			<section
