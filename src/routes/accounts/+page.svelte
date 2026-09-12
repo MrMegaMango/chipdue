@@ -4,6 +4,7 @@
 	import { getCompatibleBonusOffers } from '$lib/bonus-offers';
 	import BalanceHistoryChart from '$lib/components/BalanceHistoryChart.svelte';
 	import SyncedTime from '$lib/components/SyncedTime.svelte';
+	import { connectionSyncSummary, type ConnectionSyncSummary } from '$lib/connection-sync';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
 	import { financialProviderName } from '$lib/financial-data';
 	import { cashSweepAction, isCashSweepSecurity } from '$lib/investment-display';
@@ -28,6 +29,9 @@
 	type ConnectionsStatusResponse = {
 		providers: FinancialProviderStatus[];
 		connections: FinancialConnection[];
+	};
+	type ConnectionsSyncResponse = ConnectionSyncSummary & {
+		failures?: { institutionName: string | null; message: string }[];
 	};
 	type AccountActivityResponse = {
 		transactions: FinancialAccountTransaction[];
@@ -135,10 +139,13 @@
 		activeAccounts.filter((account) => account.source === 'connected').length
 	);
 	const connectionsNeedingAttention = $derived(
-		connections.filter((connection) => connection.status === 'needs_update')
+		connections.filter(
+			(connection) => connection.status === 'needs_update' && !connection.syncPaused
+		)
 	);
-	const syncableConnections = $derived(
-		connections.filter((connection) => connection.status === 'healthy')
+	const pausedConnections = $derived(connections.filter((connection) => connection.syncPaused));
+	const pausedConnectionIds = $derived(
+		new Set(pausedConnections.map((connection) => connection.id))
 	);
 	const accountGroups = $derived([
 		{
@@ -909,22 +916,22 @@
 	}
 
 	async function syncConnectedAccounts(): Promise<void> {
-		if (syncing || syncableConnections.length === 0) return;
+		if (syncing || connections.length === 0) return;
 		syncing = true;
-		const syncTargets = [...syncableConnections];
-		const skippedConnections = [...connectionsNeedingAttention];
 		try {
-			const results = await Promise.allSettled(
-				syncTargets.map((connection) =>
-					requestJson(resolve('/api/connections/[id]/transactions/sync', { id: connection.id }), {
+			let result: ConnectionsSyncResponse | null = null;
+			let syncError: unknown = null;
+			try {
+				result = await requestJson<ConnectionsSyncResponse>(
+					resolve('/api/connections/transactions/sync'),
+					{
 						method: 'POST'
-					})
-				)
-			);
-			const failedConnections = results.flatMap((result, index) =>
-				result.status === 'rejected' ? [syncTargets[index]] : []
-			);
-			const successfulCount = results.length - failedConnections.length;
+					}
+				);
+			} catch (error) {
+				syncError = error;
+			}
+			clearPrivateApiCache();
 
 			let refreshError: unknown = null;
 			try {
@@ -942,30 +949,20 @@
 				refreshError ??= error;
 			}
 
-			if (failedConnections.length > 0) {
-				const successfulMessage =
-					successfulCount > 0
-						? ` ${successfulCount} other ${successfulCount === 1 ? 'connection was' : 'connections were'} updated.`
-						: '';
+			const refreshDetail = refreshError ? ' The account view could not be refreshed.' : '';
+			if (!result) {
 				showToast(
-					`${connectionNames(failedConnections)} could not sync.${successfulMessage} Your accounts remain available.`,
-					{ error: true }
-				);
-			} else if (refreshError) {
-				showToast(
-					readableError(
-						refreshError,
-						'Connections synced, but the account view could not be refreshed.'
-					),
-					{ error: true }
-				);
-			} else if (skippedConnections.length > 0) {
-				showToast(
-					`${syncTargets.length} available ${syncTargets.length === 1 ? 'connection is' : 'connections are'} up to date. Reconnect ${connectionNames(skippedConnections)} to resume its sync.`,
+					`${readableError(syncError, 'Connected accounts could not be synced.')} Your accounts remain available.${refreshDetail}`,
 					{ error: true }
 				);
 			} else {
-				showToast('Connected balances, holdings, and activity are up to date.');
+				const failedNames = result.failures
+					?.map((failure) => failure.institutionName?.trim() || 'Connected institution')
+					.join(', ');
+				const failureDetail = failedNames ? ` Could not sync ${failedNames}.` : '';
+				showToast(`${connectionSyncSummary(result)}${failureDetail}${refreshDetail}`, {
+					error: result.failedConnections > 0 || Boolean(refreshError)
+				});
 			}
 		} finally {
 			syncing = false;
@@ -1263,12 +1260,12 @@
 						class="finance-button"
 						type="button"
 						onclick={syncConnectedAccounts}
-						disabled={syncing || syncableConnections.length === 0}
+						disabled={syncing}
 					>
 						<svg class:spinning={syncing} aria-hidden="true" viewBox="0 0 20 20">
 							<path d="M16 7a6.5 6.5 0 1 0 .2 5.5M16 3v4h-4"></path>
 						</svg>
-						{syncing ? 'Syncing…' : 'Sync connections'}
+						{syncing ? 'Syncing…' : 'Sync all'}
 					</button>
 				{/if}
 			</div>
@@ -1292,6 +1289,21 @@
 				<a class="finance-button secondary" href={resolve('/settings#plaid-connections')}>
 					Repair {connectionsNeedingAttention.length === 1 ? 'connection' : 'connections'}
 				</a>
+			</section>
+		{/if}
+
+		{#if pausedConnections.length > 0}
+			<section class="connection-paused" aria-labelledby="connection-paused-title">
+				<div>
+					<h2 id="connection-paused-title">Sync paused for {connectionNames(pausedConnections)}</h2>
+					<p>
+						Scheduled sync and Sync all skip these connections. Your saved accounts and balances
+						remain available.
+					</p>
+				</div>
+				<a class="finance-button secondary" href={resolve('/settings#plaid-connections')}
+					>Manage sync</a
+				>
 			</section>
 		{/if}
 
@@ -1451,6 +1463,9 @@
 															<div class="account-pills">
 																{#if account.source === 'connected'}
 																	<span class="account-sync-time">
+																		{#if account.connectionId && pausedConnectionIds.has(account.connectionId)}
+																			<span class="account-sync-paused">Sync paused · </span>
+																		{/if}
 																		<SyncedTime
 																			value={account.lastSyncedAt}
 																			fallback="Waiting for first sync"
@@ -2681,7 +2696,8 @@
 		flex-wrap: nowrap;
 	}
 
-	.connection-attention {
+	.connection-attention,
+	.connection-paused {
 		display: flex;
 		gap: 1.25rem;
 		align-items: center;
@@ -2693,23 +2709,33 @@
 		background: var(--red-soft);
 	}
 
+	.connection-paused {
+		border-color: #c7d1df;
+		background: #f2f5f9;
+	}
+
 	.connection-attention h2,
-	.connection-attention p {
+	.connection-attention p,
+	.connection-paused h2,
+	.connection-paused p {
 		margin: 0;
 	}
 
-	.connection-attention h2 {
+	.connection-attention h2,
+	.connection-paused h2 {
 		font-size: 0.92rem;
 	}
 
-	.connection-attention > div > p:last-child {
+	.connection-attention > div > p:last-child,
+	.connection-paused p {
 		margin-top: 0.3rem;
 		color: var(--muted);
 		font-size: 0.68rem;
 		line-height: 1.5;
 	}
 
-	.connection-attention .finance-button {
+	.connection-attention .finance-button,
+	.connection-paused .finance-button {
 		flex: 0 0 auto;
 	}
 
@@ -2729,6 +2755,11 @@
 		line-height: 1.35;
 		text-align: right;
 		white-space: nowrap;
+	}
+
+	.account-sync-paused {
+		color: #405064;
+		font-weight: 700;
 	}
 
 	.finance-pill.source {
@@ -2812,7 +2843,8 @@
 			grid-column: 1 / -1;
 		}
 
-		.connection-attention {
+		.connection-attention,
+		.connection-paused {
 			align-items: flex-start;
 			flex-direction: column;
 		}

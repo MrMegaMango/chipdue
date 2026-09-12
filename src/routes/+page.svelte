@@ -295,6 +295,7 @@
 	import NetWorthChart from '$lib/components/NetWorthChart.svelte';
 	import SyncedTime from '$lib/components/SyncedTime.svelte';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
+	import { connectionSyncSummary, type ConnectionSyncSummary } from '$lib/connection-sync';
 	import { financialProviderName } from '$lib/financial-data';
 	import { clearPrivateApiCache, reusePrivateApiGet } from '$lib/private-api-cache';
 	import type { FinancialAccount } from '$lib/types';
@@ -414,6 +415,7 @@
 		provider: FinancialDataProvider;
 		institutionName: string | null;
 		status: 'healthy' | 'needs_update';
+		syncPaused?: boolean;
 		lastSyncedAt: string | null;
 		createdAt: string;
 	};
@@ -428,6 +430,10 @@
 
 	type FinancialConnectionsResponse = {
 		connections: FinancialConnection[];
+	};
+
+	type ConnectionsSyncResponse = ConnectionSyncSummary & {
+		failures?: { institutionName: string | null; message: string }[];
 	};
 
 	type CardsResponse = {
@@ -589,6 +595,7 @@
 		| 'delete'
 		| 'connect'
 		| 'sync'
+		| 'pause-sync'
 		| 'disconnect'
 		| 'update'
 		| 'enable-history'
@@ -2349,7 +2356,7 @@
 		if (!isPrivateEpochCurrent(epoch)) return;
 		busyAction = 'sync';
 		try {
-			await requestJson(
+			const result = await requestJson<ConnectionsSyncResponse>(
 				resolve('/api/connections/sync'),
 				{ method: 'POST' },
 				{ privateEpoch: epoch }
@@ -2362,13 +2369,23 @@
 			]);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const refreshed = cardsRefreshed && statusRefreshed;
+			const failedNames = result.failures
+				?.map((failure) => failure.institutionName?.trim() || 'Connected institution')
+				.join(', ');
+			const failureDetail = failedNames ? ` Could not sync ${failedNames}.` : '';
+			const refreshDetail = refreshed ? '' : ' The dashboard could not refresh.';
 			showNotice(
-				refreshed
-					? 'Connected accounts and cards are up to date.'
-					: 'Connections synced, but the dashboard could not refresh.',
-				refreshed ? 'success' : 'error'
+				`${connectionSyncSummary(result)}${failureDetail}${refreshDetail}`,
+				refreshed && result.failedConnections === 0 ? 'success' : 'error'
 			);
 		} catch (error) {
+			if (!isPrivateEpochCurrent(epoch)) return;
+			clearPrivateApiCache();
+			await Promise.all([
+				refreshCards(true, epoch),
+				refreshPlaidStatus(true, epoch),
+				refreshWorkspaceOverview(epoch)
+			]);
 			if (isPrivateEpochCurrent(epoch)) {
 				showNotice(
 					readableError(error, 'Connected accounts and cards could not be synced.'),
@@ -2377,6 +2394,48 @@
 			}
 		} finally {
 			if (isPrivateEpochCurrent(epoch)) busyAction = null;
+		}
+	}
+
+	async function setConnectionSyncPaused(connection: FinancialConnection): Promise<void> {
+		if (busyAction) return;
+		const epoch = privateStateEpoch;
+		if (!isPrivateEpochCurrent(epoch)) return;
+		const syncPaused = !connection.syncPaused;
+		const label = connectionLabel(connection);
+		busyAction = 'pause-sync';
+		plaidItemActionId = connection.id;
+		try {
+			const result = await requestJson<{ connection: FinancialConnection }>(
+				resolve('/api/connections/[id]', { id: connection.id }),
+				{
+					method: 'PATCH',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ syncPaused })
+				},
+				{ privateEpoch: epoch }
+			);
+			if (!isPrivateEpochCurrent(epoch)) return;
+			financialConnections = financialConnections.map((item) =>
+				item.id === result.connection.id ? result.connection : item
+			);
+			showNotice(
+				syncPaused
+					? `${label} sync paused. Saved data remains available; Retry sync still works.`
+					: result.connection.status === 'needs_update'
+						? `${label} sync pause removed. Repair the connection to restore updates.`
+						: `${label} sync resumed. It will be included in scheduled sync and Sync all.`,
+				'success'
+			);
+		} catch (error) {
+			if (isPrivateEpochCurrent(epoch)) {
+				showNotice(readableError(error, `${label} sync preference could not be saved.`), 'error');
+			}
+		} finally {
+			if (isPrivateEpochCurrent(epoch)) {
+				busyAction = null;
+				plaidItemActionId = null;
+			}
 		}
 	}
 
@@ -2401,8 +2460,13 @@
 			]);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const refreshed = cardsRefreshed && statusRefreshed;
+			const pausedDetail = connection.syncPaused
+				? ' Scheduled sync and Sync all remain paused.'
+				: '';
 			showNotice(
-				refreshed ? `${label} synced.` : `${label} synced, but the dashboard could not refresh.`,
+				refreshed
+					? `${label} synced.${pausedDetail}`
+					: `${label} synced, but the dashboard could not refresh.${pausedDetail}`,
 				refreshed ? 'success' : 'error'
 			);
 		} catch (error) {
@@ -2910,7 +2974,7 @@
 									>
 										<path d="M16 7a6.5 6.5 0 1 0 .2 5.5M16 3v4h-4"></path>
 									</svg>
-									{busyAction === 'sync' ? 'Syncing…' : 'Sync connections'}
+									{busyAction === 'sync' ? 'Syncing…' : 'Sync all'}
 								</button>
 							{:else}
 								<button
@@ -3834,12 +3898,16 @@
 							<section class="connection-manager" aria-labelledby="connections-heading">
 								<div class="connection-heading">
 									<h3 id="connections-heading">Connected institutions</h3>
-									<span>Manage shared accounts or revoke access</span>
+									<span>Manage syncing, shared accounts, or access</span>
 								</div>
 								<ul class="connection-list">
 									{#each financialConnections as connection (connection.id)}
 										{@const institutionLogoUrl = connectionLogoUrl(connection)}
-										<li class:needs-update={connection.status === 'needs_update'}>
+										<li
+											class:needs-update={connection.status === 'needs_update' &&
+												!connection.syncPaused}
+											class:sync-paused={connection.syncPaused}
+										>
 											<div class="connection-details">
 												{#if institutionLogoUrl}
 													<span class="institution-icon institution-logo">
@@ -3858,8 +3926,24 @@
 												{/if}
 												<span>
 													<strong>{connectionLabel(connection)}</strong>
-													<small class:attention={connection.status === 'needs_update'}>
-														{#if connection.status === 'needs_update'}
+													<small
+														class:attention={connection.status === 'needs_update' &&
+															!connection.syncPaused}
+														class:paused-status={connection.syncPaused}
+													>
+														{#if connection.syncPaused}
+															<span>
+																Sync paused ·
+																<SyncedTime
+																	value={connection.lastSyncedAt}
+																	fallback="Never synced"
+																/>
+															</span>
+															<span
+																>Scheduled sync and Sync all skip this connection. Saved data stays
+																available.</span
+															>
+														{:else if connection.status === 'needs_update'}
 															<span class="attention-status">
 																<span class="attention-icon" aria-hidden="true">!</span>
 																Needs attention ·
@@ -3877,25 +3961,40 @@
 												</span>
 											</div>
 											<div class="connection-actions">
+												<button
+													class="pause-connection"
+													type="button"
+													onclick={() => setConnectionSyncPaused(connection)}
+													disabled={busyAction !== null}
+													aria-busy={busyAction === 'pause-sync' &&
+														plaidItemActionId === connection.id}
+													aria-label={`${connection.syncPaused ? 'Resume' : 'Pause'} ${connectionLabel(connection)} sync`}
+												>
+													{busyAction === 'pause-sync' && plaidItemActionId === connection.id
+														? 'Saving…'
+														: connection.syncPaused
+															? 'Resume sync'
+															: 'Pause sync'}
+												</button>
+												{#if connection.syncPaused || connection.status === 'needs_update'}
+													<button
+														class="retry-connection"
+														type="button"
+														onclick={() => retryConnectionSync(connection)}
+														disabled={busyAction !== null}
+														aria-busy={busyAction === 'sync' && plaidItemActionId === connection.id}
+														aria-label={`Retry ${connectionLabel(connection)} sync without repairing`}
+													>
+														{busyAction === 'sync' && plaidItemActionId === connection.id
+															? 'Checking…'
+															: 'Retry sync'}
+													</button>
+												{/if}
 												{#if connection.provider === 'plaid'}
-													{#if connection.status === 'needs_update'}
-														<button
-															class="retry-connection"
-															type="button"
-															onclick={() => retryConnectionSync(connection)}
-															disabled={busyAction !== null}
-															aria-busy={busyAction === 'sync' &&
-																plaidItemActionId === connection.id}
-															aria-label={`Retry ${connectionLabel(connection)} sync without repairing`}
-														>
-															{busyAction === 'sync' && plaidItemActionId === connection.id
-																? 'Checking…'
-																: 'Retry sync'}
-														</button>
-													{/if}
 													<button
 														class="update-connection"
-														class:repair-connection={connection.status === 'needs_update'}
+														class:repair-connection={connection.status === 'needs_update' &&
+															!connection.syncPaused}
 														type="button"
 														onclick={() => updatePlaid(connection)}
 														disabled={busyAction !== null}
@@ -3909,9 +4008,11 @@
 														{#if busyAction === 'update' && plaidItemActionId === connection.id}
 															Opening…
 														{:else if connection.status === 'needs_update'}
-															<svg aria-hidden="true" viewBox="0 0 16 16">
-																<path d="M13.4 5.5A5.7 5.7 0 1 0 13 11M13.4 2.5v3.4H10"></path>
-															</svg>
+															{#if !connection.syncPaused}
+																<svg aria-hidden="true" viewBox="0 0 16 16">
+																	<path d="M13.4 5.5A5.7 5.7 0 1 0 13 11M13.4 2.5v3.4H10"></path>
+																</svg>
+															{/if}
 															Repair connection
 														{:else}
 															Manage accounts
@@ -6964,6 +7065,7 @@
 		gap: 0.75rem;
 		align-items: center;
 		justify-content: space-between;
+		flex-wrap: wrap;
 		padding: 0.6rem 0.65rem;
 		border: 1px solid var(--line);
 		border-radius: 9px;
@@ -6976,8 +7078,14 @@
 		box-shadow: 0 0 0 1px rgb(209 138 55 / 22%);
 	}
 
+	.connection-list > li.sync-paused {
+		border-color: #c7d1df;
+		background: #f2f5f9;
+	}
+
 	.connection-details {
 		display: flex;
+		flex: 1 1 16rem;
 		min-width: 0;
 		gap: 0.55rem;
 		align-items: center;
@@ -7043,6 +7151,17 @@
 		font-weight: 720;
 	}
 
+	.connection-details small.paused-status {
+		display: grid;
+		gap: 0.18rem;
+		color: #405064;
+		line-height: 1.45;
+	}
+
+	.paused-status > span:first-child {
+		font-weight: 720;
+	}
+
 	.attention-status {
 		display: flex;
 		gap: 0.3rem;
@@ -7071,8 +7190,11 @@
 
 	.connection-actions {
 		display: flex;
-		flex: 0 0 auto;
+		max-width: 100%;
+		flex: 0 1 auto;
 		gap: 0.35rem;
+		flex-wrap: wrap;
+		justify-content: flex-end;
 	}
 
 	.connection-actions button {
@@ -7096,7 +7218,8 @@
 		color: #734713;
 	}
 
-	.retry-connection {
+	.retry-connection,
+	.pause-connection {
 		border: 1px solid #aeb7c3;
 		color: #405064;
 	}
@@ -8273,6 +8396,10 @@
 		.connection-list > li {
 			align-items: stretch;
 			flex-direction: column;
+		}
+
+		.connection-details {
+			flex-basis: auto;
 		}
 
 		.google-access-heading {

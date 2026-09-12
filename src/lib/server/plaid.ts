@@ -1177,19 +1177,23 @@ export async function refreshPlaidInvestments(localItemId: string): Promise<
 export async function syncAllPlaidItems(): Promise<{
 	syncedItems: number;
 	failedItems: number;
+	skippedItems: number;
 	cardCount: number;
 	accountCount: number;
 	transactionCount: number;
 	lastSyncedAt: string | null;
 }> {
 	const connections = await listPlaidConnectionTenants();
+	const eligibleConnections = connections.filter(
+		({ connection }) => connection.syncPaused !== true && connection.status !== 'needs_update'
+	);
 	const outcomes = await Promise.allSettled(
-		connections.map(({ tenantId, connection }) =>
+		eligibleConnections.map(({ tenantId, connection }) =>
 			runAsTenant(tenantId, () => syncPlaidItem(connection.id))
 		)
 	);
 	const results: Array<Awaited<ReturnType<typeof syncPlaidItem>>> = [];
-	let firstFailure: unknown;
+	let firstFailure: AppError | undefined;
 	let failedItems = 0;
 	for (const [index, outcome] of outcomes.entries()) {
 		if (outcome.status === 'fulfilled') {
@@ -1197,12 +1201,12 @@ export async function syncAllPlaidItems(): Promise<{
 			continue;
 		}
 		failedItems += 1;
-		firstFailure ??= outcome.reason;
 		const appError =
 			outcome.reason instanceof AppError
 				? outcome.reason
 				: new AppError('INTERNAL_ERROR', 'The connection could not be synced.', 500);
-		const connection = connections[index].connection;
+		firstFailure ??= appError;
+		const connection = eligibleConnections[index].connection;
 		console.error('Plaid scheduled connection sync failed', {
 			institutionName:
 				safePlaidDiagnosticText(connection.institutionName, 80) ?? 'Unknown institution',
@@ -1215,6 +1219,7 @@ export async function syncAllPlaidItems(): Promise<{
 	return {
 		syncedItems: results.length,
 		failedItems,
+		skippedItems: connections.length - eligibleConnections.length,
 		cardCount: results.reduce((total, result) => total + result.count, 0),
 		accountCount: results.reduce((total, result) => total + result.accountCount, 0),
 		transactionCount: results.reduce((total, result) => total + result.transactionCount, 0),

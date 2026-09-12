@@ -265,6 +265,7 @@ export interface FinancialConnection {
 	provider: FinancialDataProvider;
 	institutionName: string | null;
 	status: 'healthy' | 'needs_update';
+	syncPaused?: boolean;
 	lastSyncedAt: string | null;
 	createdAt: string;
 }

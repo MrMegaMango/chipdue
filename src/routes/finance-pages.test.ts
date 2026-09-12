@@ -231,9 +231,7 @@ describe('financial workspace navigation', () => {
 		expect(actionsSource.indexOf('Add manually')).toBeLessThan(
 			actionsSource.indexOf('Add connection')
 		);
-		expect(actionsSource.indexOf('Add connection')).toBeLessThan(
-			actionsSource.indexOf('Sync connections')
-		);
+		expect(actionsSource.indexOf('Add connection')).toBeLessThan(actionsSource.indexOf('Sync all'));
 		expect(actionsSource).toContain('M10 4v12M4 10h12');
 		expect(actionsSource).toContain('M16 7a6.5 6.5 0 1 0 .2 5.5M16 3v4h-4');
 		expect(accountsSource).toContain('flex-wrap: nowrap');
@@ -245,7 +243,14 @@ describe('financial workspace navigation', () => {
 			accountsSource.indexOf('async function syncConnectedAccounts'),
 			accountsSource.indexOf('function plaidFactory')
 		);
-		expect(syncSource).toContain('Promise.allSettled');
+		expect(syncSource).toContain("resolve('/api/connections/transactions/sync')");
+		expect(syncSource).not.toContain('/api/connections/[id]/transactions/sync');
+		expect(syncSource).not.toContain('Promise.allSettled');
+		expect(syncSource).toContain('connectionSyncSummary(result)');
+		expect(syncSource).toContain('clearPrivateApiCache()');
+		expect(syncSource.indexOf('clearPrivateApiCache()')).toBeLessThan(
+			syncSource.indexOf('await reloadAccounts(true)')
+		);
 		expect(syncSource).toContain('failedConnections');
 		expect(syncSource).toContain('Your accounts remain available.');
 		expect(syncSource).not.toContain('pageError =');
@@ -264,7 +269,7 @@ describe('financial workspace navigation', () => {
 		expect(accountsSource).toContain("resolve('/api/plaid/exchange')");
 		expect(dashboardSource.match(/onclick=\{syncConnections\}/g)).toHaveLength(1);
 		expect(dashboardSource).not.toContain("'Connect another'");
-		expect(accountsSource).toContain("syncing ? 'Syncing…' : 'Sync connections'");
+		expect(accountsSource).toContain("syncing ? 'Syncing…' : 'Sync all'");
 	});
 
 	it('can retry an unhealthy connection without opening the repair flow', () => {

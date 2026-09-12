@@ -123,7 +123,12 @@ import {
 	syncAllPlaidItems,
 	syncPlaidItem
 } from './plaid';
-import { listPlaidConnections, markPlaidItemNeedsUpdate, savePlaidItem } from './plaid-store';
+import {
+	listPlaidConnections,
+	markPlaidItemNeedsUpdate,
+	savePlaidItem,
+	setPlaidConnectionSyncPaused
+} from './plaid-store';
 import { updateCardRewardsSchema } from './schemas';
 import {
 	listFinancialAccounts,
@@ -1894,8 +1899,18 @@ describe.sequential('Plaid transaction history', () => {
 	});
 
 	it('keeps scheduled syncs running when one Plaid connection requires repair', async () => {
+		const pausedId = await savePlaidItem(
+			'provider-item-paused',
+			'paused-access-value',
+			'Paused Bank'
+		);
+		await setPlaidConnectionSyncPaused(pausedId, true);
 		await savePlaidItem('provider-item-bmo', 'bmo-access-value', 'BMO (US)');
 		await savePlaidItem('provider-item-healthy', 'healthy-access-value', 'Healthy Bank');
+		let finishHealthySync!: () => void;
+		const healthyResponse = new Promise<ReturnType<typeof liabilityResponse>>((resolve) => {
+			finishHealthySync = () => resolve(liabilityResponse());
+		});
 		plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
 		plaidMocks.itemGet.mockResolvedValue({
 			data: {
@@ -1931,21 +1946,36 @@ describe.sequential('Plaid transaction history', () => {
 					}
 				});
 			}
-			return Promise.resolve(liabilityResponse());
+			return healthyResponse;
 		});
 		const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-		const result = await syncAllPlaidItems();
+		let complete = false;
+		const resultPromise = syncAllPlaidItems().finally(() => {
+			complete = true;
+		});
+		await vi.waitFor(async () => {
+			expect(
+				(await listPlaidConnections()).find(
+					(connection) => connection.institutionName === 'BMO (US)'
+				)
+			).toMatchObject({ status: 'needs_update' });
+		});
+		expect(complete).toBe(false);
+		finishHealthySync();
+		const result = await resultPromise;
 
 		expect(result).toMatchObject({
 			syncedItems: 1,
 			failedItems: 1,
+			skippedItems: 1,
 			cardCount: 1,
 			accountCount: 0,
 			transactionCount: 0
 		});
 		expect(result.lastSyncedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
 		expect(await listPlaidConnections()).toMatchObject([
+			{ institutionName: 'Paused Bank', syncPaused: true, lastSyncedAt: null },
 			{ institutionName: 'BMO (US)', status: 'needs_update', lastSyncedAt: null },
 			{ institutionName: 'Healthy Bank', status: 'healthy', lastSyncedAt: result.lastSyncedAt }
 		]);
@@ -1957,7 +1987,58 @@ describe.sequential('Plaid transaction history', () => {
 		expect(serializedLogs).toContain('ITEM_ERROR');
 		expect(serializedLogs).toContain('BMO (US)');
 		expect(serializedLogs).not.toContain('bmo-access-value');
+		expect(errorLog).toHaveBeenCalledWith(
+			'Plaid scheduled connection sync failed',
+			expect.objectContaining({ institutionName: 'BMO (US)', errorCode: 'PLAID_LOGIN_REQUIRED' })
+		);
+		expect(
+			plaidMocks.accountsBalanceGet.mock.calls.map(([request]) => request.access_token)
+		).toEqual(['bmo-access-value', 'healthy-access-value']);
 		errorLog.mockRestore();
+	});
+
+	it('preserves saved cards when all connections are skipped and permits explicit retries', async () => {
+		const pausedId = await savePlaidItem(
+			'provider-item-paused',
+			'paused-access-value',
+			'Paused Bank'
+		);
+		const repairId = await savePlaidItem(
+			'provider-item-repair',
+			'repair-access-value',
+			'Repair Bank'
+		);
+		plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
+		await syncPlaidItem(pausedId);
+		await setPlaidConnectionSyncPaused(pausedId, true);
+		await markPlaidItemNeedsUpdate(repairId);
+		const savedCards = await listCards();
+		const savedConnections = await listPlaidConnections();
+		vi.clearAllMocks();
+
+		await expect(syncAllPlaidItems()).resolves.toEqual({
+			syncedItems: 0,
+			failedItems: 0,
+			skippedItems: 2,
+			cardCount: 0,
+			accountCount: 0,
+			transactionCount: 0,
+			lastSyncedAt: null
+		});
+		expect(plaidMocks.accountsBalanceGet).not.toHaveBeenCalled();
+		expect(plaidMocks.accountsGet).not.toHaveBeenCalled();
+		expect(plaidMocks.itemGet).not.toHaveBeenCalled();
+		expect(plaidMocks.liabilitiesGet).not.toHaveBeenCalled();
+		expect(await listCards()).toEqual(savedCards);
+		expect(await listPlaidConnections()).toEqual(savedConnections);
+
+		await expect(syncPlaidItem(pausedId)).resolves.toMatchObject({ count: 1 });
+		await expect(syncPlaidItem(repairId)).resolves.toMatchObject({ count: 1 });
+		expect(plaidMocks.accountsBalanceGet).toHaveBeenCalledTimes(2);
+		expect(await listPlaidConnections()).toMatchObject([
+			{ id: pausedId, syncPaused: true, status: 'healthy' },
+			{ id: repairId, syncPaused: false, status: 'healthy' }
+		]);
 	});
 
 	it('still fails a scheduled sync when every Plaid connection fails', async () => {

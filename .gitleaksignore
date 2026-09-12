@@ -1,0 +1,5 @@
+# Reviewed historical false positives: TypeScript type names, not Plaid client IDs.
+4a1f6f866fbbef0e1b04c8f920e830daa14648e6:src/lib/server/financial-connections.ts:plaid-client-id:44
+b2107eb3220733a890b1f363e72c8494fc4f0b6d:src/lib/server/plaid.ts:plaid-client-id:13
+# Deterministic OAuth signature generated entirely from synthetic test credentials.
+3c8ef24cb8e56ff36c23b906de60e9e9397cdd96:src/lib/server/etrade.test.ts:generic-api-key:70

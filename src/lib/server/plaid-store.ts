@@ -42,6 +42,11 @@ interface StoredPlaidLinkAlternation {
 	nextClientId: string;
 }
 
+interface StoredPlaidSyncPreference {
+	version: 1;
+	syncPaused: boolean;
+}
+
 interface PublicPlaidItemRow extends Record<string, unknown> {
 	id: string;
 	item_ref: string;
@@ -64,6 +69,89 @@ export interface PrivatePlaidItem {
 
 const ITEM_CONFIGURATION_KEY_PREFIX = 'plaid_item_config_v1:';
 const LINK_ALTERNATION_KEY_PREFIX = 'plaid_link_alternation_v1:';
+const SYNC_PREFERENCE_KEY_PREFIX = 'plaid_sync_preference_v1:';
+
+function syncPreferenceKey(tenantId: string, id: string): string {
+	return `${SYNC_PREFERENCE_KEY_PREFIX}${tenantId}:${id}`;
+}
+
+function syncPreferenceContext(tenantId: string, id: string): string {
+	return `plaid-sync-preference:${tenantId}:${id}`;
+}
+
+async function readSyncPreferences(
+	connections: Array<{ id: string; tenantId: string }>
+): Promise<Map<string, boolean>> {
+	const connectionsByKey = new Map(
+		connections.map((connection) => [
+			syncPreferenceKey(connection.tenantId, connection.id),
+			connection
+		])
+	);
+	const keys = [...connectionsByKey.keys()];
+	const preferences = new Map<string, boolean>();
+	if (keys.length === 0) return preferences;
+	let rows: Array<{ key: string; value: string }>;
+	if (getRuntimeMode() === 'cloud') {
+		rows = await cloudQuery<{ key: string; value: string }>(
+			`SELECT key, value FROM public.carddue_metadata WHERE key = ANY($1::text[])`,
+			[keys]
+		);
+	} else {
+		rows = [];
+		for (let offset = 0; offset < keys.length; offset += 500) {
+			const batch = keys.slice(offset, offset + 500);
+			rows.push(
+				...(getDatabase()
+					.prepare(
+						`SELECT key, value FROM metadata WHERE key IN (${batch.map(() => '?').join(', ')})`
+					)
+					.all(...batch) as Array<{ key: string; value: string }>)
+			);
+		}
+	}
+	for (const row of rows) {
+		const connection = connectionsByKey.get(row.key);
+		if (!connection) continue;
+		const preference = decryptJson<Partial<StoredPlaidSyncPreference>>(
+			row.value,
+			syncPreferenceContext(connection.tenantId, connection.id)
+		);
+		if (preference?.version !== 1 || typeof preference.syncPaused !== 'boolean') {
+			throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
+		}
+		preferences.set(row.key, preference.syncPaused);
+	}
+	return preferences;
+}
+
+export async function setPlaidConnectionSyncPaused(
+	id: string,
+	syncPaused: boolean
+): Promise<FinancialConnection> {
+	const tenantId = currentTenantId();
+	const connection = await publicPlaidConnection(id);
+	const key = syncPreferenceKey(tenantId, connection.id);
+	const value = encryptJson(
+		{ version: 1, syncPaused },
+		syncPreferenceContext(tenantId, connection.id)
+	);
+	if (getRuntimeMode() === 'cloud') {
+		await cloudQuery(
+			`INSERT INTO public.carddue_metadata (key, value) VALUES ($1, $2)
+			 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+			[key, value]
+		);
+	} else {
+		getDatabase()
+			.prepare(
+				`INSERT INTO metadata (key, value) VALUES (?, ?)
+				 ON CONFLICT (key) DO UPDATE SET value = excluded.value`
+			)
+			.run(key, value);
+	}
+	return { ...connection, syncPaused };
+}
 
 function itemConfigurationKey(tenantId: string, itemId: string): string {
 	return `${ITEM_CONFIGURATION_KEY_PREFIX}${tenantId}:${itemId}`;
@@ -346,7 +434,7 @@ function decodeItem(
 	};
 }
 
-function publicRowToConnection(row: PublicPlaidItemRow): FinancialConnection {
+function publicRowToConnection(row: PublicPlaidItemRow, syncPaused: boolean): FinancialConnection {
 	return {
 		id: row.id,
 		provider: 'plaid',
@@ -354,12 +442,14 @@ function publicRowToConnection(row: PublicPlaidItemRow): FinancialConnection {
 			? decryptSecret(row.institution_name_enc, `plaid-institution:${row.id}`)
 			: null,
 		status: row.status,
+		syncPaused,
 		lastSyncedAt: row.last_synced_at,
 		createdAt: row.created_at
 	};
 }
 
 export async function listPlaidConnections(): Promise<FinancialConnection[]> {
+	const tenantId = currentTenantId();
 	const rows =
 		getRuntimeMode() === 'cloud'
 			? await cloudQuery<PublicPlaidItemRow>(
@@ -374,9 +464,11 @@ export async function listPlaidConnections(): Promise<FinancialConnection[]> {
 						 FROM plaid_items ORDER BY created_at`
 					)
 					.all() as PublicPlaidItemRow[]);
-	return rows
-		.filter((row) => plaidItemBelongsToCurrentTenant(row.item_ref))
-		.map(publicRowToConnection);
+	const ownedRows = rows.filter((row) => plaidItemBelongsToCurrentTenant(row.item_ref));
+	const preferences = await readSyncPreferences(ownedRows.map((row) => ({ id: row.id, tenantId })));
+	return ownedRows.map((row) =>
+		publicRowToConnection(row, preferences.get(syncPreferenceKey(tenantId, row.id)) ?? false)
+	);
 }
 
 export async function getPrivatePlaidItem(id: string): Promise<PrivatePlaidItem> {
@@ -516,24 +608,27 @@ export async function markPlaidItemNeedsUpdate(id: string): Promise<void> {
 
 export async function removeLocalPlaidItem(id: string): Promise<void> {
 	const tenantId = currentTenantId();
+	const connection = await publicPlaidConnection(id);
+	const connectionId = connection.id;
 	if (getRuntimeMode() === 'cloud') {
 		const rows = await cloudQuery<{ id: string }>(
 			`DELETE FROM public.carddue_plaid_items
 			 WHERE tenant_ref = $1 AND id = $2 RETURNING id::text`,
-			[tenantReference(), id]
+			[tenantReference(), connectionId]
 		);
 		if (!rows[0]) throw new AppError('PLAID_ITEM_NOT_FOUND', 'Connection not found.', 404);
-		await cloudQuery(`DELETE FROM public.carddue_metadata WHERE key = $1`, [
-			itemConfigurationKey(tenantId, id)
+		await cloudQuery(`DELETE FROM public.carddue_metadata WHERE key IN ($1, $2)`, [
+			itemConfigurationKey(tenantId, connectionId),
+			syncPreferenceKey(tenantId, connectionId)
 		]);
 	} else {
-		const result = getDatabase().prepare(`DELETE FROM plaid_items WHERE id = ?`).run(id);
+		const result = getDatabase().prepare(`DELETE FROM plaid_items WHERE id = ?`).run(connectionId);
 		if (result.changes !== 1) {
 			throw new AppError('PLAID_ITEM_NOT_FOUND', 'Connection not found.', 404);
 		}
 		getDatabase()
-			.prepare(`DELETE FROM metadata WHERE key = ?`)
-			.run(itemConfigurationKey(tenantId, id));
+			.prepare(`DELETE FROM metadata WHERE key IN (?, ?)`)
+			.run(itemConfigurationKey(tenantId, connectionId), syncPreferenceKey(tenantId, connectionId));
 	}
 }
 
@@ -556,7 +651,9 @@ export async function publicPlaidConnection(id: string): Promise<FinancialConnec
 	if (!row || !plaidItemBelongsToCurrentTenant(row.item_ref)) {
 		throw new AppError('PLAID_ITEM_NOT_FOUND', 'Connection not found.', 404);
 	}
-	return publicRowToConnection(row);
+	const tenantId = currentTenantId();
+	const preferences = await readSyncPreferences([{ id: row.id, tenantId }]);
+	return publicRowToConnection(row, preferences.get(syncPreferenceKey(tenantId, row.id)) ?? false);
 }
 
 export async function listPlaidConnectionTenants(): Promise<
@@ -574,8 +671,18 @@ export async function listPlaidConnectionTenants(): Promise<
 						 FROM plaid_items ORDER BY created_at`
 					)
 					.all() as PublicPlaidItemRow[]);
-	return rows.flatMap((row) => {
+	const ownedRows = rows.flatMap((row) => {
 		const tenantId = tenantIdFromPlaidItemReference(row.item_ref);
-		return tenantId ? [{ tenantId, connection: publicRowToConnection(row) }] : [];
+		return tenantId ? [{ tenantId, row }] : [];
 	});
+	const preferences = await readSyncPreferences(
+		ownedRows.map(({ tenantId, row }) => ({ tenantId, id: row.id }))
+	);
+	return ownedRows.map(({ tenantId, row }) => ({
+		tenantId,
+		connection: publicRowToConnection(
+			row,
+			preferences.get(syncPreferenceKey(tenantId, row.id)) ?? false
+		)
+	}));
 }
