@@ -6,6 +6,7 @@ function account(overrides: Partial<NetWorthAccount> = {}): NetWorthAccount {
 	return {
 		id: 'account-1',
 		nickname: 'Primary account',
+		institution: 'Example Bank',
 		accountType: 'checking',
 		status: 'active',
 		hidden: false,
@@ -204,6 +205,7 @@ describe('net worth history', () => {
 				account({
 					id: 'account-2',
 					nickname: 'Brokerage',
+					institution: null,
 					accountType: 'brokerage',
 					currentBalanceCents: 45_000,
 					balanceHistory: [
@@ -238,6 +240,7 @@ describe('net worth history', () => {
 			expect.objectContaining({
 				accountId: 'account-1',
 				nickname: 'Checking',
+				institution: 'Example Bank',
 				balanceCents: 110_000,
 				changeCents: 10_000,
 				estimated: false,
@@ -246,6 +249,7 @@ describe('net worth history', () => {
 			expect.objectContaining({
 				accountId: 'account-2',
 				nickname: 'Brokerage',
+				institution: null,
 				balanceCents: 45_000,
 				changeCents: -5_000,
 				estimated: true,

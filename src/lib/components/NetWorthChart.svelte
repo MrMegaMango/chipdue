@@ -530,7 +530,11 @@
 								<tr>
 									<th scope="row">
 										<strong>{account.nickname}</strong>
-										<small>{accountTypeLabel(account.accountType)}</small>
+										<small>
+											{account.institution?.trim() || 'Institution not entered'} · {accountTypeLabel(
+												account.accountType
+											)}
+										</small>
 									</th>
 									<td>{formatDetailedMoney(account.balanceCents)}</td>
 									<td

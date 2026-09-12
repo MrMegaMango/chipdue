@@ -4,6 +4,7 @@ export type NetWorthAccount = Pick<
 	FinancialAccount,
 	| 'id'
 	| 'nickname'
+	| 'institution'
 	| 'accountType'
 	| 'status'
 	| 'hidden'
@@ -17,6 +18,7 @@ export type NetWorthAccount = Pick<
 export type NetWorthAccountBreakdown = {
 	accountId: string;
 	nickname: string;
+	institution: FinancialAccount['institution'];
 	accountType: FinancialAccount['accountType'];
 	balanceCents: number;
 	changeCents: number | null;
@@ -151,6 +153,7 @@ export function buildNetWorthHistory(
 			const balance: NetWorthAccountBreakdown = {
 				accountId: account.id,
 				nickname: account.nickname,
+				institution: account.institution,
 				accountType: account.accountType,
 				balanceCents: snapshot.balanceCents,
 				changeCents: previousBalance === undefined ? null : snapshot.balanceCents - previousBalance,
