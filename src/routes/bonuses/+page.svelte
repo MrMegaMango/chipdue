@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
+	import type { BonusChurnAutomationResult } from '$lib/bonus-churn-automatic';
 	import {
 		automaticEarnedValueCents,
 		buildBonusOfferDraft,
@@ -86,6 +87,13 @@
 	let activityLoadingByAccount = $state<Record<string, boolean>>({});
 	let activityErrors = $state<Record<string, string>>({});
 	let syncingAccountId = $state<string | null>(null);
+	let automaticTracking = $state<Record<string, BonusChurnAutomationResult>>({});
+	let automaticTrackingLoading = $state(false);
+	let automaticTrackingError = $state('');
+	let trackingController: AbortController | undefined;
+	let trackingGeneration = 0;
+	let trackingReady = false;
+	let mounted = false;
 	let loggingOut = $state(false);
 	let toast = $state('');
 	let toastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -127,7 +135,25 @@
 	);
 
 	onMount(() => {
+		mounted = true;
 		void initialize();
+		const refreshVisibleTracking = () => {
+			if (trackingReady && !document.hidden && !automaticTrackingLoading) {
+				void loadAutomaticTracking();
+			}
+		};
+		window.addEventListener('focus', refreshVisibleTracking);
+		document.addEventListener('visibilitychange', refreshVisibleTracking);
+		const interval = setInterval(refreshVisibleTracking, 60_000);
+		return () => {
+			mounted = false;
+			trackingGeneration += 1;
+			trackingController?.abort();
+			window.removeEventListener('focus', refreshVisibleTracking);
+			document.removeEventListener('visibilitychange', refreshVisibleTracking);
+			clearInterval(interval);
+			if (toastTimer) clearTimeout(toastTimer);
+		};
 	});
 
 	function blankForm(): BonusForm {
@@ -169,6 +195,8 @@
 			bonuses = bonusResponse.bonuses;
 			accounts = accountResponse.accounts;
 			cards = cardResponse.cards;
+			trackingReady = true;
+			void loadAutomaticTracking();
 			void loadLinkedAccountActivity(bonusResponse.bonuses, accountResponse.accounts);
 			if (!queryPrefillHandled) {
 				queryPrefillHandled = true;
@@ -206,9 +234,36 @@
 			}
 			return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
 		};
-		const payload = method === 'GET' ? await reusePrivateApiGet(url, load) : await load();
+		const payload =
+			method === 'GET' && init?.cache !== 'no-store'
+				? await reusePrivateApiGet(url, load)
+				: await load();
 		if (method !== 'GET') clearPrivateApiCache();
 		return payload;
+	}
+
+	async function loadAutomaticTracking(): Promise<void> {
+		if (!mounted) return;
+		const generation = ++trackingGeneration;
+		trackingController?.abort();
+		const controller = new AbortController();
+		trackingController = controller;
+		automaticTrackingLoading = true;
+		try {
+			const response = await requestJson<{ tracking: Record<string, BonusChurnAutomationResult> }>(
+				resolve('/api/bonuses/tracking'),
+				{ cache: 'no-store', signal: controller.signal }
+			);
+			if (generation !== trackingGeneration) return;
+			automaticTracking = response.tracking;
+			automaticTrackingError = '';
+		} catch {
+			if (generation !== trackingGeneration || controller.signal.aborted) return;
+			automaticTrackingError =
+				'Activity could not be checked. Showing the last available result; tracking will retry automatically.';
+		} finally {
+			if (generation === trackingGeneration) automaticTrackingLoading = false;
+		}
 	}
 
 	function readableError(error: unknown, fallback: string): string {
@@ -345,6 +400,7 @@
 				resolve('/api/accounts')
 			);
 			accounts = response.accounts;
+			void loadAutomaticTracking();
 			const refreshed = response.accounts.find((candidate) => candidate.id === account.id);
 			if (refreshed) await loadAccountActivity(refreshed);
 			const institution = offer?.institution ?? 'Linked account';
@@ -572,6 +628,8 @@
 	async function reloadBonuses(): Promise<void> {
 		const response = await requestJson<{ bonuses: AccountBonus[] }>(resolve('/api/bonuses'));
 		bonuses = response.bonuses;
+		automaticTracking = {};
+		void loadAutomaticTracking();
 	}
 
 	async function toggleRequirement(bonus: AccountBonus, requirementId: string): Promise<void> {
@@ -1016,8 +1074,17 @@
 			</section>
 			<BonusChurnPanel
 				{bonuses}
+				{accounts}
+				{cards}
+				tracking={automaticTracking}
+				loading={automaticTrackingLoading}
+				error={automaticTrackingError}
 				onupdated={(updated) => {
 					bonuses = bonuses.map((bonus) => (bonus.id === updated.id ? updated : bonus));
+					const next = { ...automaticTracking };
+					delete next[updated.id];
+					automaticTracking = next;
+					void loadAutomaticTracking();
 				}}
 			/>
 		{/if}

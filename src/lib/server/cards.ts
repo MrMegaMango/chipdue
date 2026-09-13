@@ -1337,7 +1337,7 @@ export async function listCardTransactions(
 	status: TransactionHistoryStatus;
 	lastSyncedAt: string | null;
 }> {
-	if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+	if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_STORED_TRANSACTIONS) {
 		throw new AppError('INVALID_REQUEST', 'The request is invalid.', 400);
 	}
 	const row =

@@ -13,6 +13,7 @@ Choose one of two deployment modes:
 
 - Keep a private inventory of personal and business checking, savings, cash-management, and brokerage accounts.
 - Track signup bonuses from opening through requirements, qualification, payout, and safe-to-close dates.
+- Track repeat-bonus timing automatically from supported saved offers and connected bank or card activity. Posted payout evidence updates the countdown as accounts sync; projections stay separate from confirmed dates. Missing closure dates or offer-specific restrictions remain explicit, with manual corrections available as a fallback.
 - Automatically refresh eligible bank and brokerage balances through an installed financial-data provider.
 - See each brokerage account's value over time and separate automatically calculated period contributions from investment return, with every saved balance or successful sync extending its private history. An optional lifetime contribution total can replace the period baseline.
 - See each connected brokerage position, share count, current institution price, value, and holding cost basis while keeping simple account-level performance.
