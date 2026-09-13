@@ -237,6 +237,24 @@ export interface BonusRequirement {
 	completed: boolean;
 }
 
+export interface BonusChurnCondition {
+	anchor: 'paidDate' | 'openedDate' | 'closedDate';
+	months: number;
+	days: number;
+}
+
+export interface BonusChurn {
+	mode: 'rules' | 'manual' | 'restricted';
+	conditions: BonusChurnCondition[];
+	requiresClosed: boolean;
+	openedDate?: string | null;
+	closedDate: string | null;
+	manualEligibleDate: string | null;
+	presetId: string | null;
+	sourceUrl: string | null;
+	notes: string | null;
+}
+
 export interface AccountBonus {
 	id: string;
 	accountId: string | null;
@@ -254,6 +272,7 @@ export interface AccountBonus {
 	expectedPayoutDate: string | null;
 	paidDate: string | null;
 	safeToCloseDate: string | null;
+	churn?: BonusChurn | null;
 	requirements: BonusRequirement[];
 	notes: string | null;
 	createdAt: string;

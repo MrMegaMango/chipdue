@@ -12,6 +12,7 @@
 		type BonusTracker
 	} from '$lib/bonus-offers';
 	import SyncedTime from '$lib/components/SyncedTime.svelte';
+	import BonusChurnPanel from '$lib/components/BonusChurnPanel.svelte';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
 	import { clearPrivateApiCache, reusePrivateApiGet } from '$lib/private-api-cache';
 	import type {
@@ -651,8 +652,7 @@
 				<p class="finance-kicker">Money in motion</p>
 				<h1 id="bonuses-title">Bonuses</h1>
 				<p>
-					Choose a verified offer, then track its balance, activity, deadlines, and payout without
-					asking an AI to interpret the rules each time.
+					Track bonus progress, payouts, and when to check your eligibility to earn a bonus again.
 				</p>
 			</div>
 			<button class="finance-button" type="button" onclick={openAdd}>+ Add bonus</button>
@@ -699,6 +699,12 @@
 				<button class="finance-button" type="button" onclick={openAdd}>Add your first bonus</button>
 			</div>
 		{:else}
+			<BonusChurnPanel
+				{bonuses}
+				onupdated={(updated) => {
+					bonuses = bonuses.map((bonus) => (bonus.id === updated.id ? updated : bonus));
+				}}
+			/>
 			<section aria-labelledby="bonus-list-title">
 				<div class="finance-section-heading">
 					<div>

@@ -8,6 +8,7 @@ import {
 	createBonus,
 	createFinancialAccount,
 	deleteBonus,
+	getBonus,
 	listBonuses,
 	listFinancialAccounts,
 	replaceConnectedFinancialAccounts,
@@ -15,7 +16,7 @@ import {
 	updateBonus,
 	updateFinancialAccount
 } from './financial-records';
-import { resetCryptoStateForTests } from './crypto';
+import { decryptJson, encryptJson, resetCryptoStateForTests } from './crypto';
 import { savePlaidItem } from './plaid-store';
 import { createBonusSchema, createFinancialAccountSchema } from './schemas';
 
@@ -119,6 +120,128 @@ describe.sequential('encrypted financial records', () => {
 		await deleteBonus(bonus.id);
 		expect(await listBonuses()).toEqual([]);
 		expect(await listFinancialAccounts()).toHaveLength(1);
+	});
+
+	it('round-trips repeat bonus terms inside encrypted storage', async () => {
+		const churn = {
+			mode: 'rules',
+			conditions: [
+				{ anchor: 'paidDate', months: 24, days: 1 },
+				{ anchor: 'closedDate', months: 0, days: 30 }
+			],
+			requiresClosed: true,
+			openedDate: '2020-01-10',
+			closedDate: '2026-08-15',
+			manualEligibleDate: null,
+			presetId: 'example-bank-repeat',
+			sourceUrl: 'https://bank.example/repeat-offer',
+			notes: 'Private repeat offer details'
+		};
+		const bonus = await createBonus(
+			createBonusSchema.parse({
+				name: 'Returning customer offer',
+				status: 'paid',
+				paidDate: '2026-07-10',
+				churn
+			})
+		);
+		expect(bonus.churn).toEqual(churn);
+
+		const row = getDatabase()
+			.prepare('SELECT payload_enc FROM cards WHERE id = ?')
+			.get(bonus.id) as { payload_enc: string };
+		expect(row.payload_enc).not.toContain('Private repeat offer details');
+		expect(row.payload_enc).not.toContain('repeat-offer');
+		expect(decryptJson<Record<string, unknown>>(row.payload_enc, `card:${bonus.id}`).churn).toEqual(
+			churn
+		);
+
+		closeDatabaseForTests();
+		resetCryptoStateForTests();
+		expect((await getBonus(bonus.id)).churn).toEqual(churn);
+		expect((await listBonuses())[0].churn).toEqual(churn);
+	});
+
+	it('preserves repeat tracking on unrelated updates and explicitly clears it', async () => {
+		const bonus = await createBonus(
+			createBonusSchema.parse({
+				name: 'Repeat offer',
+				openedDate: '2026-01-10',
+				paidDate: '2026-03-10',
+				safeToCloseDate: '2026-07-10',
+				churn: {
+					mode: 'rules',
+					conditions: [{ anchor: 'paidDate', months: 24, days: 0 }],
+					requiresClosed: true
+				}
+			})
+		);
+		const updated = await updateBonus(bonus.id, { notes: 'Payout received' });
+		expect(updated.churn).toEqual(bonus.churn);
+		expect(updated.churn?.closedDate).toBeNull();
+
+		const cleared = await updateBonus(bonus.id, { churn: null });
+		expect(cleared).toMatchObject({ ...updated, churn: null, updatedAt: expect.any(String) });
+		expect((await getBonus(bonus.id)).churn).toBeNull();
+	});
+
+	it('normalizes older bonus payloads without repeat tracking and can update them', async () => {
+		const bonus = await createBonus(createBonusSchema.parse({ name: 'Legacy bonus' }));
+		const database = getDatabase();
+		const row = database.prepare('SELECT payload_enc FROM cards WHERE id = ?').get(bonus.id) as {
+			payload_enc: string;
+		};
+		const legacyPayload = decryptJson<Record<string, unknown>>(row.payload_enc, `card:${bonus.id}`);
+		delete legacyPayload.churn;
+		database
+			.prepare('UPDATE cards SET payload_enc = ? WHERE id = ?')
+			.run(encryptJson(legacyPayload, `card:${bonus.id}`), bonus.id);
+
+		expect((await getBonus(bonus.id)).churn).toBeNull();
+		expect((await listBonuses())[0].churn).toBeNull();
+		expect((await updateBonus(bonus.id, { status: 'paid' })).churn).toBeNull();
+		const configured = await updateBonus(bonus.id, {
+			churn: createBonusSchema.parse({ name: 'Unused', churn: { mode: 'manual' } }).churn
+		});
+		expect(configured.churn).toMatchObject({ mode: 'manual', manualEligibleDate: null });
+	});
+
+	it('does not infer bonus dates or closure from linked accounts when tracking is added', async () => {
+		const account = await createFinancialAccount(
+			createFinancialAccountSchema.parse({
+				nickname: 'Closed checking',
+				accountType: 'checking',
+				status: 'closed',
+				openedDate: '2020-01-10'
+			})
+		);
+		const bonus = await createBonus(
+			createBonusSchema.parse({
+				name: 'Paid offer without dates',
+				accountId: account.id,
+				status: 'paid'
+			})
+		);
+		const updated = await updateBonus(bonus.id, {
+			churn: createBonusSchema.parse({
+				name: 'Unused',
+				churn: {
+					mode: 'rules',
+					conditions: [{ anchor: 'closedDate', months: 12, days: 0 }],
+					requiresClosed: true
+				}
+			}).churn
+		});
+		expect(updated).toMatchObject({
+			...bonus,
+			openedDate: null,
+			paidDate: null,
+			safeToCloseDate: null,
+			status: 'paid',
+			churn: { closedDate: null, requiresClosed: true },
+			updatedAt: expect.any(String)
+		});
+		expect((await listFinancialAccounts())[0]).toMatchObject({ status: 'closed' });
 	});
 
 	it('records brokerage values when a manual balance changes', async () => {

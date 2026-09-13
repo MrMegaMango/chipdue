@@ -30,6 +30,7 @@ import {
 	type StoredRecordSource
 } from './provider-storage';
 import {
+	bonusChurnSchema,
 	bonusStatusSchema,
 	financialAccountOwnerSchema,
 	financialAccountStatusSchema,
@@ -215,6 +216,7 @@ const bonusPayloadSchema = z.object({
 	expectedPayoutDate: dateSchema,
 	paidDate: dateSchema,
 	safeToCloseDate: dateSchema,
+	churn: bonusChurnSchema.nullable().optional().default(null),
 	requirements: z.array(
 		z.object({ id: z.string().uuid(), label: z.string(), completed: z.boolean() })
 	),
@@ -532,6 +534,7 @@ function rowToBonus(row: PrivateRecordRow, payload: BonusPayload): AccountBonus 
 		expectedPayoutDate: payload.expectedPayoutDate,
 		paidDate: payload.paidDate,
 		safeToCloseDate: payload.safeToCloseDate,
+		churn: payload.churn,
 		requirements: payload.requirements,
 		notes: payload.notes,
 		createdAt: row.created_at,
@@ -1272,6 +1275,12 @@ export async function updateBonus(id: string, changes: UpdateBonusData): Promise
 		paidDate: changes.paidDate === undefined ? existing.paidDate : changes.paidDate,
 		safeToCloseDate:
 			changes.safeToCloseDate === undefined ? existing.safeToCloseDate : changes.safeToCloseDate,
+		churn:
+			changes.churn === undefined
+				? existing.churn
+					? { ...existing.churn, openedDate: existing.churn.openedDate ?? null }
+					: null
+				: changes.churn,
 		requirements:
 			changes.requirements === undefined
 				? existing.requirements

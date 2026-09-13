@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	applyCardRewardProfileSchema,
+	bonusChurnSchema,
 	createBonusSchema,
 	createFinancialAccountSchema,
 	createManualCardSchema,
@@ -89,6 +90,114 @@ describe('card request validation', () => {
 				unexpected: true
 			}).success
 		).toBe(false);
+	});
+});
+
+describe('repeat bonus tracking validation', () => {
+	const waitingPeriod = { anchor: 'paidDate', months: 24, days: 1 };
+
+	it('defaults new bonuses to no tracking and preserves omission on updates', () => {
+		expect(createBonusSchema.parse({ name: 'Bonus' }).churn).toBeNull();
+		expect(updateBonusSchema.parse({ status: 'paid' })).not.toHaveProperty('churn');
+		expect(updateBonusSchema.parse({ churn: null })).toEqual({ churn: null });
+	});
+
+	it('accepts multiple waiting periods without requiring their dates yet', () => {
+		const churn = bonusChurnSchema.parse({
+			mode: 'rules',
+			conditions: [
+				waitingPeriod,
+				{ anchor: 'closedDate', months: 0, days: 30 },
+				{ anchor: 'openedDate', months: 1_200, days: 36_500 }
+			],
+			requiresClosed: true
+		});
+		expect(churn).toMatchObject({
+			mode: 'rules',
+			conditions: [
+				waitingPeriod,
+				{ anchor: 'closedDate', months: 0, days: 30 },
+				expect.any(Object)
+			],
+			requiresClosed: true,
+			openedDate: null,
+			closedDate: null,
+			manualEligibleDate: null
+		});
+		expect(createBonusSchema.safeParse({ name: 'Bonus', churn }).success).toBe(true);
+		expect(updateBonusSchema.safeParse({ churn }).success).toBe(true);
+	});
+
+	it.each([
+		[],
+		[{ anchor: 'paidDate', months: 0, days: 0 }],
+		[{ anchor: 'paidDate', months: -1, days: 1 }],
+		[{ anchor: 'paidDate', months: 1.5, days: 0 }],
+		[{ anchor: 'paidDate', months: 1_201, days: 0 }],
+		[{ anchor: 'paidDate', months: 1, days: -1 }],
+		[{ anchor: 'paidDate', months: 1, days: 0.5 }],
+		[{ anchor: 'paidDate', months: 0, days: 36_501 }],
+		[{ anchor: 'expectedPayoutDate', months: 24, days: 0 }],
+		[waitingPeriod, { anchor: 'paidDate', months: 12, days: 0 }],
+		[waitingPeriod, waitingPeriod, waitingPeriod, waitingPeriod],
+		[{ ...waitingPeriod, unexpected: true }]
+	])('rejects invalid or duplicate waiting periods: %j', (...conditions) => {
+		expect(bonusChurnSchema.safeParse({ mode: 'rules', conditions }).success).toBe(false);
+	});
+
+	it('allows manual dates to remain unknown and restriction notes to be saved', () => {
+		expect(bonusChurnSchema.parse({ mode: 'manual' })).toMatchObject({
+			mode: 'manual',
+			conditions: [],
+			manualEligibleDate: null
+		});
+		expect(
+			bonusChurnSchema.parse({
+				mode: 'restricted',
+				notes: 'Check the current offer terms before applying.'
+			})
+		).toMatchObject({ mode: 'restricted', conditions: [] });
+		expect(
+			bonusChurnSchema.safeParse({ mode: 'manual', manualEligibleDate: '2027-02-29' }).success
+		).toBe(false);
+		expect(bonusChurnSchema.safeParse({ mode: 'manual', closedDate: '2026-04-31' }).success).toBe(
+			false
+		);
+		expect(bonusChurnSchema.safeParse({ mode: 'manual', openedDate: '2026-04-31' }).success).toBe(
+			false
+		);
+	});
+
+	it.each(['https://bank.example/offer?campaign=repeat', 'http://bank.example/terms'])(
+		'accepts an offer source URL: %s',
+		(sourceUrl) => {
+			expect(bonusChurnSchema.parse({ mode: 'manual', sourceUrl }).sourceUrl).toBe(sourceUrl);
+		}
+	);
+
+	it.each([
+		'javascript:alert(1)',
+		'data:text/html,<script>alert(1)</script>',
+		'file:///private/terms',
+		'//bank.example/terms',
+		new URL('/terms', `https://${['user:password', 'bank.example'].join('@')}`).toString(),
+		'https://bank.example/unsafe path',
+		'https://',
+		`https://bank.example/${'a'.repeat(2_048)}`
+	])('rejects unsafe or unbounded offer source URLs: %s', (sourceUrl) => {
+		expect(bonusChurnSchema.safeParse({ mode: 'manual', sourceUrl }).success).toBe(false);
+	});
+
+	it('bounds text and rejects unknown tracking properties', () => {
+		for (const extra of [
+			{ presetId: '' },
+			{ presetId: 'a'.repeat(101) },
+			{ notes: 'a'.repeat(2_001) },
+			{ requiresClosed: 'yes' },
+			{ unknown: true }
+		]) {
+			expect(bonusChurnSchema.safeParse({ mode: 'manual', ...extra }).success).toBe(false);
+		}
 	});
 });
 

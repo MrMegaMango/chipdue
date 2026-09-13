@@ -60,6 +60,69 @@ const bonusRequirementSchema = z
 	})
 	.strict();
 
+const bonusChurnConditionSchema = z
+	.object({
+		anchor: z.enum(['paidDate', 'openedDate', 'closedDate']),
+		months: z.number().int().min(0).max(1_200),
+		days: z.number().int().min(0).max(36_500)
+	})
+	.strict()
+	.refine((condition) => condition.months > 0 || condition.days > 0, {
+		message: 'A waiting period must be greater than zero'
+	});
+
+const bonusSourceUrlSchema = z
+	.string()
+	.trim()
+	.max(2_048)
+	.refine((value) => {
+		if (!/^https?:\/\//i.test(value) || /\s/.test(value)) return false;
+		try {
+			const url = new URL(value);
+			return (
+				(url.protocol === 'http:' || url.protocol === 'https:') &&
+				Boolean(url.hostname) &&
+				!url.username &&
+				!url.password
+			);
+		} catch {
+			return false;
+		}
+	}, 'Use an HTTP or HTTPS offer URL without sign-in credentials');
+
+export const bonusChurnSchema = z
+	.object({
+		mode: z.enum(['rules', 'manual', 'restricted']),
+		conditions: z.array(bonusChurnConditionSchema).max(3).optional().default([]),
+		requiresClosed: z.boolean().optional().default(false),
+		openedDate: isoDateSchema.nullable().optional().default(null),
+		closedDate: isoDateSchema.nullable().optional().default(null),
+		manualEligibleDate: isoDateSchema.nullable().optional().default(null),
+		presetId: z.string().trim().min(1).max(100).nullable().optional().default(null),
+		sourceUrl: bonusSourceUrlSchema.nullable().optional().default(null),
+		notes: notesSchema.optional().default(null)
+	})
+	.strict()
+	.superRefine((churn, context) => {
+		if (churn.mode === 'rules' && churn.conditions.length === 0) {
+			context.addIssue({
+				code: 'custom',
+				path: ['conditions'],
+				message: 'Add at least one waiting period'
+			});
+		}
+		if (
+			new Set(churn.conditions.map((condition) => condition.anchor)).size !==
+			churn.conditions.length
+		) {
+			context.addIssue({
+				code: 'custom',
+				path: ['conditions'],
+				message: 'Use each date only once'
+			});
+		}
+	});
+
 export const cardRewardTypeSchema = z.enum(['points', 'miles', 'cash_back']);
 
 export const cardRewardCategoryMatchSchema = z.enum([
@@ -198,6 +261,7 @@ export const createBonusSchema = z
 		expectedPayoutDate: isoDateSchema.nullable().optional().default(null),
 		paidDate: isoDateSchema.nullable().optional().default(null),
 		safeToCloseDate: isoDateSchema.nullable().optional().default(null),
+		churn: bonusChurnSchema.nullable().optional().default(null),
 		requirements: z.array(bonusRequirementSchema).max(20).optional().default([]),
 		notes: notesSchema.optional().default(null)
 	})
@@ -220,6 +284,7 @@ export const updateBonusSchema = z
 		expectedPayoutDate: isoDateSchema.nullable().optional(),
 		paidDate: isoDateSchema.nullable().optional(),
 		safeToCloseDate: isoDateSchema.nullable().optional(),
+		churn: bonusChurnSchema.nullable().optional(),
 		requirements: z.array(bonusRequirementSchema).max(20).optional(),
 		notes: notesSchema.optional()
 	})
