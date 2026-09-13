@@ -699,12 +699,6 @@
 				<button class="finance-button" type="button" onclick={openAdd}>Add your first bonus</button>
 			</div>
 		{:else}
-			<BonusChurnPanel
-				{bonuses}
-				onupdated={(updated) => {
-					bonuses = bonuses.map((bonus) => (bonus.id === updated.id ? updated : bonus));
-				}}
-			/>
 			<section aria-labelledby="bonus-list-title">
 				<div class="finance-section-heading">
 					<div>
@@ -1020,6 +1014,12 @@
 					{/each}
 				</div>
 			</section>
+			<BonusChurnPanel
+				{bonuses}
+				onupdated={(updated) => {
+					bonuses = bonuses.map((bonus) => (bonus.id === updated.id ? updated : bonus));
+				}}
+			/>
 		{/if}
 	</main>
 </div>

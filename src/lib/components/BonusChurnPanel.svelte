@@ -459,7 +459,7 @@
 	}
 
 	.churn-panel {
-		margin: 0 0 1.5rem;
+		margin: 1.5rem 0;
 		border: 1px solid var(--line);
 		border-radius: 14px;
 		background: var(--paper);
