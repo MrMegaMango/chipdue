@@ -459,6 +459,9 @@
 		safeToCloseDate: string | null;
 		feeFreeDowngradeDate: string | null;
 		feeFreeDowngradeDateSource: 'issuer_confirmed' | 'estimated';
+		institution: string | null;
+		currency: string;
+		notes: string | null;
 	};
 
 	type CardForm = {
