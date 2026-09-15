@@ -209,7 +209,13 @@ describe('financial workspace validation', () => {
 		};
 		expect(createBonusSchema.parse({ name: 'Card upgrade bonus', ...dates })).toMatchObject(dates);
 		expect(createBonusSchema.parse({ name: 'Bonus' }).feeFreeDowngradeDate).toBeNull();
+		expect(createBonusSchema.parse({ name: 'Bonus' }).feeFreeDowngradeDateSource).toBe(
+			'issuer_confirmed'
+		);
 		expect(updateBonusSchema.parse({ status: 'paid' })).not.toHaveProperty('feeFreeDowngradeDate');
+		expect(updateBonusSchema.parse({ status: 'paid' })).not.toHaveProperty(
+			'feeFreeDowngradeDateSource'
+		);
 		expect(updateBonusSchema.parse({ feeFreeDowngradeDate: null })).toEqual({
 			feeFreeDowngradeDate: null
 		});
@@ -217,6 +223,25 @@ describe('financial workspace validation', () => {
 			feeFreeDowngradeDate: dates.feeFreeDowngradeDate
 		});
 	});
+
+	it.each(['issuer_confirmed', 'estimated'] as const)(
+		'accepts a fee-free downgrade deadline with %s provenance',
+		(feeFreeDowngradeDateSource) => {
+			const deadline = { feeFreeDowngradeDate: '2028-03-15', feeFreeDowngradeDateSource };
+			expect(createBonusSchema.parse({ name: 'Bonus', ...deadline })).toMatchObject(deadline);
+			expect(updateBonusSchema.parse(deadline)).toEqual(deadline);
+		}
+	);
+
+	it.each(['confirmed', 'unknown', '', null, false])(
+		'rejects invalid fee deadline provenance: %s',
+		(feeFreeDowngradeDateSource) => {
+			expect(
+				createBonusSchema.safeParse({ name: 'Bonus', feeFreeDowngradeDateSource }).success
+			).toBe(false);
+			expect(updateBonusSchema.safeParse({ feeFreeDowngradeDateSource }).success).toBe(false);
+		}
+	);
 
 	it.each(['2027-02-29', '2028-04-31', '2028-3-15', '2028-03-15T00:00:00Z', ''])(
 		'rejects an invalid fee-free downgrade date: %s',

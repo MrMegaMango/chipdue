@@ -458,6 +458,7 @@
 		expectedPayoutDate: string | null;
 		safeToCloseDate: string | null;
 		feeFreeDowngradeDate: string | null;
+		feeFreeDowngradeDateSource: 'issuer_confirmed' | 'estimated';
 	};
 
 	type CardForm = {

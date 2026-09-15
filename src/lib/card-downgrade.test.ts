@@ -31,6 +31,35 @@ describe('card downgrade timing', () => {
 		expect(timing.message).toContain('No fee-free window');
 	});
 
+	it('shows an estimated deadline without presenting it as issuer-confirmed', () => {
+		const timing = cardDowngradeTiming({
+			safeToCloseDate: '2028-04-18',
+			feeFreeDowngradeDate: '2028-05-02',
+			feeFreeDowngradeDateSource: 'estimated'
+		});
+		expect(timing.deadline).toBe('2028-05-02');
+		expect(timing.estimated).toBe(true);
+		expect(timing.message).toContain('Estimated from');
+	});
+
+	it('flags the bonus risk without claiming an estimated conflict is certain', () => {
+		const timing = cardDowngradeTiming({
+			safeToCloseDate: '2028-04-18',
+			feeFreeDowngradeDate: '2028-04-16',
+			feeFreeDowngradeDateSource: 'estimated'
+		});
+		expect(timing.conflict).toBe(true);
+		expect(timing.message).toContain('could put your bonus at risk');
+		expect(timing.message).not.toContain('No fee-free window');
+	});
+
+	it('keeps old confirmed deadlines confirmed', () => {
+		expect(
+			cardDowngradeTiming({ safeToCloseDate: '2028-04-18', feeFreeDowngradeDate: '2028-05-02' })
+				.estimated
+		).toBe(false);
+	});
+
 	it('allows an issuer-confirmed deadline on the saved earliest date', () => {
 		expect(
 			cardDowngradeTiming({

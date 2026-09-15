@@ -23,7 +23,10 @@
 	<dl>
 		<div>
 			<dt>Downgrade by to avoid fee</dt>
-			<dd>{formatDate(timing.deadline)}{timing.expired ? ' · Passed' : ''}</dd>
+			<dd>
+				{formatDate(timing.deadline)}{timing.expired ? ' · Passed' : ''}
+				{#if timing.estimated}<small>Estimated</small>{/if}
+			</dd>
 		</div>
 		<div>
 			<dt>Earliest downgrade</dt>
@@ -61,6 +64,13 @@
 		color: #626d82;
 		font-size: 12px;
 		line-height: 1.5;
+	}
+	dd small {
+		display: block;
+		margin-top: 3px;
+		color: #626d82;
+		font-size: 11px;
+		font-weight: 500;
 	}
 	.conflict p {
 		color: #9b3b20;

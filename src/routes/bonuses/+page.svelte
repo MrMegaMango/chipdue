@@ -56,6 +56,7 @@
 		paidDate: string;
 		safeToCloseDate: string;
 		feeFreeDowngradeDate: string;
+		feeFreeDowngradeDateSource: 'issuer_confirmed' | 'estimated';
 		requirementsText: string;
 		notes: string;
 	};
@@ -175,6 +176,7 @@
 			paidDate: '',
 			safeToCloseDate: '',
 			feeFreeDowngradeDate: '',
+			feeFreeDowngradeDateSource: 'estimated',
 			requirementsText: '',
 			notes: ''
 		};
@@ -466,6 +468,9 @@
 			paidDate: bonus.paidDate ?? '',
 			safeToCloseDate: bonus.safeToCloseDate ?? '',
 			feeFreeDowngradeDate: bonus.feeFreeDowngradeDate ?? '',
+			feeFreeDowngradeDateSource: bonus.feeFreeDowngradeDate
+				? (bonus.feeFreeDowngradeDateSource ?? 'issuer_confirmed')
+				: 'estimated',
 			requirementsText: bonus.requirements.map((requirement) => requirement.label).join('\n'),
 			notes: bonus.notes ?? ''
 		};
@@ -538,6 +543,7 @@
 
 	function handleCardChange(): void {
 		form.feeFreeDowngradeDate = '';
+		form.feeFreeDowngradeDateSource = 'estimated';
 		const card = cards.find((candidate) => candidate.id === form.cardId);
 		if (!card) return;
 		form.accountId = '';
@@ -606,6 +612,7 @@
 			paidDate: form.paidDate || null,
 			safeToCloseDate: form.safeToCloseDate || null,
 			feeFreeDowngradeDate: form.cardId ? form.feeFreeDowngradeDate || null : null,
+			feeFreeDowngradeDateSource: form.feeFreeDowngradeDateSource,
 			requirements: formRequirements(),
 			notes: form.notes.trim() || null
 		};
@@ -1318,9 +1325,16 @@
 								aria-describedby="bonus-fee-help"
 							/>
 							<small id="bonus-fee-help"
-								>Use the latest effective downgrade date confirmed by your issuer to avoid the next
-								annual fee. Leave blank if unknown; a fee-refund deadline is different.</small
+								>Save a deadline from your offer terms or issuer confirmation. The downgrade must
+								take effect by this date; a fee-refund deadline is different.</small
 							>
+						</div>
+						<div class="finance-field">
+							<label for="bonus-fee-source">Deadline basis</label>
+							<select id="bonus-fee-source" bind:value={form.feeFreeDowngradeDateSource}>
+								<option value="estimated">Estimated from offer terms</option>
+								<option value="issuer_confirmed">Confirmed by issuer</option>
+							</select>
 						</div>
 					{/if}
 					<div class="finance-field wide">

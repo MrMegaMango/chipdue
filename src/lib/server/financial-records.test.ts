@@ -125,7 +125,8 @@ describe.sequential('encrypted financial records', () => {
 	it('stores the fee-free downgrade deadline separately and preserves it on unrelated updates', async () => {
 		const dates = {
 			safeToCloseDate: '2028-02-29',
-			feeFreeDowngradeDate: '2028-03-15'
+			feeFreeDowngradeDate: '2028-03-15',
+			feeFreeDowngradeDateSource: 'issuer_confirmed'
 		};
 		const bonus = await createBonus(
 			createBonusSchema.parse({ name: 'Card upgrade bonus', ...dates })
@@ -157,6 +158,78 @@ describe.sequential('encrypted financial records', () => {
 		expect((await getBonus(bonus.id)).feeFreeDowngradeDate).toBeNull();
 	});
 
+	it('persists estimated deadline provenance and preserves it when editing other bonus details', async () => {
+		const deadline = {
+			feeFreeDowngradeDate: '2028-03-15',
+			feeFreeDowngradeDateSource: 'estimated' as const
+		};
+		const bonus = await createBonus(
+			createBonusSchema.parse({ name: 'Estimated card bonus', ...deadline })
+		);
+		const row = getDatabase()
+			.prepare('SELECT payload_enc FROM cards WHERE id = ?')
+			.get(bonus.id) as { payload_enc: string };
+		expect(row.payload_enc).not.toContain('estimated');
+		expect(decryptJson<Record<string, unknown>>(row.payload_enc, `card:${bonus.id}`)).toMatchObject(
+			deadline
+		);
+
+		closeDatabaseForTests();
+		resetCryptoStateForTests();
+		expect(await getBonus(bonus.id)).toMatchObject(deadline);
+		expect((await listBonuses())[0]).toMatchObject(deadline);
+		expect(await updateBonus(bonus.id, { status: 'paid', notes: 'Offer completed' })).toMatchObject(
+			deadline
+		);
+		expect(
+			await updateBonus(bonus.id, {
+				name: 'Updated bonus',
+				feeFreeDowngradeDate: deadline.feeFreeDowngradeDate
+			})
+		).toMatchObject(deadline);
+		expect(await updateBonus(bonus.id, { feeFreeDowngradeDate: '2028-03-14' })).toMatchObject({
+			feeFreeDowngradeDate: '2028-03-14',
+			feeFreeDowngradeDateSource: 'estimated'
+		});
+		const confirmedDeadline = {
+			feeFreeDowngradeDate: '2028-03-16',
+			feeFreeDowngradeDateSource: 'issuer_confirmed' as const
+		};
+		expect(await updateBonus(bonus.id, confirmedDeadline)).toMatchObject(confirmedDeadline);
+		expect(await getBonus(bonus.id)).toMatchObject(confirmedDeadline);
+		expect(await updateBonus(bonus.id, deadline)).toMatchObject(deadline);
+		expect(await updateBonus(bonus.id, { feeFreeDowngradeDate: null })).toMatchObject({
+			feeFreeDowngradeDate: null,
+			feeFreeDowngradeDateSource: 'issuer_confirmed'
+		});
+	});
+
+	it('preserves issuer confirmation for older encrypted deadlines without provenance', async () => {
+		const bonus = await createBonus(
+			createBonusSchema.parse({
+				name: 'Legacy confirmed bonus',
+				feeFreeDowngradeDate: '2028-03-15'
+			})
+		);
+		const database = getDatabase();
+		const row = database.prepare('SELECT payload_enc FROM cards WHERE id = ?').get(bonus.id) as {
+			payload_enc: string;
+		};
+		const legacyPayload = decryptJson<Record<string, unknown>>(row.payload_enc, `card:${bonus.id}`);
+		delete legacyPayload.feeFreeDowngradeDateSource;
+		database
+			.prepare('UPDATE cards SET payload_enc = ? WHERE id = ?')
+			.run(encryptJson(legacyPayload, `card:${bonus.id}`), bonus.id);
+
+		const deadline = {
+			feeFreeDowngradeDate: '2028-03-15',
+			feeFreeDowngradeDateSource: 'issuer_confirmed'
+		};
+		expect(await getBonus(bonus.id)).toMatchObject(deadline);
+		expect((await listBonuses())[0]).toMatchObject(deadline);
+		expect(await updateBonus(bonus.id, { notes: 'Saved legacy bonus' })).toMatchObject(deadline);
+	});
+
 	it('does not infer a fee-free downgrade deadline from the hold date in older encrypted bonuses', async () => {
 		const bonus = await createBonus(
 			createBonusSchema.parse({ name: 'Legacy card bonus', safeToCloseDate: '2028-02-29' })
@@ -167,13 +240,15 @@ describe.sequential('encrypted financial records', () => {
 		};
 		const legacyPayload = decryptJson<Record<string, unknown>>(row.payload_enc, `card:${bonus.id}`);
 		delete legacyPayload.feeFreeDowngradeDate;
+		delete legacyPayload.feeFreeDowngradeDateSource;
 		database
 			.prepare('UPDATE cards SET payload_enc = ? WHERE id = ?')
 			.run(encryptJson(legacyPayload, `card:${bonus.id}`), bonus.id);
 
 		expect(await getBonus(bonus.id)).toMatchObject({
 			safeToCloseDate: '2028-02-29',
-			feeFreeDowngradeDate: null
+			feeFreeDowngradeDate: null,
+			feeFreeDowngradeDateSource: 'issuer_confirmed'
 		});
 		expect((await listBonuses())[0].feeFreeDowngradeDate).toBeNull();
 		expect((await updateBonus(bonus.id, { status: 'paid' })).feeFreeDowngradeDate).toBeNull();
@@ -190,7 +265,8 @@ describe.sequential('encrypted financial records', () => {
 				name: 'Card bonus',
 				cardId: firstCardId,
 				safeToCloseDate: '2028-02-29',
-				feeFreeDowngradeDate: '2028-03-15'
+				feeFreeDowngradeDate: '2028-03-15',
+				feeFreeDowngradeDateSource: 'estimated'
 			})
 		);
 		expect((await updateBonus(bonus.id, { cardId: firstCardId })).feeFreeDowngradeDate).toBe(
@@ -199,18 +275,25 @@ describe.sequential('encrypted financial records', () => {
 		expect(await updateBonus(bonus.id, { cardId: secondCardId })).toMatchObject({
 			cardId: secondCardId,
 			safeToCloseDate: '2028-02-29',
-			feeFreeDowngradeDate: null
+			feeFreeDowngradeDate: null,
+			feeFreeDowngradeDateSource: 'issuer_confirmed'
 		});
 		expect((await getBonus(bonus.id)).feeFreeDowngradeDate).toBeNull();
 		expect(
 			await updateBonus(bonus.id, {
 				cardId: firstCardId,
-				feeFreeDowngradeDate: '2028-03-14'
+				feeFreeDowngradeDate: '2028-03-14',
+				feeFreeDowngradeDateSource: 'estimated'
 			})
-		).toMatchObject({ cardId: firstCardId, feeFreeDowngradeDate: '2028-03-14' });
+		).toMatchObject({
+			cardId: firstCardId,
+			feeFreeDowngradeDate: '2028-03-14',
+			feeFreeDowngradeDateSource: 'estimated'
+		});
 		expect(await updateBonus(bonus.id, { cardId: null })).toMatchObject({
 			cardId: null,
-			feeFreeDowngradeDate: null
+			feeFreeDowngradeDate: null,
+			feeFreeDowngradeDateSource: 'issuer_confirmed'
 		});
 	});
 

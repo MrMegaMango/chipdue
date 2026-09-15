@@ -51,6 +51,7 @@ export const bonusStatusSchema = z.enum([
 	'closed',
 	'abandoned'
 ]);
+export const feeFreeDowngradeDateSourceSchema = z.enum(['issuer_confirmed', 'estimated']);
 
 const bonusRequirementSchema = z
 	.object({
@@ -262,6 +263,9 @@ export const createBonusSchema = z
 		paidDate: isoDateSchema.nullable().optional().default(null),
 		safeToCloseDate: isoDateSchema.nullable().optional().default(null),
 		feeFreeDowngradeDate: isoDateSchema.nullable().optional().default(null),
+		feeFreeDowngradeDateSource: feeFreeDowngradeDateSourceSchema
+			.optional()
+			.default('issuer_confirmed'),
 		churn: bonusChurnSchema.nullable().optional().default(null),
 		requirements: z.array(bonusRequirementSchema).max(20).optional().default([]),
 		notes: notesSchema.optional().default(null)
@@ -286,6 +290,7 @@ export const updateBonusSchema = z
 		paidDate: isoDateSchema.nullable().optional(),
 		safeToCloseDate: isoDateSchema.nullable().optional(),
 		feeFreeDowngradeDate: isoDateSchema.nullable().optional(),
+		feeFreeDowngradeDateSource: feeFreeDowngradeDateSourceSchema.optional(),
 		churn: bonusChurnSchema.nullable().optional(),
 		requirements: z.array(bonusRequirementSchema).max(20).optional(),
 		notes: notesSchema.optional()

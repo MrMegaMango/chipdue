@@ -272,8 +272,9 @@ export interface AccountBonus {
 	expectedPayoutDate: string | null;
 	paidDate: string | null;
 	safeToCloseDate: string | null;
-	/** Issuer-confirmed latest effective downgrade date that avoids the next annual fee. */
+	/** Latest effective downgrade date intended to avoid the next annual fee. */
 	feeFreeDowngradeDate: string | null;
+	feeFreeDowngradeDateSource: 'issuer_confirmed' | 'estimated';
 	churn?: BonusChurn | null;
 	requirements: BonusRequirement[];
 	notes: string | null;

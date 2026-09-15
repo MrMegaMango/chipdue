@@ -32,6 +32,7 @@ import {
 import {
 	bonusChurnSchema,
 	bonusStatusSchema,
+	feeFreeDowngradeDateSourceSchema,
 	financialAccountOwnerSchema,
 	financialAccountStatusSchema,
 	financialAccountTypeSchema,
@@ -217,6 +218,9 @@ const bonusPayloadSchema = z.object({
 	paidDate: dateSchema,
 	safeToCloseDate: dateSchema,
 	feeFreeDowngradeDate: dateSchema.optional().default(null),
+	feeFreeDowngradeDateSource: feeFreeDowngradeDateSourceSchema
+		.optional()
+		.default('issuer_confirmed'),
 	churn: bonusChurnSchema.nullable().optional().default(null),
 	requirements: z.array(
 		z.object({ id: z.string().uuid(), label: z.string(), completed: z.boolean() })
@@ -536,6 +540,7 @@ function rowToBonus(row: PrivateRecordRow, payload: BonusPayload): AccountBonus 
 		paidDate: payload.paidDate,
 		safeToCloseDate: payload.safeToCloseDate,
 		feeFreeDowngradeDate: payload.feeFreeDowngradeDate,
+		feeFreeDowngradeDateSource: payload.feeFreeDowngradeDateSource,
 		churn: payload.churn,
 		requirements: payload.requirements,
 		notes: payload.notes,
@@ -1248,6 +1253,18 @@ export async function createBonus(input: CreateBonusData): Promise<AccountBonus>
 
 export async function updateBonus(id: string, changes: UpdateBonusData): Promise<AccountBonus> {
 	const existing = await getBonus(id);
+	const cardChanged = changes.cardId !== undefined && changes.cardId !== existing.cardId;
+	const feeFreeDowngradeDate =
+		changes.feeFreeDowngradeDate === undefined
+			? cardChanged
+				? null
+				: existing.feeFreeDowngradeDate
+			: changes.feeFreeDowngradeDate;
+	const feeFreeDowngradeDateSource =
+		feeFreeDowngradeDate === null
+			? 'issuer_confirmed'
+			: (changes.feeFreeDowngradeDateSource ??
+				(cardChanged ? 'issuer_confirmed' : existing.feeFreeDowngradeDateSource));
 	const payload: BonusPayload = {
 		recordType: 'bonus',
 		accountId: changes.accountId === undefined ? existing.accountId : changes.accountId,
@@ -1277,12 +1294,8 @@ export async function updateBonus(id: string, changes: UpdateBonusData): Promise
 		paidDate: changes.paidDate === undefined ? existing.paidDate : changes.paidDate,
 		safeToCloseDate:
 			changes.safeToCloseDate === undefined ? existing.safeToCloseDate : changes.safeToCloseDate,
-		feeFreeDowngradeDate:
-			changes.feeFreeDowngradeDate === undefined
-				? changes.cardId !== undefined && changes.cardId !== existing.cardId
-					? null
-					: existing.feeFreeDowngradeDate
-				: changes.feeFreeDowngradeDate,
+		feeFreeDowngradeDate,
+		feeFreeDowngradeDateSource,
 		churn:
 			changes.churn === undefined
 				? existing.churn
