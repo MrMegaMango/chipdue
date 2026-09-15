@@ -215,7 +215,7 @@ describe('card activity preview', () => {
 		expect(bonusIndex).toBeGreaterThan(cardFooterIndex);
 		expect(source).toContain('align-items: start;');
 		expect(source).toContain('Eligible spend');
-		expect(source).toContain('Safe to downgrade');
+		expect(source).toContain('<CardDowngradeTiming {bonus} />');
 		expect(source).toContain('Estimated from posted Plaid activity');
 	});
 

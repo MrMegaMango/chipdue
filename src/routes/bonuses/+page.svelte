@@ -14,6 +14,7 @@
 	} from '$lib/bonus-offers';
 	import SyncedTime from '$lib/components/SyncedTime.svelte';
 	import BonusChurnPanel from '$lib/components/BonusChurnPanel.svelte';
+	import CardDowngradeTiming from '$lib/components/CardDowngradeTiming.svelte';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
 	import { clearPrivateApiCache, reusePrivateApiGet } from '$lib/private-api-cache';
 	import type {
@@ -54,6 +55,7 @@
 		expectedPayoutDate: string;
 		paidDate: string;
 		safeToCloseDate: string;
+		feeFreeDowngradeDate: string;
 		requirementsText: string;
 		notes: string;
 	};
@@ -172,6 +174,7 @@
 			expectedPayoutDate: '',
 			paidDate: '',
 			safeToCloseDate: '',
+			feeFreeDowngradeDate: '',
 			requirementsText: '',
 			notes: ''
 		};
@@ -462,6 +465,7 @@
 			expectedPayoutDate: bonus.expectedPayoutDate ?? '',
 			paidDate: bonus.paidDate ?? '',
 			safeToCloseDate: bonus.safeToCloseDate ?? '',
+			feeFreeDowngradeDate: bonus.feeFreeDowngradeDate ?? '',
 			requirementsText: bonus.requirements.map((requirement) => requirement.label).join('\n'),
 			notes: bonus.notes ?? ''
 		};
@@ -533,6 +537,7 @@
 	}
 
 	function handleCardChange(): void {
+		form.feeFreeDowngradeDate = '';
 		const card = cards.find((candidate) => candidate.id === form.cardId);
 		if (!card) return;
 		form.accountId = '';
@@ -600,6 +605,7 @@
 			expectedPayoutDate: form.expectedPayoutDate || null,
 			paidDate: form.paidDate || null,
 			safeToCloseDate: form.safeToCloseDate || null,
+			feeFreeDowngradeDate: form.cardId ? form.feeFreeDowngradeDate || null : null,
 			requirements: formRequirements(),
 			notes: form.notes.trim() || null
 		};
@@ -1052,15 +1058,20 @@
 								</section>
 							{/if}
 
+							{#if bonus.cardId}
+								<CardDowngradeTiming {bonus} />
+							{/if}
 							<dl class="finance-details bonus-dates">
 								<div>
 									<dt>Expected payout</dt>
 									<dd>{formatDate(bonus.expectedPayoutDate)}</dd>
 								</div>
-								<div>
-									<dt>Safe to close</dt>
-									<dd>{formatDate(bonus.safeToCloseDate)}</dd>
-								</div>
+								{#if !bonus.cardId}
+									<div>
+										<dt>Safe to close</dt>
+										<dd>{formatDate(bonus.safeToCloseDate)}</dd>
+									</div>
+								{/if}
 							</dl>
 							<footer>
 								<button type="button" onclick={() => openEdit(bonus)}>Edit</button>
@@ -1247,7 +1258,11 @@
 						</select>
 					</div>
 					<div class="finance-field">
-						<label for="bonus-opened">{selectedOffer?.startDateLabel ?? 'Account opened'}</label>
+						<label for="bonus-opened"
+							>{form.cardId
+								? 'Offer accepted / upgraded'
+								: (selectedOffer?.startDateLabel ?? 'Account opened')}</label
+						>
 						<input
 							id="bonus-opened"
 							type="date"
@@ -1283,7 +1298,9 @@
 						<input id="bonus-paid" type="date" bind:value={form.paidDate} />
 					</div>
 					<div class="finance-field">
-						<label for="bonus-close">Safe to close</label>
+						<label for="bonus-close"
+							>{form.cardId ? 'Earliest downgrade (bonus hold)' : 'Safe to close'}</label
+						>
 						<input
 							id="bonus-close"
 							type="date"
@@ -1291,6 +1308,21 @@
 							readonly={Boolean(form.offerTemplateId)}
 						/>
 					</div>
+					{#if form.cardId}
+						<div class="finance-field">
+							<label for="bonus-fee-deadline">Downgrade by to avoid fee</label>
+							<input
+								id="bonus-fee-deadline"
+								type="date"
+								bind:value={form.feeFreeDowngradeDate}
+								aria-describedby="bonus-fee-help"
+							/>
+							<small id="bonus-fee-help"
+								>Use the latest effective downgrade date confirmed by your issuer to avoid the next
+								annual fee. Leave blank if unknown; a fee-refund deadline is different.</small
+							>
+						</div>
+					{/if}
 					<div class="finance-field wide">
 						<label for="bonus-requirements">Requirements</label>
 						<textarea

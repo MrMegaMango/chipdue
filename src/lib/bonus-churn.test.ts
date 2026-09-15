@@ -26,6 +26,7 @@ const bonus: AccountBonus = {
 	expectedPayoutDate: '2024-04-01',
 	paidDate: '2024-04-15',
 	safeToCloseDate: '2024-04-16',
+	feeFreeDowngradeDate: null,
 	requirements: [],
 	notes: null,
 	createdAt: '2024-01-01T12:00:00.000Z',

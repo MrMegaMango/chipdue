@@ -299,6 +299,7 @@
 	import { financialProviderName } from '$lib/financial-data';
 	import { clearPrivateApiCache, reusePrivateApiGet } from '$lib/private-api-cache';
 	import type { FinancialAccount } from '$lib/types';
+	import CardDowngradeTiming from '$lib/components/CardDowngradeTiming.svelte';
 
 	type PageSection = 'overview' | 'cards' | 'settings';
 	const currentSection: PageSection = $derived(
@@ -456,6 +457,7 @@
 		requirementDeadline: string | null;
 		expectedPayoutDate: string | null;
 		safeToCloseDate: string | null;
+		feeFreeDowngradeDate: string | null;
 	};
 
 	type CardForm = {
@@ -3577,13 +3579,10 @@
 												</p>
 											{/if}
 
+											<CardDowngradeTiming {bonus} />
 											<div class="card-bonus-dates">
 												<span
 													>Expected payout <strong>{formatDate(bonus.expectedPayoutDate)}</strong
-													></span
-												>
-												<span
-													>Safe to downgrade <strong>{formatDate(bonus.safeToCloseDate)}</strong
 													></span
 												>
 											</div>

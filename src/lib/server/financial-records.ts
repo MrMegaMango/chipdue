@@ -216,6 +216,7 @@ const bonusPayloadSchema = z.object({
 	expectedPayoutDate: dateSchema,
 	paidDate: dateSchema,
 	safeToCloseDate: dateSchema,
+	feeFreeDowngradeDate: dateSchema.optional().default(null),
 	churn: bonusChurnSchema.nullable().optional().default(null),
 	requirements: z.array(
 		z.object({ id: z.string().uuid(), label: z.string(), completed: z.boolean() })
@@ -534,6 +535,7 @@ function rowToBonus(row: PrivateRecordRow, payload: BonusPayload): AccountBonus 
 		expectedPayoutDate: payload.expectedPayoutDate,
 		paidDate: payload.paidDate,
 		safeToCloseDate: payload.safeToCloseDate,
+		feeFreeDowngradeDate: payload.feeFreeDowngradeDate,
 		churn: payload.churn,
 		requirements: payload.requirements,
 		notes: payload.notes,
@@ -1275,6 +1277,12 @@ export async function updateBonus(id: string, changes: UpdateBonusData): Promise
 		paidDate: changes.paidDate === undefined ? existing.paidDate : changes.paidDate,
 		safeToCloseDate:
 			changes.safeToCloseDate === undefined ? existing.safeToCloseDate : changes.safeToCloseDate,
+		feeFreeDowngradeDate:
+			changes.feeFreeDowngradeDate === undefined
+				? changes.cardId !== undefined && changes.cardId !== existing.cardId
+					? null
+					: existing.feeFreeDowngradeDate
+				: changes.feeFreeDowngradeDate,
 		churn:
 			changes.churn === undefined
 				? existing.churn

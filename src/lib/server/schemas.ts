@@ -261,6 +261,7 @@ export const createBonusSchema = z
 		expectedPayoutDate: isoDateSchema.nullable().optional().default(null),
 		paidDate: isoDateSchema.nullable().optional().default(null),
 		safeToCloseDate: isoDateSchema.nullable().optional().default(null),
+		feeFreeDowngradeDate: isoDateSchema.nullable().optional().default(null),
 		churn: bonusChurnSchema.nullable().optional().default(null),
 		requirements: z.array(bonusRequirementSchema).max(20).optional().default([]),
 		notes: notesSchema.optional().default(null)
@@ -284,6 +285,7 @@ export const updateBonusSchema = z
 		expectedPayoutDate: isoDateSchema.nullable().optional(),
 		paidDate: isoDateSchema.nullable().optional(),
 		safeToCloseDate: isoDateSchema.nullable().optional(),
+		feeFreeDowngradeDate: isoDateSchema.nullable().optional(),
 		churn: bonusChurnSchema.nullable().optional(),
 		requirements: z.array(bonusRequirementSchema).max(20).optional(),
 		notes: notesSchema.optional()

@@ -202,6 +202,32 @@ describe('repeat bonus tracking validation', () => {
 });
 
 describe('financial workspace validation', () => {
+	it('keeps the confirmed fee-free downgrade deadline independent from the bonus hold date', () => {
+		const dates = {
+			safeToCloseDate: '2028-02-29',
+			feeFreeDowngradeDate: '2028-03-15'
+		};
+		expect(createBonusSchema.parse({ name: 'Card upgrade bonus', ...dates })).toMatchObject(dates);
+		expect(createBonusSchema.parse({ name: 'Bonus' }).feeFreeDowngradeDate).toBeNull();
+		expect(updateBonusSchema.parse({ status: 'paid' })).not.toHaveProperty('feeFreeDowngradeDate');
+		expect(updateBonusSchema.parse({ feeFreeDowngradeDate: null })).toEqual({
+			feeFreeDowngradeDate: null
+		});
+		expect(updateBonusSchema.parse({ feeFreeDowngradeDate: dates.feeFreeDowngradeDate })).toEqual({
+			feeFreeDowngradeDate: dates.feeFreeDowngradeDate
+		});
+	});
+
+	it.each(['2027-02-29', '2028-04-31', '2028-3-15', '2028-03-15T00:00:00Z', ''])(
+		'rejects an invalid fee-free downgrade date: %s',
+		(feeFreeDowngradeDate) => {
+			expect(createBonusSchema.safeParse({ name: 'Bonus', feeFreeDowngradeDate }).success).toBe(
+				false
+			);
+			expect(updateBonusSchema.safeParse({ feeFreeDowngradeDate }).success).toBe(false);
+		}
+	);
+
 	it('accepts bank and brokerage accounts without full account numbers', () => {
 		expect(
 			createFinancialAccountSchema.safeParse({

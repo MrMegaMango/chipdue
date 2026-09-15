@@ -272,6 +272,8 @@ export interface AccountBonus {
 	expectedPayoutDate: string | null;
 	paidDate: string | null;
 	safeToCloseDate: string | null;
+	/** Issuer-confirmed latest effective downgrade date that avoids the next annual fee. */
+	feeFreeDowngradeDate: string | null;
 	churn?: BonusChurn | null;
 	requirements: BonusRequirement[];
 	notes: string | null;
