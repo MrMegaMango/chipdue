@@ -21,6 +21,12 @@
 		{ id: 'accounts', label: 'Accounts', href: '/accounts' },
 		{ id: 'bonuses', label: 'Bonuses', href: '/bonuses' }
 	];
+
+	const currentLabel = $derived(
+		current === 'settings'
+			? 'Settings'
+			: (links.find((link) => link.id === current)?.label ?? 'Workspace')
+	);
 </script>
 
 <header class="workspace-header">
@@ -34,13 +40,38 @@
 		</span>
 	</a>
 
-	<nav aria-label="Financial workspace">
-		{#each links as link (link.id)}
-			<a href={resolve(link.href)} aria-current={current === link.id ? 'page' : undefined}>
-				{link.label}
-			</a>
-		{/each}
-	</nav>
+	<details class="workspace-navigation">
+		<summary aria-label={`Workspace navigation. Current section: ${currentLabel}.`}>
+			<span class="current-section">
+				<span class="current-indicator" aria-hidden="true"></span>
+				<span>
+					<small>Current section</small>
+					<strong>{currentLabel}</strong>
+				</span>
+			</span>
+			<span class="navigation-action" aria-hidden="true">
+				<span>Browse</span>
+				<svg viewBox="0 0 16 16">
+					<path d="m4 6 4 4 4-4"></path>
+				</svg>
+			</span>
+		</summary>
+
+		<nav aria-label="Financial workspace">
+			{#each links as link (link.id)}
+				<a href={resolve(link.href)} aria-current={current === link.id ? 'page' : undefined}>
+					<span>{link.label}</span>
+					{#if current === link.id}
+						<small>Current</small>
+					{:else}
+						<svg aria-hidden="true" viewBox="0 0 16 16">
+							<path d="m6 3 5 5-5 5"></path>
+						</svg>
+					{/if}
+				</a>
+			{/each}
+		</nav>
+	</details>
 
 	<div class="header-controls">
 		<a
@@ -68,9 +99,9 @@
 <style>
 	.workspace-header {
 		display: grid;
-		grid-template-columns: 1fr auto 1fr;
+		grid-template-columns: 1fr minmax(260px, 380px) 1fr;
 		gap: 1.5rem;
-		align-items: center;
+		align-items: start;
 		min-height: 78px;
 		border-bottom: 1px solid rgba(187, 180, 168, 0.55);
 	}
@@ -80,6 +111,7 @@
 		gap: 0.65rem;
 		align-items: center;
 		justify-self: start;
+		margin-top: 20px;
 		color: var(--ink);
 		text-decoration: none;
 	}
@@ -117,37 +149,166 @@
 		text-transform: uppercase;
 	}
 
-	nav {
+	.workspace-navigation {
+		width: 100%;
+		margin: 15px 0;
+	}
+
+	.workspace-navigation summary {
 		display: flex;
-		gap: 0.25rem;
+		min-height: 47px;
 		align-items: center;
-		padding: 0.24rem;
+		justify-content: space-between;
+		gap: 1rem;
+		padding: 0.55rem 0.72rem;
 		border: 1px solid var(--line);
-		border-radius: 11px;
-		background: rgba(255, 253, 249, 0.72);
+		border-radius: 10px;
+		background: rgba(255, 253, 249, 0.82);
+		box-shadow: var(--shadow-sm);
+		cursor: pointer;
+		list-style: none;
+		transition:
+			border-color 120ms ease,
+			background 120ms ease;
+	}
+
+	.workspace-navigation summary::-webkit-details-marker {
+		display: none;
+	}
+
+	.workspace-navigation summary:hover {
+		border-color: var(--line-strong);
+		background: var(--paper);
+	}
+
+	.current-section {
+		display: flex;
+		align-items: center;
+		gap: 0.65rem;
+		min-width: 0;
+	}
+
+	.current-section > span:last-child {
+		display: grid;
+		gap: 0.08rem;
+		min-width: 0;
+	}
+
+	.current-indicator {
+		width: 8px;
+		height: 8px;
+		flex: 0 0 auto;
+		border-radius: 50%;
+		background: var(--accent);
+		box-shadow: 0 0 0 4px var(--accent-soft);
+	}
+
+	.current-section small {
+		color: var(--faint);
+		font-size: 0.54rem;
+		font-weight: 720;
+		letter-spacing: 0.08em;
+		line-height: 1.1;
+		text-transform: uppercase;
+	}
+
+	.current-section strong {
+		overflow: hidden;
+		color: var(--ink-soft);
+		font-size: 0.76rem;
+		font-weight: 760;
+		line-height: 1.15;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.navigation-action {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		color: var(--muted);
+		font-size: 0.62rem;
+		font-weight: 700;
+	}
+
+	.navigation-action svg {
+		width: 14px;
+		height: 14px;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.8;
+		stroke-linecap: round;
+		stroke-linejoin: round;
+		transition: transform 150ms ease;
+	}
+
+	.workspace-navigation[open] .navigation-action svg {
+		transform: rotate(180deg);
+	}
+
+	nav {
+		display: grid;
+		overflow: hidden;
+		margin-top: 0.45rem;
 	}
 
 	nav a {
-		padding: 0.48rem 0.72rem;
-		border-radius: 8px;
+		display: flex;
+		min-height: 45px;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+		padding: 0.65rem 0.78rem;
+		border: 1px solid var(--line);
+		border-bottom: 0;
 		color: var(--muted);
-		font-size: 0.72rem;
+		font-size: 0.7rem;
 		font-weight: 720;
+		background: rgba(255, 253, 249, 0.72);
 		text-decoration: none;
 		transition:
 			color 120ms ease,
-			background 120ms ease;
+			background 120ms ease,
+			padding 120ms ease;
+	}
+
+	nav a:first-child {
+		border-radius: 10px 10px 0 0;
+	}
+
+	nav a:last-child {
+		border-bottom: 1px solid var(--line);
+		border-radius: 0 0 10px 10px;
 	}
 
 	nav a:hover {
 		color: var(--ink);
-		background: var(--paper-soft);
+		background: var(--paper);
+		padding-left: 0.95rem;
 	}
 
 	nav a[aria-current='page'] {
-		color: white;
-		background: var(--ink-soft);
-		box-shadow: 2px 2px 0 rgba(17, 24, 39, 0.18);
+		color: var(--accent-dark);
+		background: var(--accent-soft);
+		box-shadow: inset 3px 0 0 var(--accent);
+	}
+
+	nav a small {
+		color: var(--accent-dark);
+		font-size: 0.54rem;
+		font-weight: 760;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+	}
+
+	nav a svg {
+		width: 14px;
+		height: 14px;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.6;
+		stroke-linecap: round;
+		stroke-linejoin: round;
 	}
 
 	.header-controls {
@@ -155,6 +316,7 @@
 		gap: 0.75rem;
 		align-items: center;
 		justify-self: end;
+		margin-top: 20px;
 	}
 
 	.settings-link {
@@ -214,14 +376,14 @@
 	@media (max-width: 820px) {
 		.workspace-header {
 			grid-template-columns: 1fr auto;
-			padding: 0.75rem 0;
+			gap: 0 1rem;
+			padding-bottom: 0.75rem;
 		}
 
-		nav {
+		.workspace-navigation {
 			grid-column: 1 / -1;
 			grid-row: 2;
-			justify-content: center;
-			order: 3;
+			margin: 12px 0 0;
 		}
 	}
 
@@ -230,14 +392,8 @@
 			display: none;
 		}
 
-		nav {
-			display: grid;
-			width: 100%;
-			grid-template-columns: repeat(5, 1fr);
-		}
-
-		nav a {
-			text-align: center;
+		.navigation-action > span {
+			display: none;
 		}
 
 		.settings-link span {
