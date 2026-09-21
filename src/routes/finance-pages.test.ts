@@ -32,7 +32,7 @@ const settingsRouteSource = readFileSync(
 );
 
 describe('financial workspace navigation', () => {
-	it('offers overview, cards, accounts, and bonuses in an accordion navigation row', () => {
+	it('offers overview, cards, accounts, and bonuses in a one-click accordion row', () => {
 		for (const marker of [
 			"label: 'Overview'",
 			"label: 'Cards'",
@@ -43,10 +43,13 @@ describe('financial workspace navigation', () => {
 		}
 		expect(headerSource).toContain("href: '/cards'");
 		expect(headerSource).toContain("href={resolve('/settings')}");
-		expect(headerSource).toContain('<details class="workspace-navigation">');
-		expect(headerSource).toContain('<nav aria-label="Financial workspace">');
+		expect(headerSource).toContain(
+			'<nav class="workspace-navigation" aria-label="Financial workspace">'
+		);
 		expect(headerSource).toContain("aria-current={current === link.id ? 'page' : undefined}");
-		expect(headerSource).toMatch(/current === 'settings'\s*\? 'Settings'/);
+		expect(headerSource).not.toContain('<details class="workspace-navigation">');
+		expect(headerSource).not.toContain('<summary');
+		expect(headerSource).toContain('outline-offset: -3px');
 		expect(headerSource).not.toContain('grid-template-columns: repeat(5, 1fr)');
 		expect(cardsRouteSource).toContain('<DashboardPage />');
 		expect(settingsRouteSource).toContain('<DashboardPage />');
