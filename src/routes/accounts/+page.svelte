@@ -4,6 +4,7 @@
 	import { getCompatibleBonusOffers } from '$lib/bonus-offers';
 	import BalanceHistoryChart from '$lib/components/BalanceHistoryChart.svelte';
 	import InvestmentBenchmark from '$lib/components/InvestmentBenchmark.svelte';
+	import BuyTimingComparison from '$lib/components/BuyTimingComparison.svelte';
 	import { needsBrokerageHistoryRefresh } from '$lib/investment-benchmark';
 	import SyncedTime from '$lib/components/SyncedTime.svelte';
 	import { connectionSyncSummary, type ConnectionSyncSummary } from '$lib/connection-sync';
@@ -1904,6 +1905,7 @@
 				</div>
 			</section>
 			<InvestmentBenchmark {accounts} historyLoadingByAccount={historyEstimateLoadingByAccount} />
+			<BuyTimingComparison {accounts} />
 		{/if}
 	</main>
 </div>
