@@ -24,6 +24,10 @@ describe('buy timing endpoint', () => {
 				buyCount: 0,
 				includedBuyCount: 0,
 				postedDateBuyCount: 0,
+				pendingBuyCount: 0,
+				pendingAmountCents: 0,
+				nextCompleteAfterDate: null,
+				installmentsPerSide: 3,
 				excludedBuyCount: 0,
 				excludedAmountCents: 0,
 				exclusions: [],
@@ -36,7 +40,7 @@ describe('buy timing endpoint', () => {
 		});
 		const response = await request();
 		expect(response.status).toBe(200);
-		expect(accountBuyTiming).toHaveBeenCalledWith(ACCOUNT_ID, 'ALL', 'monthly');
+		expect(accountBuyTiming).toHaveBeenCalledWith(ACCOUNT_ID, 'ALL', 'biweekly', 3);
 		expect(response.headers.get('cache-control')).toBe('no-store, max-age=0');
 		expect(response.headers.get('pragma')).toBe('no-cache');
 	});
@@ -44,6 +48,11 @@ describe('buy timing endpoint', () => {
 	it.each([
 		'range=2Y',
 		'schedule=daily',
+		'window=1',
+		'window=4',
+		'window=3.0',
+		'window=03',
+		'window=2&window=3',
 		'ticker=AAA',
 		'range=1Y&range=ALL',
 		'schedule=monthly&schedule=weekly',
@@ -52,6 +61,14 @@ describe('buy timing endpoint', () => {
 	])('rejects unsupported or duplicate parameters: %s', async (query) => {
 		expect((await request(query)).status).toBe(400);
 		expect(accountBuyTiming).not.toHaveBeenCalled();
+	});
+
+	it.each(['2', '3', '6'])('passes supported centered windows: %s', async (window) => {
+		vi.mocked(accountBuyTiming).mockRejectedValue(
+			new AppError('ACCOUNT_NOT_FOUND', 'Account not found.', 404)
+		);
+		await request(`range=1Y&schedule=weekly&window=${window}`);
+		expect(accountBuyTiming).toHaveBeenCalledWith(ACCOUNT_ID, '1Y', 'weekly', Number(window));
 	});
 
 	it('rejects invalid account identifiers before analysis', async () => {
@@ -63,11 +80,11 @@ describe('buy timing endpoint', () => {
 		vi.mocked(accountBuyTiming).mockRejectedValue(
 			new AppError('ACCOUNT_NOT_FOUND', 'Account not found.', 404)
 		);
-		const response = await request('range=YTD&schedule=biweekly');
+		const response = await request('range=YTD&schedule=biweekly&window=6');
 		expect(response.status).toBe(404);
 		expect(await response.json()).toEqual({
 			error: { code: 'ACCOUNT_NOT_FOUND', message: 'Account not found.' }
 		});
-		expect(accountBuyTiming).toHaveBeenCalledWith(ACCOUNT_ID, 'YTD', 'biweekly');
+		expect(accountBuyTiming).toHaveBeenCalledWith(ACCOUNT_ID, 'YTD', 'biweekly', 6);
 	});
 });

@@ -1,12 +1,18 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import type { BuyTimingRange, BuyTimingResponse, BuyTimingSchedule } from '$lib/buy-timing';
+	import type {
+		BuyTimingRange,
+		BuyTimingResponse,
+		BuyTimingSchedule,
+		BuyTimingWindow
+	} from '$lib/buy-timing';
 	import type { FinancialAccount } from '$lib/types';
 
 	let { accounts }: { accounts: FinancialAccount[] } = $props();
 	let selectedId = $state('');
 	let range = $state<BuyTimingRange>('1Y');
-	let schedule = $state<BuyTimingSchedule>('monthly');
+	let schedule = $state<BuyTimingSchedule>('biweekly');
+	let windowSize = $state<BuyTimingWindow>(3);
 	let response = $state<BuyTimingResponse | null>(null);
 	let loading = $state(false);
 	let error = $state('');
@@ -18,6 +24,7 @@
 		{ value: 'biweekly', label: 'Every 2 weeks' }
 	];
 	const ranges: BuyTimingRange[] = ['1M', '3M', 'YTD', '1Y', 'ALL'];
+	const windows: BuyTimingWindow[] = [2, 3, 6];
 	const eligible = $derived(
 		accounts
 			.filter(
@@ -28,7 +35,9 @@
 	);
 	const selected = $derived(eligible.find((account) => account.id === selectedId) ?? eligible[0]);
 	const requestKey = $derived(
-		selected ? `${selected.id}/${range}/${schedule}/${selected.lastSyncedAt ?? ''}/${retry}` : ''
+		selected
+			? `${selected.id}/${range}/${schedule}/${windowSize}/${selected.lastSyncedAt ?? ''}/${retry}`
+			: ''
 	);
 	const scheduleLabel = $derived(schedules.find((item) => item.value === schedule)!.label);
 
@@ -41,11 +50,11 @@
 			loading = false;
 			return;
 		}
-		const [id, requestedRange, requestedSchedule] = key.split('/');
+		const [id, requestedRange, requestedSchedule, requestedWindow] = key.split('/');
 		const controller = new AbortController();
 		loading = true;
 		void fetch(
-			`${resolve('/api/accounts/[id]/buy-timing', { id })}?range=${requestedRange}&schedule=${requestedSchedule}`,
+			`${resolve('/api/accounts/[id]/buy-timing', { id })}?range=${requestedRange}&schedule=${requestedSchedule}&window=${requestedWindow}`,
 			{ signal: controller.signal }
 		)
 			.then(async (result) => {
@@ -154,7 +163,7 @@
 				<p class="eyebrow">Buy timing</p>
 				<h2 id="buy-timing-title">Did your buy dates help?</h2>
 				<p class="subtitle">
-					Compare your recorded purchases with regular buying of the same securities.
+					Center a regular buying schedule on each purchase: half before your date, half after.
 				</p>
 			</div>
 			<span class="badge">Hypothetical comparison</span>
@@ -171,23 +180,34 @@
 				</select>
 			</label>
 			<label
-				>Fixed buying schedule
+				>Buying frequency
 				<select bind:value={schedule}>
 					{#each schedules as item (item.value)}<option value={item.value}>{item.label}</option
 						>{/each}
 				</select>
 			</label>
-			<div class="ranges" aria-label="Buy timing period">
-				{#each ranges as value (value)}
-					<button type="button" aria-pressed={range === value} onclick={() => (range = value)}
-						>{value === 'ALL' ? 'All' : value}</button
-					>
-				{/each}
+			<label
+				>Buys around each purchase
+				<select bind:value={windowSize}>
+					{#each windows as count (count)}
+						<option value={count}>{count} before + {count} after</option>
+					{/each}
+				</select>
+			</label>
+			<div class="period-control">
+				<span>Purchase dates</span>
+				<div class="ranges" aria-label="Purchase date period">
+					{#each ranges as value (value)}
+						<button type="button" aria-pressed={range === value} onclick={() => (range = value)}
+							>{value === 'ALL' ? 'All' : value}</button
+						>
+					{/each}
+				</div>
 			</div>
 		</div>
 		{#if loading}
 			<p class="empty" role="status">
-				Comparing your saved purchases with {scheduleLabel.toLowerCase()} buying…
+				Comparing each purchase with {windowSize} buys before and {windowSize} after its recorded date…
 			</p>
 		{:else if error}
 			<div class="empty" role="status">
@@ -197,7 +217,7 @@
 		{:else if available && chart}
 			<div class="metrics">
 				<div class="impact">
-					<span>Effect of your recorded buy dates</span>
+					<span>Your timing vs. a centered schedule</span>
 					<strong
 						class:negative={available.differenceCents < 0}
 						class:neutral={available.differenceCents === 0}
@@ -215,21 +235,41 @@
 					>
 				</div>
 				<div class="scheduled">
-					<span>{scheduleLabel} buying</span><strong>{money(available.scheduledValueCents)}</strong
+					<span>Half before, half after</span><strong>{money(available.scheduledValueCents)}</strong
 					><small>Modeled ending value</small>
 				</div>
 			</div>
 			<p class="budget">
 				Same <strong>{money(available.totalInvestedCents)}</strong> purchase budget · {coverage?.includedBuyCount ??
 					0} buys · {available.securities.length}
-				{available.securities.length === 1 ? 'security' : 'securities'} · {available.scheduleDates
-					.length} scheduled purchases per security
+				{available.securities.length === 1 ? 'security' : 'securities'} · {available.scheduledPurchaseCount}
+				scheduled installments
 			</p>
+			<div
+				class="centered-rule"
+				aria-label="Each purchase is split equally before and after its recorded date"
+			>
+				<span><b>50% before</b>{windowSize} equal buys</span>
+				<span class="center-buy"><b>Your buy date</b>Same security and amount</span>
+				<span><b>50% after</b>{windowSize} equal buys</span>
+			</div>
 			<p class="assumption">
 				Uses daily closing prices and holds every modeled purchase through {date(
 					available.endDate
-				)}. The fixed schedule assumes the money was available when needed.
+				)}. Each purchase has its own centered schedule. This assumes its money was available before
+				your recorded buy date.
 			</p>
+			{#if coverage && coverage.pendingBuyCount > 0}
+				<p class="notice">
+					{coverage.pendingBuyCount} recent {coverage.pendingBuyCount === 1
+						? 'purchase'
+						: 'purchases'}
+					({money(coverage.pendingAmountCents)}) awaiting the full after-window; excluded from both
+					sides for now.{#if coverage.nextCompleteAfterDate}
+						The next window ends on or after {date(coverage.nextCompleteAfterDate)}.
+					{/if}
+				</p>
+			{/if}
 			{#if coverage && coverage.postedDateBuyCount > 0}
 				<p class="notice">
 					{coverage.postedDateBuyCount}
@@ -249,7 +289,7 @@
 			<div class="chart-heading">
 				<div class="legend">
 					<span><i></i>Your buy dates</span><span
-						><i class="scheduled-line"></i>{scheduleLabel}</span
+						><i class="scheduled-line"></i>Centered {scheduleLabel.toLowerCase()}</span
 					>
 				</div>
 				<span>{date(available.startDate)} – {date(available.endDate)}</span>
@@ -258,7 +298,7 @@
 				class="chart"
 				viewBox={`0 0 ${width} ${height}`}
 				role="img"
-				aria-label={`Hypothetical growth of the same purchase budget: your buy dates ${money(available.actualValueCents)}, ${scheduleLabel.toLowerCase()} ${money(available.scheduledValueCents)}`}
+				aria-label={`Hypothetical growth of the same purchase budget: your buy dates ${money(available.actualValueCents)}, centered ${scheduleLabel.toLowerCase()} ${money(available.scheduledValueCents)}`}
 				onpointermove={pointAtPointer}
 				onpointerleave={() => (selectedPoint = null)}
 			>
@@ -318,20 +358,48 @@
 							>
 						</div>
 						<strong class:negative={security.differenceCents < 0}
-							>{signedMoney(security.differenceCents)}<small
-								>vs. {scheduleLabel.toLowerCase()}</small
-							></strong
+							>{signedMoney(security.differenceCents)}<small>vs. centered schedule</small></strong
 						>
 					</div>
 				{/each}
 			</div>
+			<details class="purchase-breakdown">
+				<summary>Purchase-by-purchase comparison</summary>
+				<p>Each purchase keeps its own amount and dates. Expand a purchase to see both halves.</p>
+				{#each available.purchases as purchase, index (`${purchase.symbol}/${purchase.date}/${index}`)}
+					<details class="purchase-row">
+						<summary>
+							<span>{purchase.symbol} · {date(purchase.date)} · {money(purchase.amountCents)}</span>
+							<strong class:negative={purchase.differenceCents < 0}
+								>{signedMoney(purchase.differenceCents)}</strong
+							>
+						</summary>
+						<p><b>Before:</b> {purchase.beforeDates.map((day) => date(day)).join(' · ')}</p>
+						<p><b>Your buy:</b> {date(purchase.date)}</p>
+						<p><b>After:</b> {purchase.afterDates.map((day) => date(day)).join(' · ')}</p>
+						<p>
+							Modeled ending value: your date {money(purchase.actualValueCents)}; centered schedule {money(
+								purchase.scheduledValueCents
+							)}.
+						</p>
+					</details>
+				{/each}
+			</details>
 			<details>
 				<summary>Method and purchase coverage</summary>
 				<p>
-					Each security keeps the same total purchase amount in both scenarios. The schedule spreads
-					that amount equally across the first trading day in each month, week, or alternating
-					two-week interval. Weeks begin on Monday. A partial first interval starts on the first
-					market day in the comparison window.
+					Each recorded purchase is compared separately with {windowSize * 2} equal purchases of the same
+					security: {windowSize} before its date and {windowSize} after. Half its dollars are invested
+					on each side, with no scheduled purchase on the actual buy date. Weekly intervals use seven
+					calendar days, two-week intervals use fourteen, and monthly intervals use the same day of the
+					month (or its last day). Before-dates that fall on a market closure move to the previous trading
+					day; after-dates move to the next trading day.
+				</p>
+				<p>
+					The selected period chooses your actual purchase dates. The chart starts earlier to show
+					the first scheduled buy. A purchase is included only when its entire centered window has
+					completed; recent purchases wait for future market prices. Incomplete windows are never
+					shortened or moved entirely before or after your purchase.
 				</p>
 				<p>
 					Both scenarios start with the full budget available, allow fractional shares, and use
@@ -340,10 +408,10 @@
 					hypothetical purchase-and-hold values, not actual account profit or proof of timing skill.
 				</p>
 				<p>
-					Only available synced purchases are covered; provider history can be incomplete. Dividends
-					reinvested automatically, cash sweeps, unsupported securities, and non-USD purchases are
-					excluded. Recorded order dates are used when available; otherwise the posting date is used
-					and counted above.
+					Only available synced purchases are covered; provider history can be incomplete. Activity
+					identified as dividend reinvestment, cash sweeps, unsupported securities, and non-USD
+					purchases are excluded. Recorded order dates are used when available; otherwise the
+					posting date is used and counted above.
 				</p>
 				{#if coverage?.activitySyncedAt}<p>
 						Purchase activity last synced {new Intl.DateTimeFormat('en-US', {
@@ -362,7 +430,6 @@
 									: ''}
 							</li>{/each}
 					</ul>{/if}
-				<p>Scheduled dates: {available.scheduleDates.map((day) => date(day)).join(' · ')}</p>
 				<p>
 					Public adjusted prices come from Yahoo Finance. <a
 						href="https://www.investor.gov/introduction-investing/investing-basics/glossary/dollar-cost-averaging"
@@ -378,6 +445,16 @@
 						? response.comparison.message
 						: 'No comparison is available for this period.'}
 				</p>
+				{#if coverage && coverage.pendingBuyCount > 0}
+					<p class="pending-summary">
+						{coverage.pendingBuyCount}
+						{coverage.pendingBuyCount === 1 ? 'purchase' : 'purchases'}
+						({money(coverage.pendingAmountCents)}) awaiting a complete centered window.
+						{#if coverage.nextCompleteAfterDate}The next window ends on or after {date(
+								coverage.nextCompleteAfterDate
+							)}.{/if}
+					</p>
+				{/if}
 				{#if coverage && coverage.exclusions.length > 0}<ul>
 						{#each coverage.exclusions as exclusion (exclusion.reason)}<li>
 								{exclusion.reason}: {exclusion.count}
@@ -441,6 +518,12 @@
 		margin-bottom: 1.4rem;
 	}
 	label {
+		display: grid;
+		gap: 0.4rem;
+		font-size: 0.65rem;
+		color: var(--muted);
+	}
+	.period-control {
 		display: grid;
 		gap: 0.4rem;
 		font-size: 0.65rem;
@@ -528,6 +611,32 @@
 	}
 	.budget strong {
 		color: var(--ink);
+	}
+	.centered-rule {
+		display: grid;
+		grid-template-columns: 1fr 1.2fr 1fr;
+		gap: 0.65rem;
+		margin: 0.85rem 0;
+		text-align: center;
+		font-size: 0.65rem;
+		color: var(--muted);
+	}
+	.centered-rule span {
+		display: grid;
+		gap: 0.25rem;
+		padding: 0.7rem 0.4rem;
+		border-radius: 8px;
+		background: #fff8ed;
+	}
+	.centered-rule b {
+		color: #92631b;
+		font-size: 0.74rem;
+	}
+	.centered-rule .center-buy {
+		background: #f0f3ff;
+	}
+	.center-buy b {
+		color: var(--accent);
 	}
 	.assumption,
 	.notice {
@@ -682,6 +791,26 @@
 	details p {
 		max-width: 100ch;
 	}
+	.purchase-breakdown {
+		margin-bottom: 1rem;
+	}
+	.purchase-row {
+		padding: 0.65rem 0;
+		border-top: 1px solid var(--line);
+	}
+	.purchase-row summary > span {
+		display: inline-block;
+		margin-right: 0.75rem;
+		color: var(--ink);
+	}
+	.purchase-row summary > strong {
+		color: #167554;
+		white-space: nowrap;
+		font-variant-numeric: tabular-nums;
+	}
+	.purchase-row summary > strong.negative {
+		color: #b4424d;
+	}
 	.empty {
 		padding: 2rem 1rem;
 		margin: 0;
@@ -694,6 +823,9 @@
 	}
 	.empty p {
 		margin: 0;
+	}
+	.empty .pending-summary {
+		margin-top: 0.6rem;
 	}
 	.empty ul {
 		display: inline-block;

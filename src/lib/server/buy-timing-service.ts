@@ -1,9 +1,12 @@
 import {
 	buildBuyTimingComparison,
+	planCenteredPurchaseDates,
+	shiftBuyTimingDate,
 	type BuyTimingCoverage,
 	type BuyTimingRange,
 	type BuyTimingResponse,
 	type BuyTimingSchedule,
+	type BuyTimingWindow,
 	type TimingPurchase
 } from '$lib/buy-timing';
 import { isCashSweepSecurity } from '$lib/investment-display';
@@ -134,7 +137,8 @@ function classifyBuy(
 export async function accountBuyTiming(
 	accountId: string,
 	range: BuyTimingRange = 'ALL',
-	schedule: BuyTimingSchedule = 'monthly'
+	schedule: BuyTimingSchedule = 'biweekly',
+	installmentsPerSide: BuyTimingWindow = 3
 ): Promise<BuyTimingResponse> {
 	// Resolve ownership before reading activity or disclosing symbols to the price provider.
 	const account = await getFinancialAccount(accountId);
@@ -144,6 +148,10 @@ export async function accountBuyTiming(
 		buyCount: 0,
 		includedBuyCount: 0,
 		postedDateBuyCount: 0,
+		pendingBuyCount: 0,
+		pendingAmountCents: 0,
+		nextCompleteAfterDate: null,
+		installmentsPerSide,
 		excludedBuyCount: 0,
 		excludedAmountCents: 0,
 		exclusions: [],
@@ -227,37 +235,78 @@ export async function accountBuyTiming(
 			'no_eligible_buys',
 			'No supported purchases were found in the available synced activity.'
 		);
+	// Extend only public preset boundaries, never an individual private purchase date.
+	const quoteStartDate = new Date(
+		Date.parse(
+			`${shiftBuyTimingDate(coverage.rangeStartDate, schedule, -installmentsPerSide)}T00:00:00Z`
+		) -
+			10 * 86_400_000
+	)
+		.toISOString()
+		.slice(0, 10);
+	let calendar;
+	try {
+		calendar = await spyBenchmarkSeries(quoteStartDate, coverage.rangeEndDate);
+	} catch (error) {
+		if (!(error instanceof AppError) || error.code !== 'MARKET_HISTORY_UNAVAILABLE') throw error;
+		return unavailable(
+			'prices_unavailable',
+			'Historical market prices are temporarily unavailable.'
+		);
+	}
+	priceFetchedAt = Number.isFinite(Date.parse(calendar.fetchedAt)) ? calendar.fetchedAt : null;
+	const calendarDates = calendar.prices.map((point) => point.date);
+	const mature: ClassifiedBuy[] = [];
+	let pending: { buy: ClassifiedBuy; completeAfterDate: string }[] = [];
+	const updatePending = () => {
+		coverage.pendingBuyCount = pending.length;
+		coverage.pendingAmountCents = pending.reduce((total, item) => total + item.buy.amountCents, 0);
+		coverage.nextCompleteAfterDate =
+			pending.map((item) => item.completeAfterDate).sort()[0] ?? null;
+	};
+	let incompleteHistory: { reason: string; message: string } | null = null;
+	for (const buy of eligible) {
+		const plan = planCenteredPurchaseDates({
+			date: buy.date!,
+			calendar: calendarDates,
+			schedule,
+			installmentsPerSide,
+			asOfDate: coverage.rangeEndDate
+		});
+		if (plan.status === 'pending') {
+			pending.push({ buy, completeAfterDate: plan.completeAfterDate });
+		} else if (plan.status === 'unavailable') {
+			incompleteHistory ??= plan;
+		} else {
+			mature.push(buy);
+		}
+	}
+	eligible = mature;
+	updateIncluded();
+	updatePending();
+	// Missing past sessions cannot be treated as future purchases or dropped from the budget.
+	if (incompleteHistory) return unavailable(incompleteHistory.reason, incompleteHistory.message);
+	if (!eligible.length)
+		return unavailable(
+			'incomplete_window',
+			'Awaiting the full schedule after these purchases. Choose a shorter window or an earlier purchase range.'
+		);
 	const symbols = [...new Set(eligible.map((buy) => buy.symbol!))];
 	if (symbols.length > MAX_SYMBOLS)
 		return unavailable(
 			'too_many_symbols',
 			'Choose a shorter range with no more than 12 purchased securities.'
 		);
-	const results = await Promise.allSettled([
-		adjustedMarketSeries(symbols, coverage.rangeStartDate, coverage.rangeEndDate),
-		spyBenchmarkSeries(coverage.rangeStartDate, coverage.rangeEndDate)
-	]);
-	let marketUnavailable = false;
-	for (const result of results) {
-		if (result.status === 'rejected') {
-			if (result.reason instanceof AppError && result.reason.code === 'MARKET_HISTORY_UNAVAILABLE')
-				marketUnavailable = true;
-			else throw result.reason;
-		}
+	let series;
+	try {
+		series = await adjustedMarketSeries(symbols, quoteStartDate, coverage.rangeEndDate);
+	} catch (error) {
+		if (!(error instanceof AppError) || error.code !== 'MARKET_HISTORY_UNAVAILABLE') throw error;
+		return unavailable(
+			'prices_unavailable',
+			'Historical market prices are temporarily unavailable.'
+		);
 	}
-	if (marketUnavailable)
-		return unavailable(
-			'prices_unavailable',
-			'Historical market prices are temporarily unavailable.'
-		);
-	const [marketResult, calendarResult] = results;
-	if (marketResult.status !== 'fulfilled' || calendarResult.status !== 'fulfilled')
-		return unavailable(
-			'prices_unavailable',
-			'Historical market prices are temporarily unavailable.'
-		);
-	const series = marketResult.value;
-	const calendar = calendarResult.value;
 	const fetchedDates = [...series.map((item) => item.fetchedAt), calendar.fetchedAt]
 		.filter((date) => Number.isFinite(Date.parse(date)))
 		.sort();
@@ -293,13 +342,23 @@ export async function accountBuyTiming(
 		if (reason) exclude(buy, reason);
 		return !reason;
 	});
+	pending = pending.filter(({ buy }) => {
+		const reason = excludedSymbols.get(buy.symbol!);
+		if (reason) exclude(buy, reason);
+		return !reason;
+	});
 	updateIncluded();
+	updatePending();
+	if (!eligible.length && pending.length)
+		return unavailable(
+			'incomplete_window',
+			'Awaiting the full schedule after the remaining purchases. Choose a shorter window or an earlier purchase range.'
+		);
 	if (!eligible.length)
 		return unavailable(
 			'no_supported_securities',
 			'Market data could not verify supported USD securities for these purchases.'
 		);
-	coverage.rangeStartDate = eligible.map((buy) => buy.date!).sort()[0];
 	const purchases: TimingPurchase[] = eligible.map((buy) => ({
 		symbol: buy.symbol!,
 		date: buy.date!,
@@ -311,6 +370,7 @@ export async function accountBuyTiming(
 			series: series.filter((item) => !excludedSymbols.has(item.symbol)),
 			calendar: calendar.prices.map((point) => point.date),
 			schedule,
+			installmentsPerSide,
 			startDate: coverage.rangeStartDate,
 			endDate: coverage.rangeEndDate
 		}),

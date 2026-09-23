@@ -73,7 +73,7 @@ describe('adjusted market history', () => {
 		for (const [first, last] of [
 			['2026-02-30', end],
 			[end, start],
-			['2024-08-21', end],
+			['2023-09-21', end],
 			['bad', end]
 		]) {
 			await expect(adjustedMarketSeries(['AAPL'], first, last)).rejects.toMatchObject({
@@ -88,6 +88,14 @@ describe('adjusted market history', () => {
 		);
 		expect(fetcher).not.toHaveBeenCalled();
 		expect(await adjustedMarketSeries([], start, end)).toEqual([]);
+	});
+
+	it('accepts a three-year range for centered schedules before the two-year purchase window', async () => {
+		const fetcher = vi.fn(async () => marketResponse());
+		setAdjustedMarketHistoryFetchForTests(fetcher);
+		const result = await adjustedMarketSeries(['AAPL'], '2023-09-22', end);
+		expect(result[0].prices).toHaveLength(1);
+		expect(fetcher).toHaveBeenCalledOnce();
 	});
 
 	it('returns quote metadata and strictly positive numeric adjusted closes within the requested range', async () => {

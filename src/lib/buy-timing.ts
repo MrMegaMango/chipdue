@@ -1,5 +1,6 @@
 export type BuyTimingSchedule = 'monthly' | 'weekly' | 'biweekly';
 export type BuyTimingRange = '1M' | '3M' | 'YTD' | '1Y' | 'ALL';
+export type BuyTimingWindow = 2 | 3 | 6;
 
 export interface TimingPurchase {
 	symbol: string;
@@ -27,13 +28,23 @@ export interface BuyTimingSecurityResult {
 	differenceCents: number;
 }
 
+export interface BuyTimingPurchaseResult extends TimingPurchase {
+	beforeDates: string[];
+	afterDates: string[];
+	actualValueCents: number;
+	scheduledValueCents: number;
+	differenceCents: number;
+}
+
 export type BuyTimingComparison =
 	| {
 			status: 'available';
 			startDate: string;
 			endDate: string;
 			schedule: BuyTimingSchedule;
+			installmentsPerSide: BuyTimingWindow;
 			scheduleDates: string[];
+			scheduledPurchaseCount: number;
 			totalInvestedCents: number;
 			actualValueCents: number;
 			scheduledValueCents: number;
@@ -42,6 +53,7 @@ export type BuyTimingComparison =
 			points: BuyTimingPoint[];
 			buyDates: Array<{ date: string; amountCents: number }>;
 			securities: BuyTimingSecurityResult[];
+			purchases: BuyTimingPurchaseResult[];
 	  }
 	| { status: 'unavailable'; reason: string; message: string };
 
@@ -52,6 +64,10 @@ export interface BuyTimingCoverage {
 	postedDateBuyCount: number;
 	excludedBuyCount: number;
 	excludedAmountCents: number;
+	pendingBuyCount: number;
+	pendingAmountCents: number;
+	nextCompleteAfterDate: string | null;
+	installmentsPerSide: BuyTimingWindow;
 	exclusions: Array<{ reason: string; count: number; amountCents: number }>;
 	activitySyncedAt: string | null;
 	rangeStartDate: string;
@@ -65,48 +81,153 @@ export interface BuyTimingResponse {
 	priceFetchedAt: string | null;
 }
 
+export type CenteredPurchaseDates =
+	| { status: 'ready'; beforeDates: string[]; afterDates: string[] }
+	| { status: 'pending'; completeAfterDate: string }
+	| { status: 'unavailable'; reason: string; message: string };
+
 const DAY_MS = 86_400_000;
 
 function validDate(date: string): boolean {
-	if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+	if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
 	const timestamp = Date.parse(`${date}T00:00:00Z`);
 	return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === date;
 }
 
-function unavailable(reason: string, message: string): BuyTimingComparison {
+function validSchedule(schedule: BuyTimingSchedule): boolean {
+	return ['monthly', 'weekly', 'biweekly'].includes(schedule);
+}
+
+function validWindow(window: BuyTimingWindow): boolean {
+	return [2, 3, 6].includes(window);
+}
+
+function unavailable(
+	reason: string,
+	message: string
+): Extract<BuyTimingComparison, { status: 'unavailable' }> {
 	return { status: 'unavailable', reason, message };
 }
 
 function symbolKey(symbol: string): string {
-	return symbol.trim().toUpperCase();
+	return typeof symbol === 'string' ? symbol.trim().toUpperCase() : '';
 }
 
-function mondayTimestamp(date: string): number {
-	const timestamp = Date.parse(`${date}T00:00:00Z`);
-	const weekday = new Date(timestamp).getUTCDay();
-	return timestamp - ((weekday + 6) % 7) * DAY_MS;
+/** Shift from the original purchase date, clamping calendar-month targets at month end. */
+export function shiftBuyTimingDate(
+	date: string,
+	schedule: BuyTimingSchedule,
+	offset: number
+): string {
+	if (!validDate(date) || !validSchedule(schedule) || !Number.isSafeInteger(offset)) {
+		throw new RangeError('A valid date, schedule, and integer offset are required.');
+	}
+	const shifted = new Date(`${date}T00:00:00Z`);
+	if (schedule === 'monthly') {
+		const day = shifted.getUTCDate();
+		shifted.setUTCDate(1);
+		shifted.setUTCMonth(shifted.getUTCMonth() + offset);
+		const lastDay = new Date(shifted);
+		lastDay.setUTCMonth(lastDay.getUTCMonth() + 1);
+		lastDay.setUTCDate(0);
+		shifted.setUTCDate(Math.min(day, lastDay.getUTCDate()));
+	} else {
+		shifted.setUTCDate(shifted.getUTCDate() + offset * (schedule === 'weekly' ? 7 : 14));
+	}
+	if (!Number.isFinite(shifted.getTime()))
+		throw new RangeError('The shifted date is out of range.');
+	const result = shifted.toISOString().slice(0, 10);
+	if (!validDate(result)) throw new RangeError('The shifted date is out of range.');
+	return result;
 }
 
 /**
- * Buy at the first trading day in each calendar interval. The first interval
- * may be partial: it starts on the first trading day inside the chosen window.
- * Weekly and biweekly schedules use Monday boundaries; biweekly boundaries
- * remain anchored to the Monday of the first interval, including holidays.
+ * Plan each purchase independently. Half its budget precedes the recorded date
+ * and half follows it. Holiday targets roll outward, never across the center.
+ * asOfDate distinguishes an unfinished window from a stale market calendar.
  */
-function scheduledDates(calendar: string[], schedule: BuyTimingSchedule): string[] {
-	const firstMonday = mondayTimestamp(calendar[0]);
-	const intervalDays = schedule === 'biweekly' ? 14 : 7;
-	const firstByInterval = new Map<string, string>();
-	for (const date of calendar) {
-		const interval =
-			schedule === 'monthly'
-				? date.slice(0, 7)
-				: String(
-						Math.floor((Date.parse(`${date}T00:00:00Z`) - firstMonday) / (intervalDays * DAY_MS))
-					);
-		if (!firstByInterval.has(interval)) firstByInterval.set(interval, date);
+export function planCenteredPurchaseDates({
+	date,
+	calendar,
+	schedule,
+	installmentsPerSide,
+	asOfDate
+}: {
+	date: string;
+	calendar: string[];
+	schedule: BuyTimingSchedule;
+	installmentsPerSide: BuyTimingWindow;
+	asOfDate: string;
+}): CenteredPurchaseDates {
+	if (!validDate(date) || !validDate(asOfDate) || date > asOfDate) {
+		return unavailable('invalid_purchase', 'The purchase needs a valid completed date.');
 	}
-	return [...firstByInterval.values()];
+	if (!validSchedule(schedule)) {
+		return unavailable('invalid_schedule', 'Choose a monthly, weekly, or biweekly schedule.');
+	}
+	if (!validWindow(installmentsPerSide)) {
+		return unavailable('invalid_window', 'Choose two, three, or six installments on each side.');
+	}
+	if (calendar.some((day) => !validDate(day))) {
+		return unavailable('invalid_calendar', 'The trading calendar could not be verified.');
+	}
+	const tradingDates = [...new Set(calendar)].filter((day) => day <= asOfDate).sort();
+	if (!tradingDates.includes(date)) {
+		return unavailable(
+			'missing_purchase_price',
+			`No completed market close matches the purchase on ${date}. Recorded purchase dates are never moved to another day.`
+		);
+	}
+	const beforeDates: string[] = [];
+	const afterDates: string[] = [];
+	let finalTarget: string;
+	try {
+		finalTarget = shiftBuyTimingDate(date, schedule, installmentsPerSide);
+		for (let offset = installmentsPerSide; offset >= 1; offset -= 1) {
+			const target = shiftBuyTimingDate(date, schedule, -offset);
+			const match = tradingDates.findLast((day) => day <= target);
+			if (!match || match >= date || Date.parse(target) - Date.parse(match) > 7 * DAY_MS) {
+				return unavailable(
+					'missing_schedule_price',
+					`The comparison needs a completed trading day on or just before ${target}.`
+				);
+			}
+			beforeDates.push(match);
+		}
+	} catch {
+		return unavailable(
+			'invalid_range',
+			'The centered purchase window is outside the supported dates.'
+		);
+	}
+	// Do not present any part of a lot until its full symmetric window exists.
+	if (finalTarget > asOfDate) return { status: 'pending', completeAfterDate: finalTarget };
+	for (let offset = 1; offset <= installmentsPerSide; offset += 1) {
+		const target = shiftBuyTimingDate(date, schedule, offset);
+		const match = tradingDates.find((day) => day >= target);
+		if (!match) {
+			const nextWeekday = new Date(`${target}T00:00:00Z`);
+			const weekday = nextWeekday.getUTCDay();
+			if (weekday === 0 || weekday === 6) {
+				nextWeekday.setUTCDate(nextWeekday.getUTCDate() + (weekday === 6 ? 2 : 1));
+				if (nextWeekday.toISOString().slice(0, 10) > asOfDate) {
+					return { status: 'pending', completeAfterDate: nextWeekday.toISOString().slice(0, 10) };
+				}
+			}
+			return unavailable(
+				'missing_schedule_price',
+				`The completed trading calendar is missing the scheduled purchase on or after ${target}.`
+			);
+		}
+		if (match <= date || Date.parse(match) - Date.parse(target) > 7 * DAY_MS) {
+			return unavailable(
+				'missing_schedule_price',
+				`The comparison needs a completed trading day on or just after ${target}.`
+			);
+		}
+		afterDates.push(match);
+	}
+	return { status: 'ready', beforeDates, afterDates };
 }
 
 function roundedValue(value: number): number | null {
@@ -116,10 +237,11 @@ function roundedValue(value: number): number | null {
 }
 
 /**
- * A buys-only counterfactual: both paths begin with the same cash budget, earn
- * no interest on idle cash, and hold every modeled purchase through the end.
- * Adjusted-close ratios model distributions and splits. Recorded purchase
- * dollars are taken as provided; this engine does not add fees or infer fills.
+ * A centered, buys-only counterfactual. Each recorded purchase is compared with
+ * equal installments of the same security totaling exactly the same dollars:
+ * half before, half after, and none on the recorded buy date. Both paths start
+ * with the full budget, earn no cash interest, and hold through a common end.
+ * Adjusted-close ratios model distributions and splits, without execution fills.
  */
 export function buildBuyTimingComparison({
 	purchases,
@@ -127,7 +249,8 @@ export function buildBuyTimingComparison({
 	calendar,
 	schedule,
 	startDate,
-	endDate
+	endDate,
+	installmentsPerSide = 3
 }: {
 	purchases: TimingPurchase[];
 	series: BuyTimingMarketSeries[];
@@ -135,34 +258,33 @@ export function buildBuyTimingComparison({
 	schedule: BuyTimingSchedule;
 	startDate: string;
 	endDate: string;
+	installmentsPerSide?: BuyTimingWindow;
 }): BuyTimingComparison {
 	if (!validDate(startDate) || !validDate(endDate) || endDate < startDate) {
 		return unavailable('invalid_range', 'Choose a valid start and end date for the comparison.');
 	}
-	if (!['monthly', 'weekly', 'biweekly'].includes(schedule)) {
+	if (!validSchedule(schedule)) {
 		return unavailable('invalid_schedule', 'Choose a monthly, weekly, or biweekly schedule.');
+	}
+	if (!validWindow(installmentsPerSide)) {
+		return unavailable('invalid_window', 'Choose two, three, or six installments on each side.');
 	}
 	if (calendar.some((date) => !validDate(date))) {
 		return unavailable('invalid_calendar', 'The trading calendar could not be verified.');
 	}
-	const tradingDates = [...new Set(calendar)]
-		.filter((date) => date >= startDate && date <= endDate)
-		.sort();
-	if (tradingDates.length === 0) {
-		return unavailable(
-			'insufficient_market_days',
-			'At least two completed trading days are needed.'
-		);
-	}
-	const completedEndDate = tradingDates.at(-1)!;
+	const completedCalendar = [...new Set(calendar)].filter((date) => date <= endDate).sort();
 	if (purchases.some((purchase) => !validDate(purchase.date))) {
 		return unavailable('invalid_purchase', 'A recorded purchase is missing a valid date.');
 	}
 	const scopedPurchases = purchases
-		// Keep the full requested budget even when the market feed is delayed.
-		// A missing recent close must block comparison, never remove that purchase.
 		.filter((purchase) => purchase.date >= startDate && purchase.date <= endDate)
 		.map((purchase) => ({ ...purchase, symbol: symbolKey(purchase.symbol) }));
+	if (!scopedPurchases.length) {
+		return unavailable(
+			'insufficient_purchases',
+			'At least one completed purchase window is needed.'
+		);
+	}
 	if (
 		scopedPurchases.some(
 			(purchase) =>
@@ -184,133 +306,119 @@ export function buildBuyTimingComparison({
 			'The purchase amounts are too large for a reliable comparison.'
 		);
 	}
-	const purchasesByDate = new Map<string, number>();
+	const plannedPurchases: Array<TimingPurchase & { beforeDates: string[]; afterDates: string[] }> =
+		[];
 	for (const purchase of scopedPurchases) {
-		purchasesByDate.set(
-			purchase.date,
-			(purchasesByDate.get(purchase.date) ?? 0) + purchase.amountCents
-		);
+		const plan = planCenteredPurchaseDates({
+			date: purchase.date,
+			calendar: completedCalendar,
+			schedule,
+			installmentsPerSide,
+			asOfDate: endDate
+		});
+		if (plan.status === 'unavailable') return plan;
+		if (plan.status === 'pending') {
+			return unavailable(
+				'incomplete_window',
+				`The full centered window for the ${purchase.date} purchase is not complete. It needs market data through at least ${plan.completeAfterDate}.`
+			);
+		}
+		plannedPurchases.push({
+			...purchase,
+			beforeDates: plan.beforeDates,
+			afterDates: plan.afterDates
+		});
 	}
+	const firstExposureBySymbol = new Map<string, string>();
+	for (const purchase of plannedPurchases) {
+		const previous = firstExposureBySymbol.get(purchase.symbol);
+		if (!previous || purchase.beforeDates[0] < previous)
+			firstExposureBySymbol.set(purchase.symbol, purchase.beforeDates[0]);
+	}
+	const chartStartDate = [...firstExposureBySymbol.values()].sort()[0];
+	const tradingDates = completedCalendar.filter((date) => date >= chartStartDate);
+	const completedEndDate = tradingDates.at(-1)!;
 	const tradingDateSet = new Set(tradingDates);
-	const unmatchedPurchase = scopedPurchases.find((purchase) => !tradingDateSet.has(purchase.date));
-	if (unmatchedPurchase) {
-		return unavailable(
-			'missing_purchase_price',
-			`No completed market close matches the ${unmatchedPurchase.symbol} purchase on ${unmatchedPurchase.date}. Recorded purchase dates are never moved to another day.`
-		);
-	}
-	if (tradingDates.length < 2) {
-		return unavailable(
-			'insufficient_market_days',
-			'At least two completed trading days are needed.'
-		);
-	}
-	if (purchasesByDate.size < 2) {
-		return unavailable(
-			'insufficient_purchases',
-			'At least two distinct recorded buy dates are needed in this period.'
-		);
-	}
-	const scheduleDates = scheduledDates(tradingDates, schedule);
-	if (scheduleDates.length < 2) {
-		return unavailable(
-			'insufficient_schedule',
-			'Choose a longer period with at least two scheduled purchases.'
-		);
-	}
-	const scheduleDateSet = new Set(scheduleDates);
-	const purchasesBySymbol = new Map<string, TimingPurchase[]>();
-	for (const purchase of scopedPurchases) {
-		const current = purchasesBySymbol.get(purchase.symbol) ?? [];
-		current.push(purchase);
-		purchasesBySymbol.set(purchase.symbol, current);
-	}
 	const pricesBySymbol = new Map<string, Map<string, number>>();
 	for (const market of series) {
 		const symbol = symbolKey(market.symbol);
-		if (!purchasesBySymbol.has(symbol)) continue;
-		const priceMap = pricesBySymbol.get(symbol) ?? new Map<string, number>();
+		const firstExposure = firstExposureBySymbol.get(symbol);
+		if (!firstExposure) continue;
+		const prices = pricesBySymbol.get(symbol) ?? new Map<string, number>();
 		for (const price of market.prices) {
-			if (!tradingDateSet.has(price.date)) continue;
+			if (!tradingDateSet.has(price.date) || price.date < firstExposure) continue;
 			if (!Number.isFinite(price.adjustedClose) || price.adjustedClose <= 0) {
 				return unavailable(
 					'missing_prices',
 					`A valid adjusted close is unavailable for ${symbol} on ${price.date}.`
 				);
 			}
-			const existing = priceMap.get(price.date);
+			const existing = prices.get(price.date);
 			if (existing !== undefined && existing !== price.adjustedClose) {
 				return unavailable(
 					'invalid_prices',
 					`Conflicting adjusted closes were returned for ${symbol} on ${price.date}.`
 				);
 			}
-			priceMap.set(price.date, price.adjustedClose);
+			prices.set(price.date, price.adjustedClose);
 		}
-		pricesBySymbol.set(symbol, priceMap);
+		pricesBySymbol.set(symbol, prices);
 	}
-	// Every security has scheduled exposure from the first day. Requiring all
-	// daily closes avoids silently carrying prices or dropping an unfavorable lot.
-	for (const symbol of purchasesBySymbol.keys()) {
+	for (const [symbol, firstExposure] of firstExposureBySymbol) {
 		const prices = pricesBySymbol.get(symbol);
-		const missingDate = tradingDates.find((date) => !prices?.has(date));
+		const missingDate = tradingDates.find((date) => date >= firstExposure && !prices?.has(date));
 		if (missingDate) {
 			return unavailable(
 				'missing_prices',
-				`An adjusted close is unavailable for ${symbol} on ${missingDate}. The comparison needs complete prices for every included security.`
+				`An adjusted close is unavailable for ${symbol} on ${missingDate}. The comparison needs complete prices while each included security is invested.`
 			);
 		}
 	}
-
 	const points = tradingDates.map<BuyTimingPoint>((date) => ({
 		date,
 		actualValueCents: 0,
 		scheduledValueCents: 0
 	}));
-	const securities: BuyTimingSecurityResult[] = [];
-	for (const [symbol, securityPurchases] of purchasesBySymbol) {
-		const prices = pricesBySymbol.get(symbol)!;
-		const budgetCents = securityPurchases.reduce(
-			(total, purchase) => total + purchase.amountCents,
-			0
-		);
-		const dailyPurchases = new Map<string, number>();
-		for (const purchase of securityPurchases) {
-			dailyPurchases.set(
-				purchase.date,
-				(dailyPurchases.get(purchase.date) ?? 0) + purchase.amountCents
-			);
+	const purchaseResults: BuyTimingPurchaseResult[] = [];
+	const securitiesBySymbol = new Map<string, BuyTimingSecurityResult>();
+	const purchasesByDate = new Map<string, number>();
+	const allScheduleDates = new Set<string>();
+	const installmentsPerPurchase = installmentsPerSide * 2;
+	for (const purchase of plannedPurchases) {
+		const prices = pricesBySymbol.get(purchase.symbol)!;
+		const scheduleCounts = new Map<string, number>();
+		for (const date of [...purchase.beforeDates, ...purchase.afterDates]) {
+			scheduleCounts.set(date, (scheduleCounts.get(date) ?? 0) + 1);
+			allScheduleDates.add(date);
 		}
 		let actualUnits = 0;
 		let scheduledUnits = 0;
-		let actualSpent = 0;
 		let scheduleCount = 0;
-		let actualValueCents = budgetCents;
-		let scheduledValueCents = budgetCents;
+		let actualValueCents = purchase.amountCents;
+		let scheduledValueCents = purchase.amountCents;
 		for (const [index, date] of tradingDates.entries()) {
-			const price = prices.get(date)!;
-			const purchaseAmount = dailyPurchases.get(date) ?? 0;
-			actualUnits += purchaseAmount / price;
-			actualSpent += purchaseAmount;
-			if (scheduleDateSet.has(date)) {
-				scheduledUnits += budgetCents / scheduleDates.length / price;
-				scheduleCount += 1;
+			if (date >= purchase.beforeDates[0]) {
+				const price = prices.get(date)!;
+				if (date === purchase.date) actualUnits = purchase.amountCents / price;
+				const count = scheduleCounts.get(date) ?? 0;
+				scheduledUnits += (count * purchase.amountCents) / installmentsPerPurchase / price;
+				scheduleCount += count;
+				const actualCash = date < purchase.date ? purchase.amountCents : 0;
+				const scheduledCash =
+					purchase.amountCents - (scheduleCount * purchase.amountCents) / installmentsPerPurchase;
+				const actualValue = roundedValue(actualCash + actualUnits * price);
+				const scheduledValue = roundedValue(scheduledCash + scheduledUnits * price);
+				if (actualValue === null || scheduledValue === null) {
+					return unavailable(
+						'invalid_values',
+						'The price and purchase values cannot support a finite comparison.'
+					);
+				}
+				actualValueCents = actualValue;
+				scheduledValueCents = scheduledValue;
 			}
-			const actualValue = roundedValue(budgetCents - actualSpent + actualUnits * price);
-			// Derive cumulative spending from the count to avoid penny drift, and
-			// ensure the full identical budget is deployed by the final installment.
-			const scheduledSpent = (scheduleCount * budgetCents) / scheduleDates.length;
-			const scheduledValue = roundedValue(budgetCents - scheduledSpent + scheduledUnits * price);
-			if (actualValue === null || scheduledValue === null) {
-				return unavailable(
-					'invalid_values',
-					'The price and purchase values cannot support a finite comparison.'
-				);
-			}
-			actualValueCents = actualValue;
-			scheduledValueCents = scheduledValue;
-			points[index].actualValueCents += actualValue;
-			points[index].scheduledValueCents += scheduledValue;
+			points[index].actualValueCents += actualValueCents;
+			points[index].scheduledValueCents += scheduledValueCents;
 			if (
 				!Number.isSafeInteger(points[index].actualValueCents) ||
 				!Number.isSafeInteger(points[index].scheduledValueCents)
@@ -321,14 +429,30 @@ export function buildBuyTimingComparison({
 				);
 			}
 		}
-		securities.push({
-			symbol,
-			buyCount: securityPurchases.length,
-			budgetCents,
+		purchaseResults.push({
+			...purchase,
 			actualValueCents,
 			scheduledValueCents,
 			differenceCents: actualValueCents - scheduledValueCents
 		});
+		purchasesByDate.set(
+			purchase.date,
+			(purchasesByDate.get(purchase.date) ?? 0) + purchase.amountCents
+		);
+		const security = securitiesBySymbol.get(purchase.symbol) ?? {
+			symbol: purchase.symbol,
+			buyCount: 0,
+			budgetCents: 0,
+			actualValueCents: 0,
+			scheduledValueCents: 0,
+			differenceCents: 0
+		};
+		security.buyCount += 1;
+		security.budgetCents += purchase.amountCents;
+		security.actualValueCents += actualValueCents;
+		security.scheduledValueCents += scheduledValueCents;
+		security.differenceCents = security.actualValueCents - security.scheduledValueCents;
+		securitiesBySymbol.set(purchase.symbol, security);
 	}
 	const latest = points.at(-1)!;
 	const differenceCents = latest.actualValueCents - latest.scheduledValueCents;
@@ -341,10 +465,12 @@ export function buildBuyTimingComparison({
 	}
 	return {
 		status: 'available',
-		startDate: tradingDates[0],
+		startDate: chartStartDate,
 		endDate: completedEndDate,
 		schedule,
-		scheduleDates,
+		installmentsPerSide,
+		scheduleDates: [...allScheduleDates].sort(),
+		scheduledPurchaseCount: plannedPurchases.length * installmentsPerPurchase,
 		totalInvestedCents,
 		actualValueCents: latest.actualValueCents,
 		scheduledValueCents: latest.scheduledValueCents,
@@ -354,9 +480,13 @@ export function buildBuyTimingComparison({
 		buyDates: [...purchasesByDate]
 			.sort(([left], [right]) => left.localeCompare(right))
 			.map(([date, amountCents]) => ({ date, amountCents })),
-		securities: securities.sort(
+		securities: [...securitiesBySymbol.values()].sort(
 			(left, right) =>
 				right.budgetCents - left.budgetCents || left.symbol.localeCompare(right.symbol)
+		),
+		purchases: purchaseResults.sort(
+			(left, right) =>
+				left.date.localeCompare(right.date) || left.symbol.localeCompare(right.symbol)
 		)
 	};
 }

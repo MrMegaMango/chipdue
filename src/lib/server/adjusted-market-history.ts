@@ -42,12 +42,11 @@ function validateRange(startDate: string, endDate: string): void {
 		throw new AppError('INVALID_MARKET_DATE_RANGE', 'Choose a valid historical date range.', 400);
 	}
 	const maximumEnd = new Date(`${startDate}T00:00:00Z`);
-	maximumEnd.setUTCFullYear(maximumEnd.getUTCFullYear() + 2);
-	maximumEnd.setUTCMonth(maximumEnd.getUTCMonth() + 1);
+	maximumEnd.setUTCFullYear(maximumEnd.getUTCFullYear() + 3);
 	if (Date.parse(`${endDate}T00:00:00Z`) > maximumEnd.getTime()) {
 		throw new AppError(
 			'INVALID_MARKET_DATE_RANGE',
-			'Historical comparisons support up to two years and one month.',
+			'Historical comparisons support up to three years.',
 			400
 		);
 	}
