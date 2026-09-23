@@ -72,6 +72,94 @@ describe('five-day net worth range', () => {
 });
 
 describe('net worth history', () => {
+	it('uses the latest observed daily balance even when an estimated close is later', () => {
+		const history = buildNetWorthHistory([
+			account({
+				accountType: 'brokerage',
+				currentBalanceCents: 252_000,
+				lastSyncedAt: '2026-06-03T15:00:00.000Z',
+				balanceHistory: [
+					{
+						recordedAt: '2026-06-01T20:00:00.000Z',
+						balanceCents: 249_000,
+						netContributionsCents: null,
+						source: 'estimated'
+					},
+					{
+						recordedAt: '2026-06-02T20:00:00.000Z',
+						balanceCents: 100,
+						netContributionsCents: null,
+						source: 'estimated'
+					},
+					{
+						recordedAt: '2026-06-02T16:00:00.000Z',
+						balanceCents: 251_000,
+						netContributionsCents: null,
+						source: 'observed'
+					},
+					{
+						recordedAt: '2026-06-02T15:00:00.000Z',
+						balanceCents: 250_000,
+						netContributionsCents: null,
+						source: 'observed'
+					},
+					{
+						recordedAt: '2026-06-03T20:00:00.000Z',
+						balanceCents: 100,
+						netContributionsCents: null,
+						source: 'estimated'
+					}
+				]
+			})
+		]);
+
+		expect(
+			history.points.map(({ netWorthCents, changeCents, estimated }) => ({
+				netWorthCents,
+				changeCents,
+				estimated
+			}))
+		).toEqual([
+			{ netWorthCents: 249_000, changeCents: null, estimated: true },
+			{ netWorthCents: 251_000, changeCents: 2_000, estimated: false },
+			{ netWorthCents: 252_000, changeCents: 1_000, estimated: false }
+		]);
+		expect(history.points[1].accounts[0]).toMatchObject({
+			balanceCents: 251_000,
+			estimated: false,
+			sourceRecordedAt: '2026-06-02T16:00:00.000Z'
+		});
+	});
+
+	it('preserves a real zero observed balance over a later estimate', () => {
+		const history = buildNetWorthHistory([
+			account({
+				currentBalanceCents: 0,
+				lastSyncedAt: '2026-06-02T15:00:00.000Z',
+				balanceHistory: [
+					{
+						recordedAt: '2026-06-01T20:00:00.000Z',
+						balanceCents: 100_000,
+						netContributionsCents: null,
+						source: 'observed'
+					},
+					{
+						recordedAt: '2026-06-02T20:00:00.000Z',
+						balanceCents: 100_000,
+						netContributionsCents: null,
+						source: 'estimated'
+					}
+				]
+			})
+		]);
+
+		expect(history.points[1]).toMatchObject({
+			netWorthCents: 0,
+			changeCents: -100_000,
+			estimated: false
+		});
+	});
+
 	it('supports a one-week view anchored to the latest history date', () => {
 		const history = buildNetWorthHistory([
 			account({

@@ -73,6 +73,58 @@ describe('historical market closes', () => {
 		expect(calls).toBe(0);
 		expect(result[0].closes.size).toBe(0);
 	});
+
+	it('omits missing and nonnumeric closes without changing legitimate numeric zero', async () => {
+		const closes = [123.45, null, '', false, '125', 0, -1, 100_000_000];
+		setMarketHistoryFetchForTests(
+			async () =>
+				new Response(
+					JSON.stringify({
+						chart: {
+							result: [
+								{
+									timestamp: Array.from(
+										{ length: closes.length + 1 },
+										(_, index) => Date.parse('2026-05-01T00:00:00Z') / 1000 + index * 86_400
+									),
+									indicators: { quote: [{ close: closes }] }
+								}
+							]
+						}
+					})
+				)
+		);
+
+		const [result] = await historicalCloseSeries(['SYN'], '2026-05-01', '2026-05-09');
+
+		expect([...result.closes]).toEqual([
+			['2026-05-01', 123.45],
+			['2026-05-06', 0]
+		]);
+	});
+
+	it('requires numeric timestamps instead of coercing missing or string values', async () => {
+		const timestamp = Date.parse('2026-05-01T00:00:00Z') / 1000;
+		setMarketHistoryFetchForTests(
+			async () =>
+				new Response(
+					JSON.stringify({
+						chart: {
+							result: [
+								{
+									timestamp: [timestamp, null, false, '', String(timestamp + 86_400), 1e20],
+									indicators: { quote: [{ close: [100, 101, 102, 103, 104, 105] }] }
+								}
+							]
+						}
+					})
+				)
+		);
+
+		const [result] = await historicalCloseSeries(['SYN'], '2026-05-01', '2026-05-02');
+
+		expect([...result.closes]).toEqual([['2026-05-01', 100]]);
+	});
 });
 
 describe('SPY dividend-adjusted benchmark', () => {

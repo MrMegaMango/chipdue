@@ -79,11 +79,19 @@ async function fetchSeries(
 			: [];
 		const closes = new Map<string, number>();
 		for (let index = 0; index < timestamps.length; index += 1) {
-			const timestamp = Number(timestamps[index]);
-			const close = Number(values[index]);
+			const timestamp = timestamps[index];
+			const close = values[index];
+			if (
+				typeof timestamp !== 'number' ||
+				!Number.isFinite(timestamp) ||
+				typeof close !== 'number' ||
+				!Number.isFinite(close) ||
+				close < 0 ||
+				close >= 100_000_000
+			)
+				continue;
 			const day = isoDay(timestamp);
-			if (day && Number.isFinite(close) && close >= 0 && close < 100_000_000)
-				closes.set(day, close);
+			if (day) closes.set(day, close);
 		}
 		return { symbol, closes };
 	} catch {

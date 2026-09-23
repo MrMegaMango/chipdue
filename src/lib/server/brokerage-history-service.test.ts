@@ -223,6 +223,86 @@ describe.sequential('provider-neutral brokerage history', () => {
 		}
 	);
 
+	it.each([
+		{ otherClose: null, estimatedBalances: [18_000] },
+		{ otherClose: 110, estimatedBalances: [18_000, 20_000] }
+	])(
+		'preserves portfolio value when the latest closing price is missing (other close: $otherClose)',
+		async ({ otherClose, estimatedBalances }) => {
+			const connectionId = await savePlaidItem(
+				'missing-close-item',
+				'synthetic-missing-close-token',
+				'Chase'
+			);
+			await replaceConnectedFinancialAccounts(
+				'plaid',
+				connectionId,
+				[
+					{
+						accountId: 'missing-close-account',
+						nickname: 'Brokerage',
+						institution: 'Chase',
+						institutionLogoBase64: null,
+						accountType: 'brokerage',
+						last4: '1234',
+						currency: 'USD',
+						currentBalanceCents: 20_000,
+						costBasisCents: null,
+						holdings: ['SYN', 'OTHER'].map((symbol) => ({
+							name: `Synthetic equity ${symbol}`,
+							tickerSymbol: symbol,
+							securityType: 'equity',
+							quantity: 1,
+							priceMicros: 100_000_000,
+							valueCents: 10_000,
+							costBasisCents: null,
+							currency: 'USD',
+							priceAsOf: '2026-08-29'
+						})),
+						transactionHistory: {
+							enabled: true,
+							cursor: null,
+							status: 'historical_complete',
+							transactions: []
+						}
+					}
+				],
+				'2026-08-29T15:00:00.000Z'
+			);
+			const [account] = await listFinancialAccounts();
+			setMarketHistoryFetchForTests(async (input) => {
+				const latestClose = new URL(String(input)).pathname.endsWith('/OTHER') ? otherClose : null;
+				return new Response(
+					JSON.stringify({
+						chart: {
+							result: [
+								{
+									timestamp: [
+										Date.parse('2026-08-27T00:00:00Z') / 1000,
+										Date.parse('2026-08-28T00:00:00Z') / 1000
+									],
+									indicators: { quote: [{ close: [90, latestClose] }] }
+								}
+							]
+						}
+					})
+				);
+			});
+
+			const response = await rebuildBrokerageHistory(account.id);
+
+			expect(response.account?.balanceHistory.map((point) => point.balanceCents)).toEqual([
+				...estimatedBalances,
+				20_000
+			]);
+			expect(response.account?.balanceHistory.at(-1)).toMatchObject({
+				recordedAt: '2026-08-29T15:00:00.000Z',
+				source: 'observed',
+				balanceCents: 20_000
+			});
+		}
+	);
+
 	it('requires synced investment activity before Plaid reconstruction', async () => {
 		const connectionId = await savePlaidItem(
 			'provider-no-activity-item',

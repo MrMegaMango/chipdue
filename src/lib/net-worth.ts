@@ -85,6 +85,10 @@ function dailySnapshots(account: NetWorthAccount): DailySnapshot[] {
 	for (const snapshot of snapshots.sort((left, right) =>
 		left.recordedAt.localeCompare(right.recordedAt)
 	)) {
+		// A reconstructed close must not replace a balance actually reported that day.
+		if (byDay.get(snapshot.day)?.source === 'observed' && snapshot.source === 'estimated') {
+			continue;
+		}
 		byDay.set(snapshot.day, snapshot);
 	}
 	return [...byDay.values()].sort((left, right) => left.day.localeCompare(right.day));
