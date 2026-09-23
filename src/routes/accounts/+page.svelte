@@ -3,6 +3,7 @@
 	import { onMount } from 'svelte';
 	import { getCompatibleBonusOffers } from '$lib/bonus-offers';
 	import BalanceHistoryChart from '$lib/components/BalanceHistoryChart.svelte';
+	import InvestmentBenchmark from '$lib/components/InvestmentBenchmark.svelte';
 	import SyncedTime from '$lib/components/SyncedTime.svelte';
 	import { connectionSyncSummary, type ConnectionSyncSummary } from '$lib/connection-sync';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
@@ -1375,6 +1376,7 @@
 				</div>
 			</div>
 		{:else}
+			<InvestmentBenchmark {accounts} />
 			<section aria-labelledby="account-list-title">
 				<div class="finance-section-heading">
 					<div>

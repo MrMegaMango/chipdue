@@ -24,7 +24,7 @@ Browser memory -> Vercel edge and authenticated Function -> ciphertext in Neon
                                       |
                                       +-> Plaid when configured and invoked
                                       +-> E*TRADE when configured and its data is requested
-                                      +-> Yahoo Finance when estimated history is built
+                                      +-> Yahoo Finance for estimated history and the SPY benchmark
                                       +-> Google during optional authentication
 
 Offline recovery material -> AES key and runtime DB password

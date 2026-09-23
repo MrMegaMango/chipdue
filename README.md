@@ -17,6 +17,7 @@ Choose one of two deployment modes:
 - Automatically refresh eligible bank and brokerage balances through an installed financial-data provider.
 - See each brokerage account's value over time and separate automatically calculated period contributions from investment return, with every saved balance or successful sync extending its private history. An optional lifetime contribution total can replace the period baseline.
 - See each connected brokerage position, share count, current institution price, value, and holding cost basis while keeping simple account-level performance.
+- Compare each investment account with the S&P 500 through SPY, using estimated cash-flow-adjusted returns, dividend-adjusted benchmark prices, and the same recorded cash flows. Choose 1M, 3M, YTD, 1Y, or all available history on Accounts.
 - Build clearly labeled estimated daily history for Plaid-connected brokerage accounts—including Chase Self-Directed—from current holdings, up to 24 months of investment activity, and public market closes.
 - Load current E*TRADE open orders and use E*TRADE positions and activity as alternate reconstruction inputs without enabling trade placement, changes, or cancellation.
 - Track statement balance, minimum due, current balance, due date, statement date, and autopay status.
@@ -42,7 +43,7 @@ Browser memory -> authenticated Vercel Function -> encrypted Neon Postgres rows
                                       |
                                       +-> Plaid, only when configured and used
                                       +-> E*TRADE, only when configured and its data is requested
-                                      +-> Yahoo Finance, only when estimated history is built
+                                      +-> Yahoo Finance, for estimated history and the SPY benchmark
                                       +-> Google, only during optional sign-in
 
 Git repository -> source code and synthetic tests only
