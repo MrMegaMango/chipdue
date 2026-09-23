@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { buildInvestmentComparison, needsBrokerageHistoryRefresh } from '$lib/investment-benchmark';
 import { listCards } from './cards';
 import { closeDatabaseForTests, getDatabase } from './database';
 import {
@@ -540,6 +541,225 @@ describe.sequential('encrypted financial records', () => {
 				source: 'observed'
 			}
 		]);
+	});
+
+	it.each([
+		{ syncDay: '2026-09-22', latestPriceDay: '2026-09-21' },
+		{ syncDay: '2026-09-21', latestPriceDay: '2026-09-18' }
+	])(
+		'fills estimated history after tracking began and records a successful refresh on $syncDay',
+		async ({ syncDay, latestPriceDay }) => {
+			vi.useFakeTimers();
+			vi.setSystemTime(new Date('2026-09-08T12:00:00.000Z'));
+			const connectionId = await savePlaidItem(
+				'provider-refreshed-history-item',
+				'provider-refreshed-history-token',
+				'Synthetic Brokerage'
+			);
+			const snapshot = {
+				accountId: 'provider-refreshed-history-account',
+				nickname: 'Refreshed brokerage',
+				institution: 'Synthetic Brokerage',
+				institutionLogoBase64: null,
+				accountType: 'brokerage' as const,
+				last4: '1234',
+				currency: 'USD',
+				currentBalanceCents: 120_000,
+				costBasisCents: 100_000,
+				holdings: []
+			};
+			for (const syncedAt of [
+				'2026-09-08T12:00:00.000Z',
+				'2026-09-10T12:00:00.000Z',
+				`${syncDay}T12:00:00.000Z`
+			]) {
+				await replaceConnectedFinancialAccounts('plaid', connectionId, [snapshot], syncedAt);
+			}
+			const [account] = await listFinancialAccounts();
+			expect(account).not.toHaveProperty('estimatedHistoryUpdatedAt');
+			const observed = account.balanceHistory;
+			const estimatedDates = [
+				'2026-09-04T20:00:00.000Z',
+				'2026-09-08T20:00:00.000Z',
+				'2026-09-10T20:00:00.000Z',
+				`${latestPriceDay}T20:00:00.000Z`
+			];
+			const refreshedAt = `${syncDay}T13:00:00.000Z`;
+			vi.setSystemTime(new Date(refreshedAt));
+			const refreshed = await replaceEstimatedFinancialAccountHistory(
+				account.id,
+				[...estimatedDates, observed[0].recordedAt, `${syncDay}T20:00:00.000Z`].map(
+					(recordedAt) => ({
+						recordedAt,
+						balanceCents: 115_000,
+						netContributionsCents: 100_000,
+						source: 'estimated'
+					})
+				)
+			);
+			expect(refreshed.balanceHistory.filter((point) => point.source === 'observed')).toEqual(
+				observed
+			);
+			expect(
+				refreshed.balanceHistory
+					.filter((point) => point.source === 'estimated')
+					.map((point) => point.recordedAt)
+			).toEqual(estimatedDates);
+			expect(refreshed.estimatedHistoryUpdatedAt).toBe(refreshedAt);
+			expect(needsBrokerageHistoryRefresh(refreshed)).toBe(false);
+			expect(
+				buildInvestmentComparison(
+					refreshed.balanceHistory,
+					estimatedDates.map((recordedAt) => ({
+						date: recordedAt.slice(0, 10),
+						adjustedClose: 100
+					})),
+					'ALL'
+				)
+			).toMatchObject({ status: 'available', endDate: latestPriceDay });
+			expect((await listFinancialAccounts())[0]).toEqual(refreshed);
+
+			vi.setSystemTime(new Date(`${syncDay}T14:00:00.000Z`));
+			expect(
+				await updateFinancialAccount(account.id, { notes: 'Saved account note' })
+			).toMatchObject({
+				estimatedHistoryUpdatedAt: refreshedAt
+			});
+			await replaceConnectedFinancialAccounts(
+				'plaid',
+				connectionId,
+				[snapshot],
+				`${syncDay}T15:00:00.000Z`
+			);
+			const [synced] = await listFinancialAccounts();
+			expect(synced.estimatedHistoryUpdatedAt).toBe(refreshedAt);
+			expect(needsBrokerageHistoryRefresh(synced)).toBe(true);
+		}
+	);
+
+	it('preserves observed balances and manual contributions when refreshing estimates', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-09-05T12:00:00.000Z'));
+		const account = await createFinancialAccount(
+			createFinancialAccountSchema.parse({
+				nickname: 'Corrected brokerage',
+				accountType: 'brokerage',
+				currentBalanceCents: 120_000,
+				netContributionsCents: 100_000
+			})
+		);
+		vi.setSystemTime(new Date('2026-09-22T12:00:00.000Z'));
+		const corrected = await updateFinancialAccount(account.id, {
+			currentBalanceCents: 140_000,
+			netContributionsCents: 110_000
+		});
+		const refreshed = await replaceEstimatedFinancialAccountHistory(
+			account.id,
+			[
+				{
+					recordedAt: '2026-09-21T20:00:00.000Z',
+					balanceCents: 135_000,
+					netContributionsCents: 105_000,
+					source: 'estimated'
+				}
+			],
+			{ latestObservedNetContributionsCents: 999_000 }
+		);
+		expect(refreshed.balanceHistory.filter((point) => point.source === 'observed')).toEqual(
+			corrected.balanceHistory
+		);
+		expect(refreshed.currentBalanceCents).toBe(140_000);
+		expect(refreshed.netContributionsCents).toBe(110_000);
+	});
+
+	it('rejects reconstructed history if its account synced after the inputs were captured', async () => {
+		const connectionId = await savePlaidItem(
+			'provider-concurrent-history-item',
+			'provider-concurrent-history-token',
+			'Synthetic Brokerage'
+		);
+		const snapshot = {
+			accountId: 'provider-concurrent-history-account',
+			nickname: 'Concurrent sync brokerage',
+			institution: 'Synthetic Brokerage',
+			institutionLogoBase64: null,
+			accountType: 'brokerage' as const,
+			last4: '1234',
+			currency: 'USD',
+			currentBalanceCents: 120_000,
+			costBasisCents: 100_000,
+			holdings: []
+		};
+		await replaceConnectedFinancialAccounts(
+			'plaid',
+			connectionId,
+			[snapshot],
+			'2026-09-22T12:00:00.000Z'
+		);
+		const [captured] = await listFinancialAccounts();
+		await replaceConnectedFinancialAccounts(
+			'plaid',
+			connectionId,
+			[{ ...snapshot, currentBalanceCents: 130_000 }],
+			'2026-09-22T13:00:00.000Z'
+		);
+		const [newer] = await listFinancialAccounts();
+		await expect(
+			replaceEstimatedFinancialAccountHistory(
+				captured.id,
+				[
+					{
+						recordedAt: '2026-09-21T20:00:00.000Z',
+						balanceCents: 115_000,
+						netContributionsCents: 100_000,
+						source: 'estimated'
+					}
+				],
+				{
+					latestObservedNetContributionsCents: 100_000,
+					sourceLastSyncedAt: captured.lastSyncedAt
+				}
+			)
+		).rejects.toMatchObject({ code: 'HISTORY_INPUTS_CHANGED', status: 409 });
+		const [unchanged] = await listFinancialAccounts();
+		expect(unchanged).toEqual(newer);
+		expect(unchanged.currentBalanceCents).toBe(130_000);
+		expect(unchanged).not.toHaveProperty('estimatedHistoryUpdatedAt');
+	});
+
+	it('evicts estimates before observed snapshots when reconstructed history reaches the limit', async () => {
+		const account = await createFinancialAccount(
+			createFinancialAccountSchema.parse({
+				nickname: 'Long history brokerage',
+				accountType: 'brokerage',
+				currentBalanceCents: 120_000
+			})
+		);
+		const observed = Array.from({ length: 5_000 }, (_, index) => ({
+			recordedAt: new Date(
+				Date.parse('2010-01-01T12:00:00.000Z') + index * 86_400_000
+			).toISOString(),
+			balanceCents: 120_000,
+			netContributionsCents: null,
+			source: 'observed' as const
+		}));
+		const database = getDatabase();
+		const row = database.prepare('SELECT payload_enc FROM cards WHERE id = ?').get(account.id) as {
+			payload_enc: string;
+		};
+		const payload = decryptJson<Record<string, unknown>>(row.payload_enc, `card:${account.id}`);
+		database
+			.prepare('UPDATE cards SET payload_enc = ? WHERE id = ?')
+			.run(encryptJson({ ...payload, balanceHistory: observed }, `card:${account.id}`), account.id);
+		const refreshed = await replaceEstimatedFinancialAccountHistory(account.id, [
+			{
+				recordedAt: '2023-01-01T20:00:00.000Z',
+				balanceCents: 115_000,
+				netContributionsCents: 100_000,
+				source: 'estimated'
+			}
+		]);
+		expect(refreshed.balanceHistory).toEqual(observed);
 	});
 
 	it('extends connected brokerage history on every successful balance sync', async () => {

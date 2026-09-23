@@ -18,6 +18,7 @@ Choose one of two deployment modes:
 - See each brokerage account's value over time and separate automatically calculated period contributions from investment return, with every saved balance or successful sync extending its private history. An optional lifetime contribution total can replace the period baseline.
 - See each connected brokerage position, share count, current institution price, value, and holding cost basis while keeping simple account-level performance.
 - Compare each investment account with the S&P 500 through SPY, using estimated cash-flow-adjusted returns, dividend-adjusted benchmark prices, and the same recorded cash flows. Choose 1M, 3M, YTD, 1Y, or all available history on Accounts.
+- Automatically extend estimated history after newer account syncs. E*TRADE accounts can use saved Plaid investment activity when the optional E*TRADE authorization is unavailable.
 - Build clearly labeled estimated daily history for Plaid-connected brokerage accounts—including Chase Self-Directed—from current holdings, up to 24 months of investment activity, and public market closes.
 - Load current E*TRADE open orders and use E*TRADE positions and activity as alternate reconstruction inputs without enabling trade placement, changes, or cancellation.
 - Track statement balance, minimum due, current balance, due date, statement date, and autopay status.

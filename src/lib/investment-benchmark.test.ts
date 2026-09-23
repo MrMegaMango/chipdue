@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { AccountBalanceHistoryPoint } from './types';
-import { buildInvestmentComparison, type BenchmarkPrice } from './investment-benchmark';
+import {
+	buildInvestmentComparison,
+	needsBrokerageHistoryRefresh,
+	type BenchmarkPrice
+} from './investment-benchmark';
 
 function point(
 	date: string,
@@ -15,7 +19,129 @@ function prices(...entries: Array<[string, number]>): BenchmarkPrice[] {
 	return entries.map(([date, adjustedClose]) => ({ date, adjustedClose }));
 }
 
+describe('automatic comparison history refresh', () => {
+	it('extends stale estimates after a scheduled sync without treating unknown snapshots as returns', () => {
+		expect(
+			needsBrokerageHistoryRefresh({
+				lastSyncedAt: '2026-09-22T16:00:00Z',
+				balanceHistory: [
+					point('2026-09-04', 10_000, 9_000),
+					point('2026-09-22', 20_000, null, 'observed')
+				]
+			})
+		).toBe(true);
+	});
+
+	it('reuses a successful reconstruction until a newer account sync', () => {
+		expect(
+			needsBrokerageHistoryRefresh({
+				lastSyncedAt: '2026-09-22T16:00:00Z',
+				estimatedHistoryUpdatedAt: '2026-09-22T16:05:00Z',
+				balanceHistory: [
+					point('2026-09-21', 10_000, 9_000),
+					point('2026-09-22', 10_100, null, 'observed')
+				]
+			})
+		).toBe(false);
+	});
+
+	it('does not rebuild repeatedly when the last trading day precedes a weekend sync', () => {
+		const account = {
+			lastSyncedAt: '2026-09-20T16:00:00Z',
+			estimatedHistoryUpdatedAt: '2026-09-20T16:05:00Z',
+			balanceHistory: [point('2026-09-18', 10_000, 9_000)]
+		};
+		expect(needsBrokerageHistoryRefresh(account)).toBe(false);
+		expect(needsBrokerageHistoryRefresh({ ...account, lastSyncedAt: '2026-09-21T16:00:00Z' })).toBe(
+			true
+		);
+	});
+
+	it('builds missing contribution history but leaves unsynced manual history alone', () => {
+		expect(needsBrokerageHistoryRefresh({ lastSyncedAt: null, balanceHistory: [] })).toBe(true);
+		expect(
+			needsBrokerageHistoryRefresh({
+				lastSyncedAt: null,
+				balanceHistory: [point('2026-09-21', 10_000, null)]
+			})
+		).toBe(true);
+		expect(
+			needsBrokerageHistoryRefresh({
+				lastSyncedAt: null,
+				balanceHistory: [point('2026-09-21', 10_000, 9_000)]
+			})
+		).toBe(false);
+	});
+});
+
 describe('investment comparison with SPY', () => {
+	it('keeps automatic period contributions separate from older observed contribution anchors', () => {
+		const history = [
+			point('2026-09-01', 10_000, 10_000),
+			point('2026-09-02', 10_000, 10_000),
+			{
+				...point('2026-09-02', 10_000, 9_000, 'observed'),
+				recordedAt: '2026-09-02T22:00:00Z'
+			},
+			point('2026-09-03', 10_000, 10_000),
+			point('2026-09-04', 12_000, 12_000, 'observed')
+		];
+		const original = structuredClone(history);
+		const result = buildInvestmentComparison(
+			history,
+			prices(['2026-09-01', 100], ['2026-09-02', 100], ['2026-09-03', 100], ['2026-09-04', 100]),
+			'ALL',
+			'USD',
+			{ contributionBasis: 'estimated_period' }
+		);
+		expect(result).toMatchObject({
+			status: 'available',
+			startDate: '2026-09-01',
+			endDate: '2026-09-03',
+			summary: {
+				accountReturnPercent: 0,
+				benchmarkReturnPercent: 0,
+				excessPercentagePoints: 0,
+				differenceCents: 0
+			}
+		});
+		expect(history).toEqual(original);
+	});
+
+	it('does not fall back to observations when an automatic period has too few closes', () => {
+		const result = buildInvestmentComparison(
+			[
+				point('2026-09-01', 10_000, 10_000),
+				point('2026-09-02', 11_000, 10_000, 'observed'),
+				point('2026-09-03', 12_000, 10_000, 'observed')
+			],
+			prices(['2026-09-01', 100], ['2026-09-02', 100], ['2026-09-03', 100]),
+			'ALL',
+			'USD',
+			{ contributionBasis: 'estimated_period' }
+		);
+		expect(result).toEqual({ status: 'unavailable', reason: 'insufficient_history' });
+	});
+
+	it('preserves account-basis observed cash flows and manual history', () => {
+		const history = [
+			point('2026-09-01', 10_000, 10_000, 'observed'),
+			point('2026-09-02', 21_000, 20_000, 'observed')
+		];
+		const benchmark = prices(['2026-09-01', 100], ['2026-09-02', 110]);
+		const result = buildInvestmentComparison(history, benchmark, 'ALL', 'USD', {
+			contributionBasis: 'account'
+		});
+		expect(result).toEqual(buildInvestmentComparison(history, benchmark, 'ALL'));
+		expect(result).toMatchObject({
+			status: 'available',
+			endDate: '2026-09-02',
+			estimatedHistory: false,
+			summary: { differenceCents: 0 }
+		});
+		if (result.status === 'available') expect(result.summary.accountReturnPercent).toBeCloseTo(10);
+	});
+
 	it('compares matching periods and removes contributions before linking returns', () => {
 		const result = buildInvestmentComparison(
 			[

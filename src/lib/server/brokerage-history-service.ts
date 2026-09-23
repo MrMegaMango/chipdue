@@ -86,7 +86,8 @@ function plaidTransaction(
 }
 
 async function rebuildPlaidBrokerageHistory(
-	account: FinancialAccount
+	account: FinancialAccount,
+	requireSyncedActivity = false
 ): Promise<BrokerageHistoryEstimateResponse> {
 	if (
 		account.accountType !== 'brokerage' ||
@@ -106,6 +107,9 @@ async function rebuildPlaidBrokerageHistory(
 		const input = plaidTransaction(transaction, account.holdings);
 		return input ? [input] : [];
 	});
+	if (requireSyncedActivity && transactions.length === 0) {
+		return unavailable('plaid', 'activity_required');
+	}
 	const end = new Date();
 	end.setUTCHours(0, 0, 0, 0);
 	end.setUTCDate(end.getUTCDate() - 1);
@@ -149,7 +153,8 @@ async function rebuildPlaidBrokerageHistory(
 		account.id,
 		estimate.points,
 		{
-			latestObservedNetContributionsCents: estimate.currentNetContributionsCents
+			latestObservedNetContributionsCents: estimate.currentNetContributionsCents,
+			sourceLastSyncedAt: account.lastSyncedAt
 		}
 	);
 	return {
@@ -171,7 +176,20 @@ export async function rebuildBrokerageHistory(
 ): Promise<BrokerageHistoryEstimateResponse> {
 	const account = await getFinancialAccount(financialAccountId);
 	if (/(?:^|\b)e\s*\*?\s*trade(?:\b|$)/i.test(account.institution ?? '')) {
-		return rebuildEtradeBrokerageHistory(account.id);
+		const etrade = await rebuildEtradeBrokerageHistory(account.id);
+		if (
+			['not_configured', 'authorization_required', 'account_not_found'].includes(
+				etrade.availability
+			) &&
+			account.accountType === 'brokerage' &&
+			account.source === 'connected' &&
+			account.connectionProvider === 'plaid' &&
+			account.transactionHistoryEnabled
+		) {
+			const plaid = await rebuildPlaidBrokerageHistory(account, true);
+			if (plaid.availability === 'available') return plaid;
+		}
+		return etrade;
 	}
 	return rebuildPlaidBrokerageHistory(account);
 }

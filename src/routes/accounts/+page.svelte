@@ -4,6 +4,7 @@
 	import { getCompatibleBonusOffers } from '$lib/bonus-offers';
 	import BalanceHistoryChart from '$lib/components/BalanceHistoryChart.svelte';
 	import InvestmentBenchmark from '$lib/components/InvestmentBenchmark.svelte';
+	import { needsBrokerageHistoryRefresh } from '$lib/investment-benchmark';
 	import SyncedTime from '$lib/components/SyncedTime.svelte';
 	import { connectionSyncSummary, type ConnectionSyncSummary } from '$lib/connection-sync';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
@@ -771,11 +772,7 @@
 	}
 
 	function needsEstimatedContributionHistory(account: FinancialAccount): boolean {
-		const estimatedPoints = account.balanceHistory.filter((point) => point.source === 'estimated');
-		return (
-			estimatedPoints.length === 0 ||
-			estimatedPoints.every((point) => point.netContributionsCents === null)
-		);
+		return needsBrokerageHistoryRefresh(account);
 	}
 
 	async function loadBrokerageOrders(account: FinancialAccount): Promise<void> {
@@ -860,8 +857,9 @@
 				};
 			}
 			if (!silent) {
+				const historyProviderName = response.provider === 'etrade' ? 'E*TRADE' : 'Plaid';
 				showToast(
-					`Built ${response.estimatedPointCount} estimated daily portfolio values${response.account.netContributionsCents === null ? ' and calculated net contributions' : ''} from ${providerName} activity.`
+					`Built ${response.estimatedPointCount} estimated daily portfolio values${response.account.netContributionsCents === null ? ' and calculated net contributions' : ''} from ${historyProviderName} activity.`
 				);
 			}
 		} catch (error) {
@@ -1376,7 +1374,7 @@
 				</div>
 			</div>
 		{:else}
-			<InvestmentBenchmark {accounts} />
+			<InvestmentBenchmark {accounts} historyLoadingByAccount={historyEstimateLoadingByAccount} />
 			<section aria-labelledby="account-list-title">
 				<div class="finance-section-heading">
 					<div>
@@ -1544,7 +1542,7 @@
 																		<strong>Estimated portfolio history</strong>
 																		<span
 																			>Uses {isEtradeBrokerage(account)
-																				? 'E*TRADE'
+																				? 'E*TRADE or synced Plaid'
 																				: financialProviderName(account.connectionProvider)} activity
 																			and daily market closes; it is not broker-reported performance.</span
 																		>
@@ -1562,7 +1560,7 @@
 																	</div>
 																	{#if !account.transactionHistoryEnabled && !isEtradeBrokerage(account)}
 																		<span class="disabled-label">Sync activity first</span>
-																	{:else if !isEtradeBrokerage(account) || ordersByAccount[account.id]?.availability === 'available'}
+																	{:else if !isEtradeBrokerage(account) || ordersByAccount[account.id]?.availability === 'available' || (account.connectionProvider === 'plaid' && account.transactionHistoryEnabled)}
 																		<button
 																			type="button"
 																			disabled={historyEstimateLoadingByAccount[account.id]}

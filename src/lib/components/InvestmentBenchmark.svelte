@@ -8,7 +8,13 @@
 	} from '$lib/investment-benchmark';
 	import type { FinancialAccount } from '$lib/types';
 
-	let { accounts }: { accounts: FinancialAccount[] } = $props();
+	let {
+		accounts,
+		historyLoadingByAccount = {}
+	}: {
+		accounts: FinancialAccount[];
+		historyLoadingByAccount?: Record<string, boolean>;
+	} = $props();
 	let selectedId = $state('');
 	let range = $state<BenchmarkRange>('1Y');
 	let prices = $state<BenchmarkPrice[]>([]);
@@ -35,10 +41,12 @@
 		timeZone: 'America/Los_Angeles'
 	});
 	const eligible = $derived(
-		accounts.filter(
-			(account) =>
-				account.accountType === 'brokerage' && account.status === 'active' && !account.hidden
-		)
+		accounts
+			.filter(
+				(account) =>
+					account.accountType === 'brokerage' && account.status === 'active' && !account.hidden
+			)
+			.sort((a, b) => (b.currentBalanceCents ?? 0) - (a.currentBalanceCents ?? 0))
 	);
 	const selected = $derived(eligible.find((account) => account.id === selectedId) ?? eligible[0]);
 	const requestDates = $derived.by(() => {
@@ -98,9 +106,16 @@
 		return () => controller.abort();
 	});
 
+	const usesAutomaticPeriodBasis = $derived(
+		selected?.netContributionsCents === null &&
+			(selected.source === 'connected' ||
+				selected.balanceHistory.some((point) => point.source === 'estimated'))
+	);
 	const comparison = $derived(
 		selected
-			? buildInvestmentComparison(selected.balanceHistory, prices, range, selected.currency)
+			? buildInvestmentComparison(selected.balanceHistory, prices, range, selected.currency, {
+					contributionBasis: usesAutomaticPeriodBasis ? 'estimated_period' : 'account'
+				})
 			: null
 	);
 	const available = $derived(comparison?.status === 'available' ? comparison : null);
@@ -163,7 +178,7 @@
 		return new Intl.NumberFormat('en-US', {
 			style: 'currency',
 			currency: 'USD',
-			maximumFractionDigits: 0
+			maximumFractionDigits: Math.abs(cents) < 10_000 ? 2 : 0
 		}).format(cents / 100);
 	}
 	function date(day: string, short = false): string {
@@ -221,7 +236,11 @@
 				{/each}
 			</div>
 		</div>
-		{#if loading}
+		{#if selected && historyLoadingByAccount[selected.id] && !available}
+			<p class="empty" role="status">
+				Building comparison history from your connected investment activity…
+			</p>
+		{:else if loading}
 			<p class="empty" role="status">Loading S&amp;P 500 benchmark…</p>
 		{:else if error}
 			<div class="empty" role="status">
@@ -327,6 +346,13 @@
 					interval; sparse snapshots and missing provider activity can affect accuracy. Both lines
 					start at 0% on the first displayed date.
 				</p>
+				{#if usesAutomaticPeriodBasis}
+					<p>
+						With automatically calculated contributions, this comparison uses reconstructed daily
+						closes. The chart ends at the last reconstructed close, which may be earlier than your
+						latest account sync.
+					</p>
+				{/if}
 				<p>
 					{available.estimatedHistory
 						? 'This account includes reconstructed balance history; it is not broker-reported performance. Unpriced positions and incomplete transactions can affect the estimate.'

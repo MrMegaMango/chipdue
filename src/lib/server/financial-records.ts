@@ -190,6 +190,7 @@ const accountPayloadSchema = z.object({
 		.max(MAX_BALANCE_HISTORY_POINTS)
 		.optional()
 		.default([]),
+	estimatedHistoryUpdatedAt: z.iso.datetime().optional(),
 	holdings: z.array(investmentHoldingSchema).default([]),
 	transactionHistory: storedTransactionHistorySchema.optional(),
 	openedDate: dateSchema,
@@ -298,7 +299,10 @@ function accountBalanceHistory(
 export async function replaceEstimatedFinancialAccountHistory(
 	id: string,
 	estimatedPoints: AccountBalanceHistoryPoint[],
-	options: { latestObservedNetContributionsCents?: number | null } = {}
+	options: {
+		latestObservedNetContributionsCents?: number | null;
+		sourceLastSyncedAt?: string | null;
+	} = {}
 ): Promise<FinancialAccount> {
 	const row = await getRow(id);
 	const payload = row ? decodeRecord(row) : null;
@@ -309,6 +313,16 @@ export async function replaceEstimatedFinancialAccountHistory(
 		throw new AppError(
 			'ACCOUNT_NOT_BROKERAGE',
 			'Historical estimates require a brokerage account.',
+			409
+		);
+	}
+	if (
+		options.sourceLastSyncedAt !== undefined &&
+		options.sourceLastSyncedAt !== row.last_synced_at
+	) {
+		throw new AppError(
+			'HISTORY_INPUTS_CHANGED',
+			'The account synced while its history was being reconstructed. Please try again.',
 			409
 		);
 	}
@@ -328,24 +342,39 @@ export async function replaceEstimatedFinancialAccountHistory(
 				: point
 		);
 	}
-	const firstObservedAt = observed[0]?.recordedAt ?? null;
+	// Fill reconstructed closes between snapshots without extending past the
+	// latest observed portfolio used to anchor the reconstruction.
+	const latestObservedAt = observed.at(-1)?.recordedAt ?? null;
 	const sanitized = estimatedPoints
 		.filter(
 			(point) =>
 				point.source === 'estimated' &&
 				Number.isSafeInteger(point.balanceCents) &&
 				Number.isFinite(Date.parse(point.recordedAt)) &&
-				(firstObservedAt === null || point.recordedAt < firstObservedAt)
+				(latestObservedAt === null || point.recordedAt < latestObservedAt)
 		)
 		.map((point) => ({ ...point, source: 'estimated' as const }));
-	const balanceHistory = [...sanitized, ...observed]
+	const mergedHistory = [...sanitized, ...observed]
 		.sort((left, right) => left.recordedAt.localeCompare(right.recordedAt))
 		.filter(
 			(point, index, points) =>
 				index === points.length - 1 || point.recordedAt !== points[index + 1].recordedAt
-		)
-		.slice(-MAX_BALANCE_HISTORY_POINTS);
-	await updateRecord(id, { ...payload, balanceHistory }, new Date().toISOString());
+		);
+	// Interleaved estimates must not displace saved observations at the limit.
+	let excessPointCount = Math.max(0, mergedHistory.length - MAX_BALANCE_HISTORY_POINTS);
+	const balanceHistory = mergedHistory.filter((point) => {
+		if (point.source === 'estimated' && excessPointCount > 0) {
+			excessPointCount -= 1;
+			return false;
+		}
+		return true;
+	});
+	const estimatedHistoryUpdatedAt = new Date().toISOString();
+	await updateRecord(
+		id,
+		{ ...payload, balanceHistory, estimatedHistoryUpdatedAt },
+		estimatedHistoryUpdatedAt
+	);
 	return getFinancialAccount(id);
 }
 
@@ -395,6 +424,9 @@ function rowToAccount(row: PrivateRecordRow, payload: AccountPayload): Financial
 		costBasisCents: payload.costBasisCents,
 		netContributionsCents: accountNetContributions(payload),
 		balanceHistory: accountBalanceHistory(payload, row),
+		...(payload.estimatedHistoryUpdatedAt
+			? { estimatedHistoryUpdatedAt: payload.estimatedHistoryUpdatedAt }
+			: {}),
 		holdings: payload.holdings,
 		transactionHistoryEnabled: payload.transactionHistory?.enabled === true,
 		transactionHistoryStatus: payload.transactionHistory?.status ?? null,
@@ -767,6 +799,7 @@ export async function updateFinancialAccount(
 					now
 				)
 			: accountBalanceHistory(existingPayload, row),
+		estimatedHistoryUpdatedAt: existingPayload.estimatedHistoryUpdatedAt,
 		holdings: existing.holdings,
 		transactionHistory: existingPayload.transactionHistory,
 		openedDate: changes.openedDate === undefined ? existing.openedDate : changes.openedDate,
@@ -833,6 +866,7 @@ function connectedAccountPayload(
 			snapshot.accountType === 'brokerage' ? netContributionsCents : null,
 			syncedAt
 		),
+		estimatedHistoryUpdatedAt: existingPayload?.estimatedHistoryUpdatedAt,
 		holdings: snapshot.holdings ?? existingPayload?.holdings ?? [],
 		transactionHistory: snapshot.transactionHistory ?? existingPayload?.transactionHistory,
 		openedDate: existingPayload?.openedDate ?? null,

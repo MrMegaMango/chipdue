@@ -202,6 +202,7 @@ export interface FinancialAccount {
 	costBasisCents: number | null;
 	netContributionsCents: number | null;
 	balanceHistory: AccountBalanceHistoryPoint[];
+	estimatedHistoryUpdatedAt?: string;
 	holdings: InvestmentHolding[];
 	transactionHistoryEnabled: boolean;
 	transactionHistoryStatus: TransactionHistoryStatus | null;

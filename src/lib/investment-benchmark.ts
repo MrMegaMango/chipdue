@@ -1,4 +1,4 @@
-import type { AccountBalanceHistoryPoint } from './types';
+import type { AccountBalanceHistoryPoint, FinancialAccount } from './types';
 
 export interface BenchmarkPrice {
 	date: string;
@@ -50,6 +50,21 @@ type UsablePoint = DatedHistoryPoint & {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
+
+export function needsBrokerageHistoryRefresh(
+	account: Pick<FinancialAccount, 'balanceHistory' | 'lastSyncedAt' | 'estimatedHistoryUpdatedAt'>
+): boolean {
+	const estimated = account.balanceHistory.filter((point) => point.source === 'estimated');
+	const hasContributions = estimated.some((point) => point.netContributionsCents !== null);
+	if (!account.lastSyncedAt) return !hasContributions;
+	const syncTime = Date.parse(account.lastSyncedAt);
+	if (!Number.isFinite(syncTime)) return !hasContributions;
+	// Successful reconstruction can end on Friday even when refreshed on a
+	// weekend or holiday. Use its saved refresh time, not the last trading day.
+	const refreshedAt = Date.parse(account.estimatedHistoryUpdatedAt ?? '');
+	return !Number.isFinite(refreshedAt) || refreshedAt < syncTime;
+}
+
 const marketDateFormat = new Intl.DateTimeFormat('en-CA', {
 	timeZone: 'America/New_York',
 	year: 'numeric',
@@ -147,10 +162,18 @@ export function buildInvestmentComparison(
 	history: AccountBalanceHistoryPoint[],
 	prices: BenchmarkPrice[],
 	range: BenchmarkRange,
-	currency = 'USD'
+	currency = 'USD',
+	options: { contributionBasis?: 'account' | 'estimated_period' } = {}
 ): InvestmentComparison {
 	if (currency !== 'USD') return { status: 'unavailable', reason: 'unsupported_currency' };
-	const scopedHistory = historyForRange(historyByDay(history), range);
+	// Each automatic reconstruction anchors contributions to its own starting
+	// balance. Saved observations can retain totals from older anchors, so they
+	// must not be interpreted as cash flows within the reconstructed period.
+	const comparisonHistory =
+		options.contributionBasis === 'estimated_period'
+			? history.filter((point) => point.source === 'estimated')
+			: history;
+	const scopedHistory = historyForRange(historyByDay(comparisonHistory), range);
 	if (scopedHistory.length < 2) return { status: 'unavailable', reason: 'insufficient_history' };
 	const priceByDate = new Map(
 		prices
