@@ -1374,7 +1374,6 @@
 				</div>
 			</div>
 		{:else}
-			<InvestmentBenchmark {accounts} historyLoadingByAccount={historyEstimateLoadingByAccount} />
 			<section aria-labelledby="account-list-title">
 				<div class="finance-section-heading">
 					<div>
@@ -1904,6 +1903,7 @@
 					{/each}
 				</div>
 			</section>
+			<InvestmentBenchmark {accounts} historyLoadingByAccount={historyEstimateLoadingByAccount} />
 		{/if}
 	</main>
 </div>

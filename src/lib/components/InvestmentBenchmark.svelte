@@ -369,7 +369,7 @@
 
 <style>
 	.benchmark {
-		margin: 0 0 1.5rem;
+		margin: 1.5rem 0 0;
 		padding: 1.5rem;
 		border: 1px solid var(--line);
 		border-radius: 18px;
