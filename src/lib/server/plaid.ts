@@ -286,9 +286,22 @@ async function logPlaidItemStatusDiagnostic(
 	}
 }
 
-function optionalLinkProductUnavailable(error: unknown): boolean {
-	return new Set(['INVALID_PRODUCT', 'PRODUCT_NOT_ENABLED', 'PRODUCTS_NOT_SUPPORTED']).has(
-		plaidErrorCode(error) ?? ''
+function optionalLinkProductUnavailable(error: unknown, updateProduct?: Products): boolean {
+	const code = plaidErrorCode(error);
+	if (
+		new Set(['INVALID_PRODUCT', 'PRODUCT_NOT_ENABLED', 'PRODUCTS_NOT_SUPPORTED']).has(code ?? '')
+	) {
+		return true;
+	}
+	if (code !== 'INVALID_FIELD' || !updateProduct) return false;
+
+	// Some institutions report unsupported update-mode consent as INVALID_FIELD.
+	// Match the product being removed so unrelated configuration errors still fail.
+	const message = (error as { response?: { data?: { error_message?: unknown } } })?.response?.data
+		?.error_message;
+	return (
+		typeof message === 'string' &&
+		message.startsWith(`Update mode: ${updateProduct} not supported by `)
 	);
 }
 
@@ -436,7 +449,7 @@ export async function createPlaidUpdateToken(
 		return { linkToken: response.data.link_token, expiration: response.data.expiration };
 	} catch (error) {
 		if (error instanceof AppError) throw error;
-		if (!optionalLinkProductUnavailable(error)) {
+		if (!optionalLinkProductUnavailable(error, Products.Investments)) {
 			throw await sanitizedPlaidError(error, localItemId);
 		}
 	}
@@ -449,7 +462,7 @@ export async function createPlaidUpdateToken(
 		return { linkToken: response.data.link_token, expiration: response.data.expiration };
 	} catch (error) {
 		if (error instanceof AppError) throw error;
-		if (!optionalLinkProductUnavailable(error)) {
+		if (!optionalLinkProductUnavailable(error, Products.Transactions)) {
 			throw await sanitizedPlaidError(error, localItemId);
 		}
 	}

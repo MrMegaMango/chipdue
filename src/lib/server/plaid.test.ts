@@ -768,6 +768,99 @@ describe.sequential('Plaid transaction history', () => {
 		);
 	});
 
+	it('keeps account selection available when an institution rejects investment consent as INVALID_FIELD', async () => {
+		plaidMocks.linkTokenCreate
+			.mockRejectedValueOnce({
+				response: {
+					data: {
+						error_code: 'INVALID_FIELD',
+						error_message: 'Update mode: investments not supported by Synthetic Bank'
+					}
+				}
+			})
+			.mockResolvedValueOnce({
+				data: { link_token: 'account-selection-value', expiration: '2026-08-28T00:00:00.000Z' }
+			});
+		const itemId = await savePlaidItem(
+			'provider-item-selection',
+			'test-access-value',
+			'Synthetic Bank'
+		);
+
+		await expect(createPlaidUpdateToken(itemId)).resolves.toEqual({
+			linkToken: 'account-selection-value',
+			expiration: '2026-08-28T00:00:00.000Z'
+		});
+		expect(plaidMocks.linkTokenCreate).toHaveBeenCalledTimes(2);
+		expect(plaidMocks.linkTokenCreate).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({
+				access_token: 'test-access-value',
+				additional_consented_products: ['transactions'],
+				update: { account_selection_enabled: true }
+			})
+		);
+		expect(plaidMocks.itemRemove).not.toHaveBeenCalled();
+		expect(await listPlaidConnections()).toEqual([
+			expect.objectContaining({ id: itemId, status: 'healthy' })
+		]);
+	});
+
+	it('falls back to account selection alone when optional transaction consent is also unsupported', async () => {
+		plaidMocks.linkTokenCreate
+			.mockRejectedValueOnce({ response: { data: { error_code: 'PRODUCT_NOT_ENABLED' } } })
+			.mockRejectedValueOnce({
+				response: {
+					data: {
+						error_code: 'INVALID_FIELD',
+						error_message: 'Update mode: transactions not supported by Synthetic Bank'
+					}
+				}
+			})
+			.mockResolvedValueOnce({
+				data: { link_token: 'account-selection-value', expiration: '2026-08-28T00:00:00.000Z' }
+			});
+		const itemId = await savePlaidItem(
+			'provider-item-selection',
+			'test-access-value',
+			'Synthetic Bank'
+		);
+
+		await expect(createPlaidUpdateToken(itemId)).resolves.toHaveProperty(
+			'linkToken',
+			'account-selection-value'
+		);
+		expect(plaidMocks.linkTokenCreate).toHaveBeenCalledTimes(3);
+		const request = plaidMocks.linkTokenCreate.mock.calls[2][0];
+		expect(request).toEqual(
+			expect.objectContaining({
+				access_token: 'test-access-value',
+				update: { account_selection_enabled: true }
+			})
+		);
+		expect(request).not.toHaveProperty('additional_consented_products');
+	});
+
+	it.each([
+		'provided redirect URI is not allowlisted',
+		'Update mode: transactions not supported by Synthetic Bank',
+		null
+	])('does not hide other INVALID_FIELD update failures: %s', async (message) => {
+		plaidMocks.linkTokenCreate.mockRejectedValueOnce({
+			response: { data: { error_code: 'INVALID_FIELD', error_message: message } }
+		});
+		const itemId = await savePlaidItem(
+			'provider-item-selection',
+			'test-access-value',
+			'Synthetic Bank'
+		);
+
+		await expect(createPlaidUpdateToken(itemId)).rejects.toMatchObject({
+			code: 'PLAID_UNAVAILABLE'
+		});
+		expect(plaidMocks.linkTokenCreate).toHaveBeenCalledTimes(1);
+	});
+
 	it('stores Plaid institution branding with synced cards and accounts', async () => {
 		const logoBase64 =
 			'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
