@@ -23,6 +23,7 @@ Choose one of two deployment modes:
 - Build clearly labeled estimated daily history for Plaid-connected brokerage accounts—including Chase Self-Directed—from current holdings, up to 24 months of investment activity, and public market closes.
 - Load current E*TRADE open orders and use E*TRADE positions and activity as alternate reconstruction inputs without enabling trade placement, changes, or cancellation.
 - Track statement balance, minimum due, current balance, due date, statement date, and autopay status.
+- Track estimated or issuer-confirmed credit-limit review dates with a live countdown and private notes. Saved dates survive account syncs and do not imply approval.
 - Show credit-score tracker availability alongside cards without presenting a paid provider as a free feature.
 - Automatically identify supported linked cards from provider metadata, populate their reward type, base earning rate, and bonus categories, and show estimated points, miles, or cash back beside eligible transactions. Manual overrides remain available for unmatched cards.
 - Create isolated cloud accounts with Google sign-in without storing an email, profile, Google token, or refresh token.

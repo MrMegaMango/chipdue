@@ -196,6 +196,18 @@ export const updateCardRewardsSchema = z
 	.strict()
 	.refine((value) => Object.keys(value).length > 0, 'At least one field is required');
 
+export const cardCreditLimitReviewSchema = z
+	.object({
+		reviewDate: isoDateSchema,
+		dateSource: z.enum(['estimated', 'issuer_confirmed']),
+		notes: notesSchema.optional().default(null)
+	})
+	.strict();
+
+export const updateCardCreditLimitReviewSchema = z
+	.object({ creditLimitReview: cardCreditLimitReviewSchema.nullable() })
+	.strict();
+
 export const applyCardRewardProfileSchema = z
 	.object({
 		profileId: z
@@ -329,6 +341,7 @@ export const exchangeTokenSchema = z
 export type CreateManualCardData = z.infer<typeof createManualCardSchema>;
 export type UpdateManualCardData = z.infer<typeof updateManualCardSchema>;
 export type UpdateCardRewardsData = z.infer<typeof updateCardRewardsSchema>;
+export type UpdateCardCreditLimitReviewData = z.infer<typeof updateCardCreditLimitReviewSchema>;
 export type ApplyCardRewardProfileData = z.infer<typeof applyCardRewardProfileSchema>;
 export type CreateFinancialAccountData = z.infer<typeof createFinancialAccountSchema>;
 export type UpdateFinancialAccountData = z.infer<typeof updateFinancialAccountSchema>;

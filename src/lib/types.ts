@@ -20,6 +20,12 @@ export type CardRewardCategoryMatch =
 
 export type TransactionHistoryStatus = 'unknown' | 'preparing' | 'current' | 'historical_complete';
 
+export interface CardCreditLimitReview {
+	reviewDate: string;
+	dateSource: 'estimated' | 'issuer_confirmed';
+	notes: string | null;
+}
+
 export interface Card {
 	id: string;
 	source: CardSource;
@@ -36,6 +42,7 @@ export interface Card {
 	statementDate: string | null;
 	isOverdue: boolean | null;
 	autopayEnabled: boolean;
+	creditLimitReview?: CardCreditLimitReview | null;
 	rewardProgramName: string | null;
 	rewardValueCents: number | null;
 	rewardType: CardRewardType | null;

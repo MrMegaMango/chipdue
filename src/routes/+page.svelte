@@ -298,7 +298,11 @@
 	import { connectionSyncSummary, type ConnectionSyncSummary } from '$lib/connection-sync';
 	import { financialProviderName } from '$lib/financial-data';
 	import { clearPrivateApiCache, reusePrivateApiGet } from '$lib/private-api-cache';
-	import type { FinancialAccount } from '$lib/types';
+	import type {
+		FinancialAccount,
+		CardCreditLimitReview as CreditLimitReviewData
+	} from '$lib/types';
+	import CardCreditLimitReview from '$lib/components/CardCreditLimitReview.svelte';
 	import CardDowngradeTiming from '$lib/components/CardDowngradeTiming.svelte';
 
 	type PageSection = 'overview' | 'cards' | 'settings';
@@ -336,6 +340,7 @@
 		issuerLogoUrl: string | null;
 		last4: string | null;
 		source: CardSource;
+		creditLimitReview?: CreditLimitReviewData | null;
 		statementBalanceCents: number | null;
 		minimumPaymentCents: number | null;
 		currentBalanceCents: number | null;
@@ -597,6 +602,7 @@
 	let busyAction = $state<
 		| 'save'
 		| 'save-rewards'
+		| 'save-credit-limit-review'
 		| 'apply-reward-profile'
 		| 'delete'
 		| 'connect'
@@ -1760,6 +1766,30 @@
 		document.body.style.overflow = previousBodyOverflow;
 		previouslyFocused = undefined;
 		void tick().then(() => focusTarget?.focus());
+	}
+
+	async function saveCreditLimitReview(
+		card: CardView,
+		review: CreditLimitReviewData | null
+	): Promise<void> {
+		const epoch = privateStateEpoch;
+		if (busyAction || !isPrivateEpochCurrent(epoch)) throw new Error('Please wait and try again.');
+		busyAction = 'save-credit-limit-review';
+		try {
+			const payload = await requestJson<{ card: CardView }>(
+				resolve('/api/cards/[id]/credit-limit-review', { id: card.id }),
+				{ method: 'PATCH', body: JSON.stringify({ creditLimitReview: review }) },
+				{ privateEpoch: epoch }
+			);
+			if (!isPrivateEpochCurrent(epoch)) return;
+			cards = cards.map((saved) => (saved.id === card.id ? payload.card : saved));
+			showNotice(
+				review ? 'Credit-limit review date saved.' : 'Credit-limit review date cleared.',
+				'success'
+			);
+		} finally {
+			if (isPrivateEpochCurrent(epoch)) busyAction = null;
+		}
 	}
 
 	async function saveCardRewards(event: SubmitEvent): Promise<void> {
@@ -3597,6 +3627,12 @@
 										</section>
 									{/each}
 								{/if}
+								<CardCreditLimitReview
+									nickname={card.nickname}
+									review={card.creditLimitReview}
+									disabled={busyAction !== null}
+									onsaved={(review) => saveCreditLimitReview(card, review)}
+								/>
 							</div>
 						{/each}
 					</div>

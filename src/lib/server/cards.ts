@@ -11,6 +11,7 @@ import {
 } from '$lib/financial-data';
 import type {
 	Card,
+	CardCreditLimitReview,
 	CardRewardCategory,
 	CardRewardCategoryMatch,
 	CardRewardCategorySpend,
@@ -25,7 +26,14 @@ import { decryptJson, encryptJson, privateUuid } from './crypto';
 import { getDatabase } from './database';
 import { AppError } from './errors';
 import { getRuntimeMode } from './runtime';
-import type { CreateManualCardData, UpdateCardRewardsData, UpdateManualCardData } from './schemas';
+import {
+	cardCreditLimitReviewSchema,
+	updateCardCreditLimitReviewSchema,
+	type CreateManualCardData,
+	type UpdateCardCreditLimitReviewData,
+	type UpdateCardRewardsData,
+	type UpdateManualCardData
+} from './schemas';
 import {
 	providerAccountReference,
 	providerForStoredSource,
@@ -83,6 +91,8 @@ interface CardPayload {
 	statementDate: string | null;
 	isOverdue: boolean | null;
 	autopayEnabled: boolean;
+	creditLimitReview?: CardCreditLimitReview | null;
+	creditLimitReviewUpdatedAt?: string;
 	rewards?: StoredCardRewards;
 	transactionHistory?: StoredTransactionHistory;
 }
@@ -455,6 +465,16 @@ function decodePayload(row: CardRow): CardPayload | null {
 	if (!isStoredCardRewards(payload.rewards)) {
 		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
 	}
+	if (
+		(payload.creditLimitReview !== undefined &&
+			!cardCreditLimitReviewSchema.nullable().safeParse(payload.creditLimitReview).success) ||
+		(payload.creditLimitReviewUpdatedAt !== undefined &&
+			(typeof payload.creditLimitReviewUpdatedAt !== 'string' ||
+				!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(payload.creditLimitReviewUpdatedAt) ||
+				!Number.isFinite(Date.parse(payload.creditLimitReviewUpdatedAt))))
+	) {
+		throw new AppError('ENCRYPTED_DATA_UNREADABLE', 'Encrypted data could not be read.', 500);
+	}
 	return payload;
 }
 
@@ -480,6 +500,7 @@ function rowToCard(row: CardRow): Card | null {
 		statementDate: payload.statementDate,
 		isOverdue: payload.isOverdue,
 		autopayEnabled: payload.autopayEnabled,
+		creditLimitReview: payload.creditLimitReview ?? null,
 		rewardProgramName: rewards.programName,
 		rewardValueCents: rewards.cashValueCents,
 		rewardType: rewards.rewardType,
@@ -525,11 +546,79 @@ function preferMoreRecentCandidate(left: CardCandidate, right: CardCandidate): C
 	return preferMoreRecentCard(left.card, right.card) === left.card ? left : right;
 }
 
-function connectedDisplayIdentity(card: Card): string | null {
+function connectedDisplayIdentity(
+	card: Pick<Card, 'issuer' | 'nickname' | 'last4' | 'currency'>
+): string | null {
 	const issuer = card.issuer?.trim().toLocaleLowerCase();
 	const nickname = card.nickname.trim().toLocaleLowerCase();
 	if (!issuer || !nickname || !card.last4) return null;
 	return [issuer, nickname, card.last4, card.currency].join('\u0000');
+}
+
+type DecodedCard = { row: CardRow; payload: CardPayload };
+type CreditLimitReviewFields = Pick<
+	CardPayload,
+	'creditLimitReview' | 'creditLimitReviewUpdatedAt'
+>;
+
+function decodeCards(rows: CardRow[]): DecodedCard[] {
+	return rows.flatMap((row) => {
+		const payload = decodePayload(row);
+		return payload ? [{ row, payload }] : [];
+	});
+}
+
+function creditLimitReviewFields(payload: CardPayload): CreditLimitReviewFields {
+	if (payload.creditLimitReview === undefined) return {};
+	return {
+		creditLimitReview: payload.creditLimitReview,
+		...(payload.creditLimitReviewUpdatedAt
+			? { creditLimitReviewUpdatedAt: payload.creditLimitReviewUpdatedAt }
+			: {})
+	};
+}
+
+function preservedCreditLimitReview(
+	reference: string,
+	payload: CardPayload,
+	candidates: DecodedCard[],
+	allowDisplayMatch = true
+): CreditLimitReviewFields {
+	const identity = connectedDisplayIdentity(payload);
+	const displayMatches = identity
+		? candidates.filter((candidate) => connectedDisplayIdentity(candidate.payload) === identity)
+		: [];
+	const referencesByConnection = new Map<string, Set<string>>();
+	for (const { row } of displayMatches) {
+		if (!row.plaid_item_id || !row.external_account_ref) continue;
+		const references = referencesByConnection.get(row.plaid_item_id) ?? new Set<string>();
+		references.add(row.external_account_ref);
+		referencesByConnection.set(row.plaid_item_id, references);
+	}
+	// A shared label/last four is not enough to choose between two cards in one connection.
+	const unambiguousDisplay =
+		allowDisplayMatch && [...referencesByConnection.values()].every((refs) => refs.size === 1);
+	const matches = candidates.filter(
+		(candidate) =>
+			candidate.payload.creditLimitReview !== undefined &&
+			(candidate.row.external_account_ref === reference ||
+				(unambiguousDisplay && displayMatches.includes(candidate)))
+	);
+	let newest: DecodedCard | undefined;
+	for (const candidate of matches) {
+		const updatedAt = candidate.payload.creditLimitReviewUpdatedAt ?? candidate.row.updated_at;
+		const newestUpdatedAt = newest
+			? (newest.payload.creditLimitReviewUpdatedAt ?? newest.row.updated_at)
+			: '';
+		if (
+			!newest ||
+			updatedAt > newestUpdatedAt ||
+			(updatedAt === newestUpdatedAt && candidate.row.id > newest.row.id)
+		) {
+			newest = candidate;
+		}
+	}
+	return newest ? creditLimitReviewFields(newest.payload) : {};
 }
 
 function uniqueCards(rows: CardRow[]): Card[] {
@@ -584,7 +673,17 @@ function uniqueCards(rows: CardRow[]): Card[] {
 		cards.push(...(preferredConnection ?? []).map(({ card }) => card));
 	}
 
-	return [...cards, ...unmatchedConnectedCards];
+	const decodedCards = decodeCards(rows);
+	return [...cards, ...unmatchedConnectedCards].map((card) => {
+		const current = decodedCards.find(({ row }) => row.id === card.id);
+		if (!current?.row.external_account_ref || current.row.source === 'manual') return card;
+		const review = preservedCreditLimitReview(
+			current.row.external_account_ref,
+			current.payload,
+			decodedCards.filter(({ row }) => row.source === current.row.source)
+		);
+		return { ...card, creditLimitReview: review.creditLimitReview ?? null };
+	});
 }
 
 function automaticStoredRewards(profile: AutomaticCardRewardProfile): StoredCardRewards {
@@ -629,7 +728,8 @@ function rewardsForSnapshot(
 
 function snapshotPayload(
 	snapshot: ConnectedCardSnapshot,
-	rewards?: StoredCardRewards
+	rewards?: StoredCardRewards,
+	creditLimitReview: CreditLimitReviewFields = {}
 ): CardPayload {
 	const resolvedRewards = rewardsForSnapshot(snapshot.automaticRewardProfile, rewards);
 	return {
@@ -647,28 +747,31 @@ function snapshotPayload(
 		statementDate: snapshot.statementDate,
 		isOverdue: snapshot.isOverdue,
 		autopayEnabled: snapshot.autopayEnabled,
+		...creditLimitReview,
 		...(resolvedRewards ? { rewards: resolvedRewards } : {}),
 		...(snapshot.transactionHistory ? { transactionHistory: snapshot.transactionHistory } : {})
 	};
 }
 
-export async function listCards(): Promise<Card[]> {
-	const rows =
-		getRuntimeMode() === 'cloud'
-			? await cloudQuery<CardRow>(
-					`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
+async function readCardRows(): Promise<CardRow[]> {
+	return getRuntimeMode() === 'cloud'
+		? await cloudQuery<CardRow>(
+				`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
 					        last_synced_at, created_at, updated_at
 					 FROM public.carddue_cards WHERE tenant_ref = $1`,
-					[tenantReference()]
-				)
-			: (getDatabase()
-					.prepare(
-						`SELECT id, source, plaid_item_id, external_account_ref, payload_enc,
+				[tenantReference()]
+			)
+		: (getDatabase()
+				.prepare(
+					`SELECT id, source, plaid_item_id, external_account_ref, payload_enc,
 						        last_synced_at, created_at, updated_at
 						 FROM cards`
-					)
-					.all() as CardRow[]);
-	return sortCards(uniqueCards(rows));
+				)
+				.all() as CardRow[]);
+}
+
+export async function listCards(): Promise<Card[]> {
+	return sortCards(uniqueCards(await readCardRows()));
 }
 
 async function findCardRow(id: string): Promise<CardRow | undefined> {
@@ -734,6 +837,9 @@ export async function updateManualCard(id: string, changes: UpdateManualCardData
 			409
 		);
 	}
+	const row = await findCardRow(id);
+	const existingPayload = row ? decodePayload(row) : null;
+	if (!existingPayload) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
 
 	const payload: CardPayload = {
 		...tenantPayloadFields(),
@@ -759,6 +865,7 @@ export async function updateManualCard(id: string, changes: UpdateManualCardData
 		isOverdue: changes.isOverdue === undefined ? existing.isOverdue : changes.isOverdue,
 		autopayEnabled:
 			changes.autopayEnabled === undefined ? existing.autopayEnabled : changes.autopayEnabled,
+		...creditLimitReviewFields(existingPayload),
 		rewards: {
 			programName: existing.rewardProgramName,
 			cashValueCents: existing.rewardValueCents,
@@ -797,6 +904,58 @@ export async function updateManualCard(id: string, changes: UpdateManualCardData
 		.run(encrypted, now, id);
 	if (result.changes !== 1) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
 	return getCard(id);
+}
+
+export async function updateCardCreditLimitReview(
+	id: string,
+	changes: UpdateCardCreditLimitReviewData
+): Promise<Card> {
+	const validated = updateCardCreditLimitReviewSchema.parse(changes);
+	for (let attempt = 0; attempt < 3; attempt += 1) {
+		const row = await findCardRow(id);
+		const payload = row ? decodePayload(row) : null;
+		if (!row || !payload) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
+		const priorReview = row.external_account_ref
+			? preservedCreditLimitReview(
+					row.external_account_ref,
+					payload,
+					decodeCards(await readCardRows()).filter(
+						(candidate) => candidate.row.source === row.source
+					)
+				)
+			: creditLimitReviewFields(payload);
+		const priorEdit = priorReview.creditLimitReviewUpdatedAt
+			? Date.parse(priorReview.creditLimitReviewUpdatedAt)
+			: 0;
+		const now = new Date(Math.max(Date.now(), priorEdit + 1)).toISOString();
+		payload.tenantRef = tenantPayloadFields().tenantRef;
+		payload.creditLimitReview = validated.creditLimitReview;
+		// Keep a dated tombstone when cleared so an older relinked copy cannot restore it.
+		payload.creditLimitReviewUpdatedAt = now;
+		const encrypted = encryptJson(payload, `card:${id}`);
+
+		if (getRuntimeMode() === 'cloud') {
+			const rows = await cloudQuery<CardRow>(
+				`UPDATE public.carddue_cards SET payload_enc = $1, updated_at = $2
+				 WHERE tenant_ref = $3 AND id = $4 AND payload_enc = $5
+				 RETURNING id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
+				           last_synced_at, created_at, updated_at`,
+				[encrypted, now, tenantReference(), id, row.payload_enc]
+			);
+			// A sync or another edit won the race. Reapply the review to its current payload.
+			if (!rows[0]) continue;
+			const card = rowToCard(rows[0]);
+			if (!card) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
+			return card;
+		}
+
+		const result = getDatabase()
+			.prepare(`UPDATE cards SET payload_enc = ?, updated_at = ? WHERE id = ? AND payload_enc = ?`)
+			.run(encrypted, now, id, row.payload_enc);
+		if (result.changes !== 1) continue;
+		return getCard(id);
+	}
+	throw new AppError('CARD_CHANGED', 'This card changed while saving. Try again.', 409);
 }
 
 export async function updateCardRewards(id: string, changes: UpdateCardRewardsData): Promise<Card> {
@@ -917,18 +1076,15 @@ async function replaceCloudConnectedCards(
 		`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
 		        last_synced_at, created_at, updated_at
 		 FROM public.carddue_cards
-		 WHERE tenant_ref = $1 AND plaid_item_id = $2 AND source = $3`,
-		[tenantRef, connectionId, storedSource]
+		 WHERE tenant_ref = $1 AND source = $2`,
+		[tenantRef, storedSource]
 	);
-	const existingCards = existingRows.flatMap((row) => {
-		const payload = decodePayload(row);
-		return payload ? [{ row, payload }] : [];
-	});
-	const rewardsByReference = new Map(
+	const connectedCards = decodeCards(existingRows);
+	const existingCards = connectedCards.filter(({ row }) => row.plaid_item_id === connectionId);
+	const existingByReference = new Map(
 		existingCards.flatMap(({ row, payload }) => {
-			const rewards = payload.rewards;
-			return row.external_account_ref && rewards
-				? [[row.external_account_ref, rewards] as const]
+			return row.external_account_ref
+				? [[row.external_account_ref, { row, payload }] as const]
 				: [];
 		})
 	);
@@ -936,6 +1092,14 @@ async function replaceCloudConnectedCards(
 	const statements: CloudStatement[] = snapshots.map((snapshot) => {
 		const reference = providerAccountReference(provider, snapshot.accountId, 'card');
 		const id = providerRecordId(provider, snapshot.accountId, connectionId, 'card');
+		const current = existingByReference.get(reference);
+		const identity = connectedDisplayIdentity(snapshot);
+		const review = preservedCreditLimitReview(
+			reference,
+			snapshot,
+			connectedCards,
+			snapshots.filter((candidate) => connectedDisplayIdentity(candidate) === identity).length === 1
+		);
 		references.add(reference);
 		return {
 			text: `INSERT INTO public.carddue_cards
@@ -946,15 +1110,17 @@ async function replaceCloudConnectedCards(
 			       payload_enc = EXCLUDED.payload_enc,
 			       last_synced_at = EXCLUDED.last_synced_at,
 			       tenant_ref = EXCLUDED.tenant_ref,
-			       updated_at = EXCLUDED.updated_at`,
+			       updated_at = EXCLUDED.updated_at
+			       WHERE carddue_cards.tenant_ref = $7 AND carddue_cards.payload_enc = $8`,
 			params: [
 				id,
 				storedSource,
 				connectionId,
 				reference,
-				encryptJson(snapshotPayload(snapshot, rewardsByReference.get(reference)), `card:${id}`),
+				encryptJson(snapshotPayload(snapshot, current?.payload.rewards, review), `card:${id}`),
 				syncedAt,
-				tenantRef
+				tenantRef,
+				current?.row.payload_enc ?? null
 			]
 		};
 	});
@@ -983,13 +1149,11 @@ function replaceLocalConnectedCards(
 			.prepare(
 				`SELECT id, source, plaid_item_id, external_account_ref, payload_enc,
 				        last_synced_at, created_at, updated_at
-				 FROM cards WHERE plaid_item_id = ? AND source = ?`
+				 FROM cards WHERE source = ?`
 			)
-			.all(connectionId, storedSource) as ConnectedCardRow[];
-		const existingCards = existingRows.flatMap((row) => {
-			const payload = decodePayload(row);
-			return payload ? [{ row, payload }] : [];
-		});
+			.all(storedSource) as ConnectedCardRow[];
+		const connectedCards = decodeCards(existingRows);
+		const existingCards = connectedCards.filter(({ row }) => row.plaid_item_id === connectionId);
 		const existingByReference = new Map(
 			existingCards.map(({ row, payload }) => [row.external_account_ref, { row, payload }])
 		);
@@ -1001,7 +1165,15 @@ function replaceLocalConnectedCards(
 			const current = existingByReference.get(reference);
 			const id = current?.row.id ?? randomUUID();
 			const rewards = current?.payload.rewards;
-			const encrypted = encryptJson(snapshotPayload(snapshot, rewards), `card:${id}`);
+			const identity = connectedDisplayIdentity(snapshot);
+			const review = preservedCreditLimitReview(
+				reference,
+				snapshot,
+				connectedCards,
+				snapshots.filter((candidate) => connectedDisplayIdentity(candidate) === identity).length ===
+					1
+			);
+			const encrypted = encryptJson(snapshotPayload(snapshot, rewards, review), `card:${id}`);
 			if (current) {
 				database
 					.prepare(
@@ -1022,7 +1194,7 @@ function replaceLocalConnectedCards(
 		}
 
 		for (const { row } of existingCards) {
-			if (!seenReferences.has(row.external_account_ref)) {
+			if (row.external_account_ref && !seenReferences.has(row.external_account_ref)) {
 				database.prepare(`DELETE FROM cards WHERE id = ? AND source = ?`).run(row.id, storedSource);
 			}
 		}
