@@ -1135,6 +1135,179 @@ describe.sequential('Plaid transaction history', () => {
 		});
 	});
 
+	it.each(['healthy', 'needs_update'] as const)(
+		'imports available balances after Link for a %s connection without another bank login',
+		async (status) => {
+			const accessToken = 'post-link-synthetic-access-value';
+			const itemId = await savePlaidItem('provider-item-post-link', accessToken, 'Synthetic Bank');
+			if (status === 'needs_update') await markPlaidItemNeedsUpdate(itemId);
+			plaidMocks.accountsGet.mockResolvedValue(mixedAccountsResponse());
+			plaidMocks.accountsBalanceGet.mockRejectedValue({
+				response: { data: { error_code: 'MFA_NOT_SUPPORTED' } }
+			});
+			plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
+			plaidMocks.transactionsSync.mockResolvedValueOnce({
+				data: {
+					added: [
+						transaction(
+							'post-link-deposit',
+							-75,
+							'Synthetic deposit',
+							'2020-04-20',
+							'account-checking'
+						)
+					],
+					modified: [],
+					removed: [],
+					next_cursor: 'post-link-cursor',
+					has_more: false,
+					transactions_update_status: 'HISTORICAL_UPDATE_COMPLETE'
+				}
+			});
+			const infoLog = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+			try {
+				const result = await syncPlaidItem(itemId, { afterLink: true, enableTransactions: true });
+				expect(result).toMatchObject({ count: 1, accountCount: 3, transactionCount: 1 });
+				expect(plaidMocks.accountsGet).toHaveBeenCalledWith({ access_token: accessToken });
+				expect(plaidMocks.accountsBalanceGet).not.toHaveBeenCalled();
+				const checking = (await listFinancialAccounts()).find(
+					(account) => account.accountType === 'checking'
+				)!;
+				expect(checking.currentBalanceCents).toBe(125_000);
+				expect((await listFinancialAccountTransactions(checking.id)).transactions).toMatchObject([
+					{ name: 'Synthetic deposit', amountCents: -7_500 }
+				]);
+				expect(await listPlaidConnections()).toMatchObject([
+					{ id: itemId, status: 'healthy', lastSyncedAt: result.syncedAt }
+				]);
+				expect(infoLog).toHaveBeenCalledWith('Plaid post-Link data imported', {
+					connectionRef: expect.any(String),
+					balanceSource: 'accounts/get'
+				});
+				const logged = JSON.stringify(infoLog.mock.calls);
+				expect(logged).not.toContain(accessToken);
+				expect(logged).not.toContain(itemId);
+				expect(logged).not.toContain('example-secret-value');
+			} finally {
+				infoLog.mockRestore();
+			}
+		}
+	);
+
+	it.each(['accounts/get', 'transactions/sync'] as const)(
+		'preserves saved data and repair state when post-Link %s fails',
+		async (operation) => {
+			const accessToken = 'failed-post-link-synthetic-access-value';
+			const itemId = await savePlaidItem(
+				'provider-item-post-link-failure',
+				accessToken,
+				'Synthetic Bank'
+			);
+			plaidMocks.accountsGet.mockResolvedValue(mixedAccountsResponse());
+			plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
+			plaidMocks.transactionsSync.mockResolvedValueOnce({
+				data: {
+					added: [transaction('saved-purchase', 12, 'Saved purchase', '2020-04-20')],
+					modified: [],
+					removed: [],
+					next_cursor: 'saved-cursor',
+					has_more: false,
+					transactions_update_status: 'HISTORICAL_UPDATE_COMPLETE'
+				}
+			});
+			await syncPlaidItem(itemId, { enableTransactions: true });
+			await markPlaidItemNeedsUpdate(itemId);
+			const savedCards = await listCards();
+			const savedHistory = await listCardTransactions(savedCards[0].id);
+			const savedAccounts = await listFinancialAccounts();
+			const savedConnections = await listPlaidConnections();
+			vi.clearAllMocks();
+			const failure = {
+				config: {
+					data: JSON.stringify({ access_token: accessToken, secret: 'private-secret-value' })
+				},
+				response: {
+					status: 400,
+					data: {
+						error_code: 'MFA_NOT_SUPPORTED',
+						error_type: 'ITEM_ERROR',
+						request_id: 'post-link-failed-request',
+						access_token: accessToken
+					}
+				}
+			};
+			plaidMocks.accountsGet.mockResolvedValue(mixedAccountsResponse(9_999));
+			if (operation === 'accounts/get') plaidMocks.accountsGet.mockRejectedValueOnce(failure);
+			else plaidMocks.transactionsSync.mockRejectedValueOnce(failure);
+			const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+			try {
+				await expect(syncPlaidItem(itemId, { afterLink: true })).rejects.toMatchObject({
+					code: 'PLAID_UNAVAILABLE',
+					status: 502
+				});
+				expect(plaidMocks.accountsBalanceGet).not.toHaveBeenCalled();
+				expect(await listCards()).toEqual(savedCards);
+				expect(await listCardTransactions(savedCards[0].id)).toEqual(savedHistory);
+				expect(await listFinancialAccounts()).toEqual(savedAccounts);
+				expect(await listPlaidConnections()).toEqual(savedConnections);
+				expect(errorLog).toHaveBeenCalledWith(
+					'Plaid request failed',
+					expect.objectContaining({
+						operation,
+						errorCode: 'MFA_NOT_SUPPORTED',
+						requestId: 'post-link-failed-request'
+					})
+				);
+				const logged = JSON.stringify(errorLog.mock.calls);
+				expect(logged).not.toContain(accessToken);
+				expect(logged).not.toContain('private-secret-value');
+				expect(logged).not.toContain('example-secret-value');
+			} finally {
+				errorLog.mockRestore();
+			}
+		}
+	);
+
+	it('does not clear a repair requirement when cached accounts include an outstanding Item error', async () => {
+		const itemId = await savePlaidItem(
+			'provider-item-still-needs-repair',
+			'test-access-value',
+			'Synthetic Bank'
+		);
+		plaidMocks.liabilitiesGet.mockResolvedValue(liabilityResponse());
+		await syncPlaidItem(itemId);
+		await markPlaidItemNeedsUpdate(itemId);
+		const savedCards = await listCards();
+		const savedConnections = await listPlaidConnections();
+		plaidMocks.accountsGet.mockResolvedValueOnce({
+			data: {
+				...mixedAccountsResponse().data,
+				request_id: 'unresolved-item-request',
+				item: { error: { error_code: 'ITEM_LOGIN_REQUIRED', error_type: 'ITEM_ERROR' } }
+			}
+		});
+		const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+		try {
+			await expect(syncPlaidItem(itemId, { afterLink: true })).rejects.toMatchObject({
+				code: 'PLAID_LOGIN_REQUIRED',
+				status: 409
+			});
+			expect(await listCards()).toEqual(savedCards);
+			expect(await listFinancialAccounts()).toEqual([]);
+			expect(await listPlaidConnections()).toEqual(savedConnections);
+			expect(errorLog).toHaveBeenCalledWith(
+				'Plaid request failed',
+				expect.objectContaining({
+					operation: 'accounts/get',
+					errorCode: 'ITEM_LOGIN_REQUIRED',
+					requestId: 'unresolved-item-request'
+				})
+			);
+		} finally {
+			errorLog.mockRestore();
+		}
+	});
+
 	it('requests a Plaid investment refresh before syncing the connection', async () => {
 		const itemId = await savePlaidItem(
 			'provider-item-investment-refresh',

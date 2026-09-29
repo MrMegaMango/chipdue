@@ -52,7 +52,7 @@ interface FinancialProviderAdapter {
 	listConnections(): Promise<FinancialConnection[]>;
 	syncConnection(
 		connectionId: string,
-		options?: { enableTransactions?: boolean }
+		options?: { enableTransactions?: boolean; afterLink?: boolean }
 	): Promise<ConnectionSyncResult>;
 	refreshTransactions(connectionId: string): Promise<ConnectionTransactionRefreshResult>;
 	syncAllTenants(): Promise<ConnectionsSyncResult>;
@@ -174,7 +174,7 @@ export async function financialConnectionsStatus(): Promise<{
 
 export async function syncFinancialConnection(
 	connectionId: string,
-	options: { enableTransactions?: boolean } = {}
+	options: { enableTransactions?: boolean; afterLink?: boolean } = {}
 ): Promise<ConnectionSyncResult> {
 	const { adapter } = await adapterForConnection(connectionId);
 	return adapter.syncConnection(connectionId, options);

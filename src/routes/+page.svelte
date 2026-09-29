@@ -2252,7 +2252,7 @@
 			await requestJson(
 				resolve('/api/connections/[id]/transactions/sync', {
 					id: exchanged.connection.id
-				}),
+				}) + '?afterLink=true',
 				{ method: 'POST' },
 				{ privateEpoch: epoch }
 			);
@@ -2266,7 +2266,7 @@
 			const refreshed = cardsRefreshed && statusRefreshed;
 			showNotice(
 				refreshed
-					? 'Plaid connected. Accounts, cards, and activity are syncing.'
+					? 'Plaid connected. Available data imported; balances may reflect its last bank update.'
 					: 'Plaid connected and synced, but the dashboard could not refresh.',
 				refreshed ? 'success' : 'error'
 			);
@@ -2359,7 +2359,7 @@
 			await requestJson(
 				resolve('/api/connections/[id]/transactions/sync', {
 					id: card.connectionId
-				}),
+				}) + '?afterLink=true',
 				{ method: 'POST' },
 				{ privateEpoch: epoch }
 			);
@@ -2368,7 +2368,7 @@
 			if (!isPrivateEpochCurrent(epoch)) return;
 			showNotice(
 				refreshed
-					? 'Transaction history enabled. The provider may keep filling older activity in the background.'
+					? 'Available Plaid activity imported. Balances may reflect its last bank update.'
 					: 'Transaction history enabled, but the dashboard could not refresh.',
 				refreshed ? 'success' : 'error'
 			);
@@ -2644,7 +2644,7 @@
 		const label = connectionLabel(connection);
 		try {
 			await requestJson(
-				resolve('/api/connections/[id]/sync', { id: connection.id }),
+				resolve('/api/connections/[id]/sync', { id: connection.id }) + '?afterLink=true',
 				{ method: 'POST' },
 				{ privateEpoch: epoch }
 			);
@@ -2658,7 +2658,7 @@
 			const refreshed = cardsRefreshed && statusRefreshed;
 			showNotice(
 				refreshed
-					? `${label} accounts and cards were updated and synced.`
+					? `${label} updated. Available Plaid data imported; balances may reflect its last bank update.`
 					: `${label} was updated, but the dashboard could not fully refresh.`,
 				refreshed ? 'success' : 'error'
 			);

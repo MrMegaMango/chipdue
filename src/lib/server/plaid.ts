@@ -305,10 +305,15 @@ function optionalLinkProductUnavailable(error: unknown, updateProduct?: Products
 	);
 }
 
-async function sanitizedPlaidError(error: unknown, itemId?: string): Promise<AppError> {
+async function sanitizedPlaidError(
+	error: unknown,
+	itemId?: string,
+	operation?: string
+): Promise<AppError> {
 	const code = plaidErrorCode(error);
 	console.error('Plaid request failed', {
 		...plaidErrorDiagnostic(error),
+		...(operation ? { operation } : {}),
 		...(itemId ? { connectionRef: plaidConnectionLogReference(itemId) } : {})
 	});
 	if (code === 'ITEM_LOGIN_REQUIRED' && itemId) {
@@ -870,15 +875,34 @@ function optionalProductCanBeSkipped(error: unknown): boolean {
 
 export async function syncPlaidItem(
 	localItemId: string,
-	options: { enableTransactions?: boolean } = {}
+	options: { enableTransactions?: boolean; afterLink?: boolean } = {}
 ): Promise<{ syncedAt: string; count: number; accountCount: number; transactionCount: number }> {
 	const item = await getPrivatePlaidItem(localItemId);
+	let operation = options.afterLink ? 'accounts/get' : 'accounts/balance/get';
 	try {
 		const client = await getPlaidClientForItem(item);
 		const [accountsResponse, brand] = await Promise.all([
-			client.accountsBalanceGet({ access_token: item.accessToken }),
+			// Link just authenticated the user. Another live balance request can demand
+			// MFA again, so import the available Plaid data after that flow instead.
+			options.afterLink
+				? client.accountsGet({ access_token: item.accessToken })
+				: client.accountsBalanceGet({ access_token: item.accessToken }),
 			institutionBrand(client, item.accessToken, item.institutionName)
 		]);
+		const cachedItemError = options.afterLink ? accountsResponse.data.item?.error : null;
+		if (cachedItemError) {
+			// Cached data must not turn a connection with an outstanding error healthy.
+			throw await sanitizedPlaidError(
+				{
+					response: {
+						data: { ...cachedItemError, request_id: accountsResponse.data.request_id },
+						status: 400
+					}
+				},
+				localItemId,
+				operation
+			);
+		}
 		const plaidAccounts = accountsResponse.data.accounts;
 
 		let liabilities = new Map<
@@ -889,6 +913,7 @@ export async function syncPlaidItem(
 		>();
 		if (plaidAccounts.some((account) => account.type === AccountType.Credit)) {
 			try {
+				operation = 'liabilities/get';
 				const response = await client.liabilitiesGet({ access_token: item.accessToken });
 				liabilities = new Map(
 					(response.data.liabilities.credit ?? [])
@@ -909,6 +934,7 @@ export async function syncPlaidItem(
 			.map((account) => account.account_id);
 		if (investmentAccountIds.length > 0) {
 			try {
+				operation = 'investments/holdings/get';
 				const response = await client.investmentsHoldingsGet({
 					access_token: item.accessToken
 				});
@@ -958,6 +984,7 @@ export async function syncPlaidItem(
 				if (!optionalProductCanBeSkipped(error)) throw error;
 			}
 			try {
+				operation = 'investments/transactions/get';
 				investmentTransactionHistory = await fetchInvestmentTransactionHistory(
 					client,
 					item.accessToken,
@@ -971,6 +998,7 @@ export async function syncPlaidItem(
 		let transactionState = await readConnectionTransactionState('plaid', localItemId);
 		if (options.enableTransactions || transactionState.enabled) {
 			try {
+				operation = 'transactions/sync';
 				transactionState = applyTransactionUpdates(
 					transactionState,
 					await fetchTransactionUpdates(client, item.accessToken, transactionState.cursor)
@@ -1062,10 +1090,18 @@ export async function syncPlaidItem(
 			});
 		}
 
+		// This records when ChipDue imported the data, not the bank's balance timestamp.
 		const syncedAt = new Date().toISOString();
+		operation = 'persist';
 		await replaceConnectedFinancialAccounts('plaid', localItemId, accountSnapshots, syncedAt);
 		await replaceConnectedCards('plaid', localItemId, snapshots, syncedAt);
 		await markPlaidItemSynced(localItemId, syncedAt);
+		if (options.afterLink) {
+			console.info('Plaid post-Link data imported', {
+				connectionRef: plaidConnectionLogReference(localItemId),
+				balanceSource: 'accounts/get'
+			});
+		}
 		return {
 			syncedAt,
 			count: snapshots.length,
@@ -1089,7 +1125,7 @@ export async function syncPlaidItem(
 				localItemId
 			);
 		}
-		throw await sanitizedPlaidError(error, localItemId);
+		throw await sanitizedPlaidError(error, localItemId, operation);
 	}
 }
 

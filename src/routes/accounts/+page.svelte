@@ -1057,7 +1057,8 @@
 				}
 			);
 			await requestJson(
-				resolve('/api/connections/[id]/transactions/sync', { id: exchanged.connection.id }),
+				resolve('/api/connections/[id]/transactions/sync', { id: exchanged.connection.id }) +
+					'?afterLink=true',
 				{ method: 'POST' }
 			);
 			const connectionsResponse = await requestJson<ConnectionsStatusResponse>(
@@ -1068,7 +1069,9 @@
 				connectionsResponse.providers.find((status) => status.provider === 'plaid')?.configured ??
 				false;
 			await reloadAccounts(true);
-			showToast('Plaid connected. Accounts, cards, and activity are syncing.');
+			showToast(
+				'Plaid connected. Available data imported; balances may reflect its last bank update.'
+			);
 		} catch (error) {
 			showToast(readableError(error, 'Plaid connected, but the first sync failed.'), {
 				error: true

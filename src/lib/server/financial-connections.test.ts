@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FinancialConnection } from '$lib/types';
+import { POST as syncConnection } from '../../routes/api/connections/[id]/sync/+server';
+import { POST as syncConnectionTransactions } from '../../routes/api/connections/[id]/transactions/sync/+server';
 import { POST as syncTransactions } from '../../routes/api/connections/transactions/sync/+server';
 import { AppError } from './errors';
 
@@ -235,6 +237,96 @@ describe('current-tenant financial connection sync', () => {
 		expect(response.status).toBe(403);
 		expect(connectionMocks.listPlaidConnections).not.toHaveBeenCalled();
 		expect(connectionMocks.syncPlaidItem).not.toHaveBeenCalled();
+	});
+
+	describe.each([
+		{ path: 'sync', handler: syncConnection, options: {} },
+		{
+			path: 'transactions/sync',
+			handler: syncConnectionTransactions,
+			options: { enableTransactions: true }
+		}
+	])('individual connection $path route', ({ path, handler, options }) => {
+		const connectionId = '00000000-0000-4000-8000-000000000001';
+
+		async function post(
+			query = '',
+			id = connectionId,
+			origin = 'http://localhost'
+		): Promise<Response> {
+			const request = new Request(`http://localhost/api/connections/${id}/${path}${query}`, {
+				method: 'POST',
+				headers: { origin }
+			});
+			return (await handler({
+				request,
+				url: new URL(request.url),
+				params: { id }
+			} as never)) as Response;
+		}
+
+		it('imports available data only when explicitly requested after Link', async () => {
+			connectionMocks.listPlaidConnections.mockResolvedValue([
+				connection(connectionId, 'Synthetic Bank')
+			]);
+			connectionMocks.syncPlaidItem.mockResolvedValue(syncResult());
+
+			const response = await post('?afterLink=true');
+
+			expect(response.status).toBe(200);
+			expect(response.headers.get('cache-control')).toContain('no-store');
+			expect(await response.json()).toMatchObject({ cardCount: 1, accountCount: 2 });
+			expect(connectionMocks.syncPlaidItem).toHaveBeenCalledWith(connectionId, {
+				...options,
+				afterLink: true
+			});
+		});
+
+		it.each(['', '?afterLink=false', '?afterLink=', '?afterLink=1', '?afterLink=TRUE'])(
+			'keeps normal bank refresh behavior for query %j',
+			async (query) => {
+				connectionMocks.listPlaidConnections.mockResolvedValue([
+					connection(connectionId, 'Synthetic Bank')
+				]);
+				connectionMocks.syncPlaidItem.mockResolvedValue(syncResult());
+
+				expect((await post(query)).status).toBe(200);
+				expect(connectionMocks.syncPlaidItem).toHaveBeenCalledWith(connectionId, {
+					...options,
+					afterLink: false
+				});
+			}
+		);
+
+		it('rejects cross-origin requests even after Link', async () => {
+			const response = await post('?afterLink=true', connectionId, 'https://untrusted.example');
+
+			expect(response.status).toBe(403);
+			expect(connectionMocks.listPlaidConnections).not.toHaveBeenCalled();
+			expect(connectionMocks.syncPlaidItem).not.toHaveBeenCalled();
+		});
+
+		it('rejects malformed connection identifiers even after Link', async () => {
+			const response = await post('?afterLink=true', 'invalid-id');
+
+			expect(response.status).toBe(400);
+			expect(await response.json()).toMatchObject({ error: { code: 'INVALID_ID' } });
+			expect(connectionMocks.listPlaidConnections).not.toHaveBeenCalled();
+			expect(connectionMocks.syncPlaidItem).not.toHaveBeenCalled();
+		});
+
+		it('rejects connections absent from the current tenant even after Link', async () => {
+			connectionMocks.listPlaidConnections.mockResolvedValue([
+				connection('00000000-0000-4000-8000-000000000002', 'Other Bank')
+			]);
+
+			const response = await post('?afterLink=true');
+
+			expect(response.status).toBe(404);
+			expect(await response.json()).toMatchObject({ error: { code: 'CONNECTION_NOT_FOUND' } });
+			expect(connectionMocks.listPlaidConnections).toHaveBeenCalledOnce();
+			expect(connectionMocks.syncPlaidItem).not.toHaveBeenCalled();
+		});
 	});
 
 	it.each([
