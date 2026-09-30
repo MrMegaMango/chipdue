@@ -296,9 +296,7 @@ describe('financial workspace navigation', () => {
 		}
 		expect(dashboardSource).toContain("if (currentSection === 'settings')");
 		expect(dashboardSource).toContain("if (currentSection === 'cards')");
-		expect(dashboardSource).toContain(
-			"if (currentSection === 'cards') void refreshRecentActivity(cards, expectedEpoch);"
-		);
+		expect(dashboardSource).toContain("currentSection === 'cards' ? '?includeActivity=1' : ''");
 		expect(bonusesSource).toContain(
 			'void loadLinkedAccountActivity(bonusResponse.bonuses, accountResponse.accounts);'
 		);

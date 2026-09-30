@@ -26,6 +26,7 @@ import { decryptJson, encryptJson, privateUuid } from './crypto';
 import { getDatabase } from './database';
 import { AppError } from './errors';
 import { getRuntimeMode } from './runtime';
+import { listRecordRows, type PrivateRecordRow as CardRow } from './record-rows';
 import {
 	cardCreditLimitReviewSchema,
 	updateCardCreditLimitReviewSchema,
@@ -40,8 +41,7 @@ import {
 	providerRecordId,
 	providerTransactionId,
 	publicSourceForStoredSource,
-	storedSourceForProvider,
-	type StoredRecordSource
+	storedSourceForProvider
 } from './provider-storage';
 import { payloadBelongsToCurrentTenant, tenantPayloadFields, tenantReference } from './tenant';
 
@@ -125,17 +125,6 @@ export interface StoredTransactionHistory {
 	cursor: string | null;
 	status: TransactionHistoryStatus;
 	transactions: StoredFinancialTransaction[];
-}
-
-interface CardRow extends Record<string, unknown> {
-	id: string;
-	source: StoredRecordSource;
-	plaid_item_id: string | null;
-	external_account_ref: string | null;
-	payload_enc: string;
-	last_synced_at: string | null;
-	created_at: string;
-	updated_at: string;
 }
 
 interface ConnectedCardRow extends CardRow {
@@ -753,25 +742,12 @@ function snapshotPayload(
 	};
 }
 
-async function readCardRows(): Promise<CardRow[]> {
-	return getRuntimeMode() === 'cloud'
-		? await cloudQuery<CardRow>(
-				`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
-					        last_synced_at, created_at, updated_at
-					 FROM public.carddue_cards WHERE tenant_ref = $1`,
-				[tenantReference()]
-			)
-		: (getDatabase()
-				.prepare(
-					`SELECT id, source, plaid_item_id, external_account_ref, payload_enc,
-						        last_synced_at, created_at, updated_at
-						 FROM cards`
-				)
-				.all() as CardRow[]);
+export async function listCards(): Promise<Card[]> {
+	return cardsFromRows(await listRecordRows());
 }
 
-export async function listCards(): Promise<Card[]> {
-	return sortCards(uniqueCards(await readCardRows()));
+export function cardsFromRows(rows: CardRow[]): Card[] {
+	return sortCards(uniqueCards(rows));
 }
 
 async function findCardRow(id: string): Promise<CardRow | undefined> {
@@ -919,7 +895,7 @@ export async function updateCardCreditLimitReview(
 			? preservedCreditLimitReview(
 					row.external_account_ref,
 					payload,
-					decodeCards(await readCardRows()).filter(
+					decodeCards(await listRecordRows()).filter(
 						(candidate) => candidate.row.source === row.source
 					)
 				)
@@ -1512,24 +1488,24 @@ export async function listCardTransactions(
 	if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_STORED_TRANSACTIONS) {
 		throw new AppError('INVALID_REQUEST', 'The request is invalid.', 400);
 	}
-	const row =
-		getRuntimeMode() === 'cloud'
-			? (
-					await cloudQuery<CardRow>(
-						`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
-						        last_synced_at, created_at, updated_at
-						 FROM public.carddue_cards WHERE tenant_ref = $1 AND id = $2`,
-						[tenantReference(), cardId]
-					)
-				)[0]
-			: (getDatabase()
-					.prepare(
-						`SELECT id, source, plaid_item_id, external_account_ref, payload_enc,
-						        last_synced_at, created_at, updated_at
-						 FROM cards WHERE id = ?`
-					)
-					.get(cardId) as CardRow | undefined);
+	const row = await findCardRow(cardId);
 	if (!row) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
+	return cardTransactionsFromRow(row, limit);
+}
+
+export function cardTransactionsFromRow(
+	row: CardRow,
+	limit = 500
+): {
+	transactions: CardTransaction[];
+	rewardCategorySpending: CardRewardCategorySpend[];
+	status: TransactionHistoryStatus;
+	lastSyncedAt: string | null;
+} {
+	if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_STORED_TRANSACTIONS) {
+		throw new AppError('INVALID_REQUEST', 'The request is invalid.', 400);
+	}
+	const cardId = row.id;
 	const payload = decodePayload(row);
 	if (!payload) throw new AppError('CARD_NOT_FOUND', 'Card not found.', 404);
 	if (row.source === 'manual') {

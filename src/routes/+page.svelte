@@ -297,6 +297,8 @@
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
 	import { connectionSyncSummary, type ConnectionSyncSummary } from '$lib/connection-sync';
 	import { financialProviderName } from '$lib/financial-data';
+	import type { DashboardResponse } from '$lib/dashboard';
+	import { createDashboardLoader } from '$lib/dashboard-loader';
 	import { clearPrivateApiCache, reusePrivateApiGet } from '$lib/private-api-cache';
 	import type {
 		FinancialAccount,
@@ -442,14 +444,6 @@
 		failures?: { institutionName: string | null; message: string }[];
 	};
 
-	type CardsResponse = {
-		cards: CardView[];
-		connections?: {
-			connected: number;
-			lastSyncedAt: string | null;
-		};
-	};
-
 	type WorkspaceAccount = FinancialAccount;
 	type WorkspaceBonus = {
 		id: string;
@@ -546,7 +540,6 @@
 		year: 'numeric'
 	});
 	const RECENT_ACTIVITY_LIMIT = 3;
-	const CARD_ACTIVITY_LIMIT = 500;
 	const CARD_REWARD_PREVIEW_LIMIT = 4;
 	const REWARD_CATEGORY_MATCH_OPTIONS: Array<{
 		value: CardRewardCategoryMatch;
@@ -659,7 +652,6 @@
 	let pageMounted = false;
 	let sessionCheckInFlight = false;
 	let privateStateEpoch = 0;
-	let recentActivityLoadVersion = 0;
 	let nowTick = $state(Date.now());
 	const googleLoginAvailable = $derived(canOfferGoogleLogin(authMode, googleConfigured));
 	const googleOnlyMode = $derived(isGoogleOnlyCloudMode(authMode, authenticationMode));
@@ -1035,44 +1027,7 @@
 			void refreshPlaidStatus(false, epoch);
 			return;
 		}
-		if (currentSection === 'cards') {
-			void Promise.all([
-				refreshCards(false, epoch),
-				refreshPlaidStatus(false, epoch),
-				refreshWorkspaceOverview(epoch)
-			]);
-			return;
-		}
-		void Promise.all([
-			refreshCards(false, epoch),
-			refreshPlaidStatus(false, epoch),
-			refreshWorkspaceOverview(epoch)
-		]);
-	}
-
-	async function refreshWorkspaceOverview(expectedEpoch = privateStateEpoch): Promise<void> {
-		if (!isPrivateEpochCurrent(expectedEpoch)) return;
-		try {
-			const [accountPayload, bonusPayload] = await Promise.all([
-				requestJson<{ accounts: WorkspaceAccount[] }>(
-					resolve('/api/accounts'),
-					{},
-					{ privateEpoch: expectedEpoch }
-				),
-				requestJson<{ bonuses: WorkspaceBonus[] }>(
-					resolve('/api/bonuses'),
-					{},
-					{ privateEpoch: expectedEpoch }
-				)
-			]);
-			if (!isPrivateEpochCurrent(expectedEpoch)) return;
-			workspaceAccounts = accountPayload.accounts;
-			workspaceBonuses = bonusPayload.bonuses;
-		} catch {
-			// Cards remain usable if the broader workspace summary is temporarily unavailable.
-		} finally {
-			if (isPrivateEpochCurrent(expectedEpoch)) hasLoadedWorkspace = true;
-		}
+		void Promise.all([refreshDashboard(false, epoch), refreshPlaidStatus(false, epoch)]);
 	}
 
 	async function login(event: SubmitEvent): Promise<void> {
@@ -1264,7 +1219,6 @@
 		rewardCategorySpendingByCard = {};
 		recentActivityLoadingByCard = {};
 		recentActivityErrorByCard = {};
-		recentActivityLoadVersion += 1;
 		setupToken = '';
 		setupBusy = false;
 		setupError = '';
@@ -1304,92 +1258,70 @@
 		);
 	}
 
-	async function refreshCards(quiet = false, expectedEpoch = privateStateEpoch): Promise<boolean> {
-		if (!isPrivateEpochCurrent(expectedEpoch)) return false;
-		if (!quiet) loading = true;
-		loadError = '';
-
-		try {
-			const payload = await requestJson<CardsResponse | CardView[]>(
-				resolve('/api/cards'),
+	const dashboardLoader = createDashboardLoader({
+		isCurrent: isPrivateEpochCurrent,
+		request: (epoch) =>
+			requestJson<DashboardResponse>(
+				`${resolve('/api/dashboard')}${currentSection === 'cards' ? '?includeActivity=1' : ''}`,
 				{},
-				{ privateEpoch: expectedEpoch }
-			);
-			if (!isPrivateEpochCurrent(expectedEpoch)) return false;
-			cards = Array.isArray(payload) ? payload : (payload.cards ?? []);
-			if (!Array.isArray(payload) && payload.connections) {
-				plaid = {
-					...plaid,
-					connectedItems: payload.connections.connected,
-					lastSyncedAt: payload.connections.lastSyncedAt
-				};
-			}
-			if (currentSection === 'cards') void refreshRecentActivity(cards, expectedEpoch);
-			hasLoadedCards = true;
-			return true;
-		} catch (error) {
-			if (!isPrivateEpochCurrent(expectedEpoch)) return false;
+				{ memoryCache: 'bypass', privateEpoch: epoch }
+			),
+		start: (quiet) => {
+			if (!quiet) loading = true;
+			loadError = '';
+		},
+		apply: applyDashboardResponse,
+		fail: (error) => {
 			loadError = readableError(error, 'ChipDue could not read its private database.');
-			return false;
-		} finally {
-			if (isPrivateEpochCurrent(expectedEpoch)) loading = false;
+		},
+		finish: () => {
+			loading = false;
+			hasLoadedWorkspace = true;
 		}
+	});
+
+	function refreshDashboard(quiet = false, expectedEpoch = privateStateEpoch): Promise<boolean> {
+		return dashboardLoader(quiet, expectedEpoch);
 	}
 
-	async function refreshRecentActivity(
-		cardViews: CardView[],
-		expectedEpoch = privateStateEpoch
-	): Promise<void> {
-		if (!isPrivateEpochCurrent(expectedEpoch)) return;
-		const loadVersion = ++recentActivityLoadVersion;
-		const eligibleCards = cardViews.filter(
-			(card) => card.source === 'connected' && card.transactionHistoryEnabled
-		);
-		recentActivityByCard = {};
-		rewardCategorySpendingByCard = {};
-		recentActivityErrorByCard = {};
-		recentActivityLoadingByCard = Object.fromEntries(eligibleCards.map((card) => [card.id, true]));
-
-		await Promise.all(
-			eligibleCards.map(async (card) => {
-				try {
-					const endpoint = `${resolve('/api/cards/[id]/transactions', { id: card.id })}?limit=${CARD_ACTIVITY_LIMIT}`;
-					const payload = await requestJson<TransactionHistoryResponse>(
-						endpoint,
-						{},
-						{ privateEpoch: expectedEpoch }
-					);
-					if (!isPrivateEpochCurrent(expectedEpoch) || loadVersion !== recentActivityLoadVersion) {
-						return;
-					}
-					recentActivityByCard = {
-						...recentActivityByCard,
-						[card.id]: payload.transactions
-					};
-					rewardCategorySpendingByCard = {
-						...rewardCategorySpendingByCard,
-						[card.id]: Object.fromEntries(
-							(payload.rewardCategorySpending ?? []).map((spending) => [
-								spending.categoryId,
-								spending
-							])
-						)
-					};
-				} catch {
-					if (!isPrivateEpochCurrent(expectedEpoch) || loadVersion !== recentActivityLoadVersion) {
-						return;
-					}
-					recentActivityErrorByCard = { ...recentActivityErrorByCard, [card.id]: true };
-				} finally {
-					if (isPrivateEpochCurrent(expectedEpoch) && loadVersion === recentActivityLoadVersion) {
-						recentActivityLoadingByCard = {
-							...recentActivityLoadingByCard,
-							[card.id]: false
-						};
-					}
+	function applyDashboardResponse(payload: DashboardResponse): boolean {
+		if (payload.workspace.ok) {
+			workspaceAccounts = payload.workspace.data.accounts;
+			workspaceBonuses = payload.workspace.data.bonuses;
+		}
+		// Cards remain usable if the broader workspace summary is temporarily unavailable.
+		if (!payload.cards.ok) {
+			loadError = payload.cards.error.message;
+			return false;
+		}
+		cards = payload.cards.data.cards;
+		plaid = {
+			...plaid,
+			connectedItems: payload.cards.data.connections.connected,
+			lastSyncedAt: payload.cards.data.connections.lastSyncedAt
+		};
+		hasLoadedCards = true;
+		if (currentSection === 'cards') {
+			const eligibleCards = cards.filter(
+				(card) => card.source === 'connected' && card.transactionHistoryEnabled
+			);
+			recentActivityByCard = {};
+			rewardCategorySpendingByCard = {};
+			recentActivityErrorByCard = {};
+			recentActivityLoadingByCard = {};
+			for (const card of eligibleCards) {
+				const activity = payload.recentActivity[card.id];
+				if (!activity?.ok) {
+					recentActivityErrorByCard[card.id] = true;
+					continue;
 				}
-			})
-		);
+				recentActivityByCard[card.id] = activity.data.transactions;
+				rewardCategorySpendingByCard[card.id] = Object.fromEntries(
+					activity.data.rewardCategorySpending.map((spending) => [spending.categoryId, spending])
+				);
+			}
+		}
+		return true;
 	}
 
 	async function refreshPlaidStatus(
@@ -1689,8 +1621,14 @@
 			rewardsCard = payload.card;
 			rewardsForm = rewardsFormFromCard(payload.card);
 			rewardProfileSelection = '';
-			void refreshRecentActivity(cards, epoch);
-			showNotice(`${payload.card.rewardProfileName ?? 'Card'} rewards populated.`);
+			const refreshed = await refreshDashboard(true, epoch);
+			if (!isPrivateEpochCurrent(epoch)) return;
+			showNotice(
+				refreshed
+					? `${payload.card.rewardProfileName ?? 'Card'} rewards populated.`
+					: 'Card rewards populated, but the dashboard could not refresh.',
+				refreshed ? 'success' : 'error'
+			);
 		} catch (error) {
 			if (!isPrivateEpochCurrent(epoch)) return;
 			rewardsError = readableError(error, 'The reward profile could not be applied.');
@@ -1837,7 +1775,7 @@
 			rewardProfileSelection = '';
 			document.body.style.overflow = previousBodyOverflow;
 			previouslyFocused = undefined;
-			const refreshed = await refreshCards(true, epoch);
+			const refreshed = await refreshDashboard(true, epoch);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			showNotice(
 				refreshed
@@ -2000,7 +1938,7 @@
 			editingId = null;
 			document.body.style.overflow = previousBodyOverflow;
 			previouslyFocused = undefined;
-			const refreshed = await refreshCards(true, epoch);
+			const refreshed = await refreshDashboard(true, epoch);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			showNotice(
 				refreshed ? `Card ${action}.` : `Card ${action}, but the dashboard could not refresh.`,
@@ -2030,7 +1968,7 @@
 				{ privateEpoch: epoch }
 			);
 			if (!isPrivateEpochCurrent(epoch)) return;
-			const refreshed = await refreshCards(true, epoch);
+			const refreshed = await refreshDashboard(true, epoch);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			showNotice(
 				refreshed ? 'Card deleted.' : 'Card deleted, but the dashboard could not refresh.',
@@ -2119,7 +2057,7 @@
 			plaid = { ...plaid, ...configuration };
 			plaidClientId = '';
 			plaidSetupEditing = false;
-			await Promise.all([refreshPlaidStatus(true, epoch), refreshCards(true, epoch)]);
+			await Promise.all([refreshPlaidStatus(true, epoch), refreshDashboard(true, epoch)]);
 			if (isPrivateEpochCurrent(epoch)) {
 				showNotice(
 					plaid.connectedItems > 0
@@ -2258,9 +2196,8 @@
 			);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const [cardsRefreshed, statusRefreshed] = await Promise.all([
-				refreshCards(true, epoch),
-				refreshPlaidStatus(true, epoch),
-				refreshWorkspaceOverview(epoch)
+				refreshDashboard(true, epoch),
+				refreshPlaidStatus(true, epoch)
 			]);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const refreshed = cardsRefreshed && statusRefreshed;
@@ -2364,7 +2301,7 @@
 				{ privateEpoch: epoch }
 			);
 			if (!isPrivateEpochCurrent(epoch)) return;
-			const refreshed = await refreshCards(true, epoch);
+			const refreshed = await refreshDashboard(true, epoch);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			showNotice(
 				refreshed
@@ -2399,9 +2336,8 @@
 			);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const [cardsRefreshed, statusRefreshed] = await Promise.all([
-				refreshCards(true, epoch),
-				refreshPlaidStatus(true, epoch),
-				refreshWorkspaceOverview(epoch)
+				refreshDashboard(true, epoch),
+				refreshPlaidStatus(true, epoch)
 			]);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const refreshed = cardsRefreshed && statusRefreshed;
@@ -2417,11 +2353,7 @@
 		} catch (error) {
 			if (!isPrivateEpochCurrent(epoch)) return;
 			clearPrivateApiCache();
-			await Promise.all([
-				refreshCards(true, epoch),
-				refreshPlaidStatus(true, epoch),
-				refreshWorkspaceOverview(epoch)
-			]);
+			await Promise.all([refreshDashboard(true, epoch), refreshPlaidStatus(true, epoch)]);
 			if (isPrivateEpochCurrent(epoch)) {
 				showNotice(
 					readableError(error, 'Connected accounts and cards could not be synced.'),
@@ -2490,9 +2422,8 @@
 			);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const [cardsRefreshed, statusRefreshed] = await Promise.all([
-				refreshCards(true, epoch),
-				refreshPlaidStatus(true, epoch),
-				refreshWorkspaceOverview(epoch)
+				refreshDashboard(true, epoch),
+				refreshPlaidStatus(true, epoch)
 			]);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const refreshed = cardsRefreshed && statusRefreshed;
@@ -2552,9 +2483,8 @@
 			);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const [cardsRefreshed, statusRefreshed] = await Promise.all([
-				refreshCards(true, epoch),
-				refreshPlaidStatus(true, epoch),
-				refreshWorkspaceOverview(epoch)
+				refreshDashboard(true, epoch),
+				refreshPlaidStatus(true, epoch)
 			]);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const refreshed = cardsRefreshed && statusRefreshed;
@@ -2650,9 +2580,8 @@
 			);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const [cardsRefreshed, statusRefreshed] = await Promise.all([
-				refreshCards(true, epoch),
-				refreshPlaidStatus(true, epoch),
-				refreshWorkspaceOverview(epoch)
+				refreshDashboard(true, epoch),
+				refreshPlaidStatus(true, epoch)
 			]);
 			if (!isPrivateEpochCurrent(epoch)) return;
 			const refreshed = cardsRefreshed && statusRefreshed;
@@ -3053,7 +2982,7 @@
 						<strong>Couldn’t load your cards</strong>
 						<span>{loadError}</span>
 					</div>
-					<button type="button" onclick={() => refreshCards()}>Try again</button>
+					<button type="button" onclick={() => refreshDashboard()}>Try again</button>
 				</div>
 			{/if}
 

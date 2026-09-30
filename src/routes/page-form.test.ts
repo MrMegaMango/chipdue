@@ -195,7 +195,7 @@ describe('card activity preview', () => {
 		expect(source).toContain('const RECENT_ACTIVITY_LIMIT = 3');
 		expect(source).toContain('Recent activity');
 		expect(source).toContain('View all activity');
-		expect(source).toContain('?limit=${CARD_ACTIVITY_LIMIT}');
+		expect(source).toContain("resolve('/api/cards/[id]/transactions', { id: card.id })");
 		expect(source).toContain(
 			'recentActivityByCard[card.id].slice(0, RECENT_ACTIVITY_LIMIT) as transaction'
 		);

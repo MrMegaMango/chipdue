@@ -20,14 +20,14 @@ import { decryptJson, encryptJson } from './crypto';
 import { getDatabase } from './database';
 import { AppError } from './errors';
 import { getRuntimeMode } from './runtime';
+import { listRecordRows, type PrivateRecordRow } from './record-rows';
 import {
 	providerAccountReference,
 	providerForStoredSource,
 	providerRecordId,
 	providerTransactionId,
 	publicSourceForStoredSource,
-	storedSourceForProvider,
-	type StoredRecordSource
+	storedSourceForProvider
 } from './provider-storage';
 import {
 	bonusChurnSchema,
@@ -42,17 +42,6 @@ import {
 	type UpdateFinancialAccountData
 } from './schemas';
 import { payloadBelongsToCurrentTenant, tenantPayloadFields, tenantReference } from './tenant';
-
-interface PrivateRecordRow extends Record<string, unknown> {
-	id: string;
-	source: StoredRecordSource;
-	plaid_item_id: string | null;
-	external_account_ref: string | null;
-	payload_enc: string;
-	last_synced_at: string | null;
-	created_at: string;
-	updated_at: string;
-}
 
 interface ConnectedAccountRow extends PrivateRecordRow {
 	source: 'plaid';
@@ -581,23 +570,6 @@ function rowToBonus(row: PrivateRecordRow, payload: BonusPayload): AccountBonus 
 	};
 }
 
-async function listRows(): Promise<PrivateRecordRow[]> {
-	return getRuntimeMode() === 'cloud'
-		? await cloudQuery<PrivateRecordRow>(
-				`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
-				        last_synced_at, created_at, updated_at
-				 FROM public.carddue_cards WHERE tenant_ref = $1`,
-				[tenantReference()]
-			)
-		: (getDatabase()
-				.prepare(
-					`SELECT id, source, plaid_item_id, external_account_ref, payload_enc,
-					        last_synced_at, created_at, updated_at
-					 FROM cards`
-				)
-				.all() as PrivateRecordRow[]);
-}
-
 async function getRow(id: string): Promise<PrivateRecordRow | undefined> {
 	return getRuntimeMode() === 'cloud'
 		? (
@@ -677,7 +649,11 @@ function normalizeRequirements(requirements: CreateBonusData['requirements']): B
 }
 
 export async function listFinancialAccounts(): Promise<FinancialAccount[]> {
-	return uniqueFinancialAccounts(await listRows()).sort((left, right) =>
+	return financialAccountsFromRows(await listRecordRows());
+}
+
+export function financialAccountsFromRows(rows: PrivateRecordRow[]): FinancialAccount[] {
+	return uniqueFinancialAccounts(rows).sort((left, right) =>
 		left.nickname.localeCompare(right.nickname)
 	);
 }
@@ -976,7 +952,7 @@ export async function consolidateConnectedFinancialAccountsBeforeDisconnect(
 	addedTransactionCount: number;
 }> {
 	const storedSource = storedSourceForProvider(provider);
-	const candidates = financialAccountCandidates(await listRows()).filter(
+	const candidates = financialAccountCandidates(await listRecordRows()).filter(
 		(candidate) => candidate.row.source === storedSource && candidate.row.plaid_item_id
 	);
 	const sources = candidates.filter(
@@ -1249,8 +1225,12 @@ export async function listFinancialAccountTransactions(
 }
 
 export async function listBonuses(): Promise<AccountBonus[]> {
+	return bonusesFromRows(await listRecordRows());
+}
+
+export function bonusesFromRows(rows: PrivateRecordRow[]): AccountBonus[] {
 	const bonuses: AccountBonus[] = [];
-	for (const row of await listRows()) {
+	for (const row of rows) {
 		if (row.source !== 'manual') continue;
 		const payload = decodeRecord(row);
 		if (payload?.recordType === 'bonus') bonuses.push(rowToBonus(row, payload));
