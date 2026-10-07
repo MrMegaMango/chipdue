@@ -73,15 +73,6 @@ export interface BonusTracker {
 	latestPayoutDate: string | null;
 	safeToCloseDate: string | null;
 	likelyQualifyingTransactions: FinancialAccountTransaction[];
-	postedRewardCents: number | null;
-}
-
-export function automaticEarnedValueCents(
-	bonus: AccountBonus,
-	tracker: BonusTracker | null
-): number {
-	if (tracker?.account.source === 'connected') return tracker.postedRewardCents ?? 0;
-	return bonus.paidDate || bonus.status === 'paid' ? (bonus.rewardCents ?? 0) : 0;
 }
 
 const WELLS_FARGO_SOURCE = 'https://accountoffers.wellsfargo.com/business-checking-bonus/';
@@ -518,32 +509,6 @@ function normalizedTransactionText(transaction: FinancialAccountTransaction): st
 		.trim();
 }
 
-function postedBonusRewardCents(
-	bonus: AccountBonus,
-	offer: BonusOfferTemplate,
-	transactions: FinancialAccountTransaction[]
-): number | null {
-	const tierRewards = new Set(offer.tiers.map((tier) => tier.rewardCents));
-	const promoCode = offer.promoCode?.toUpperCase() ?? '';
-	const matches = transactions
-		.filter(
-			(transaction) =>
-				!transaction.pending &&
-				transaction.amountCents < 0 &&
-				transaction.date >= (bonus.openedDate ?? '') &&
-				tierRewards.has(Math.abs(transaction.amountCents))
-		)
-		.filter((transaction) => {
-			const text = normalizedTransactionText(transaction);
-			return (
-				/BONUS|PROMO(?:TION|TIONAL)?|INCENTIVE|REWARD/.test(text) ||
-				Boolean(promoCode && text.includes(promoCode))
-			);
-		})
-		.map((transaction) => Math.abs(transaction.amountCents));
-	return matches.length > 0 ? Math.max(...matches) : null;
-}
-
 function isInQualificationWindow(
 	transaction: FinancialAccountTransaction,
 	openedDate: string,
@@ -732,7 +697,6 @@ export function buildBonusTracker(
 		safeToCloseDate: bonus.safeToCloseDate ?? draft.safeToCloseDate,
 		likelyQualifyingTransactions: transactions.filter((transaction) =>
 			classifier(transaction, bonus.openedDate!, qualificationDeadline)
-		),
-		postedRewardCents: postedBonusRewardCents(bonus, offer, transactions)
+		)
 	};
 }

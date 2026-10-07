@@ -1,6 +1,7 @@
 import type {
 	AccountBonus,
 	BonusChurn,
+	BonusStatus,
 	Card,
 	FinancialAccount,
 	FinancialAccountTransaction
@@ -13,7 +14,7 @@ import {
 	type BonusChurnPreset,
 	type BonusChurnTracker
 } from './bonus-churn';
-import { getBonusOfferTemplate, type BonusOfferTemplate } from './bonus-offers';
+import { getBonusOfferTemplate, resolveBonusOffer, type BonusOfferTemplate } from './bonus-offers';
 
 export type BonusChurnActivity = {
 	account: FinancialAccount | null;
@@ -45,12 +46,14 @@ export type BonusChurnAutomationResult = {
 	checkedAt: string | null;
 	ruleVerifiedAt: string | null;
 	payoutTransactionId: string | null;
+	payoutAmountCents: number | null;
 };
 
 type OfferCategory = 'upgrade' | 'referral' | 'targeted' | null;
 type PayoutMatch = {
 	date: string | null;
 	transactionId: string | null;
+	amountCents: number | null;
 	issue: 'ambiguous' | 'reversed' | null;
 };
 
@@ -164,7 +167,7 @@ function detectPayout(
 	today: string
 ): PayoutMatch {
 	if (!startDate || !validDate(startDate) || !validDate(today))
-		return { date: null, transactionId: null, issue: null };
+		return { date: null, transactionId: null, amountCents: null, issue: null };
 	const rewards = new Set(
 		[bonus.rewardCents, ...(offer?.tiers.map((tier) => tier.rewardCents) ?? [])].filter(
 			(amount): amount is number =>
@@ -191,13 +194,14 @@ function detectPayout(
 			previous &&
 			(previous.date !== transaction.date || previous.amountCents !== transaction.amountCents)
 		) {
-			return { date: null, transactionId: null, issue: 'ambiguous' };
+			return { date: null, transactionId: null, amountCents: null, issue: 'ambiguous' };
 		}
 		matches.set(transaction.id, transaction);
 	}
-	if (matches.size > 1) return { date: null, transactionId: null, issue: 'ambiguous' };
+	if (matches.size > 1)
+		return { date: null, transactionId: null, amountCents: null, issue: 'ambiguous' };
 	const candidate = [...matches.values()][0];
-	if (!candidate) return { date: null, transactionId: null, issue: null };
+	if (!candidate) return { date: null, transactionId: null, amountCents: null, issue: null };
 	const reversed = transactions.some(
 		(transaction) =>
 			!transaction.pending &&
@@ -209,8 +213,13 @@ function detectPayout(
 			REVERSAL.test(normalized(`${transaction.name} ${transaction.merchantName ?? ''}`))
 	);
 	return reversed
-		? { date: null, transactionId: null, issue: 'reversed' }
-		: { date: candidate.date, transactionId: candidate.id, issue: null };
+		? { date: null, transactionId: null, amountCents: null, issue: 'reversed' }
+		: {
+				date: candidate.date,
+				transactionId: candidate.id,
+				amountCents: -candidate.amountCents,
+				issue: null
+			};
 }
 
 function offerSpecificDetail(category: OfferCategory, bonus: AccountBonus): string {
@@ -328,13 +337,19 @@ export function resolveAutomaticBonusChurn(
 	const startDate = startDates.sort().at(-1) ?? null;
 	const payout: PayoutMatch =
 		bonus.paidDate == null && activity.payoutAmbiguous
-			? { date: null, transactionId: null, issue: 'ambiguous' }
+			? { date: null, transactionId: null, amountCents: null, issue: 'ambiguous' }
 			: bonus.paidDate == null &&
 				  linked &&
 				  linked.currency.toUpperCase() === bonus.currency.toUpperCase() &&
 				  activityState === 'available'
-				? detectPayout(bonus, offer, activity.transactions ?? [], startDate, today)
-				: { date: null, transactionId: null, issue: null };
+				? detectPayout(
+						bonus,
+						offer ?? resolveBonusOffer(bonus, account),
+						activity.transactions ?? [],
+						startDate,
+						today
+					)
+				: { date: null, transactionId: null, amountCents: null, issue: null };
 	const paidDate = savedPaidDate ?? payout.date;
 	if (payout.date) dateSources.paidDate = 'transaction';
 	if (effectiveRule) effectiveRule = { ...effectiveRule, openedDate, closedDate };
@@ -458,6 +473,40 @@ export function resolveAutomaticBonusChurn(
 		sourceUrl,
 		checkedAt: activityState === 'available' && linked ? (activity.lastSyncedAt ?? null) : null,
 		ruleVerifiedAt,
-		payoutTransactionId: payout.transactionId
+		payoutTransactionId: payout.transactionId,
+		payoutAmountCents: savedPaidDate ? bonus.rewardCents : payout.amountCents
+	};
+}
+
+/** Project payment evidence without converting an inferred receipt into a saved correction. */
+export function resolveBonusPayment(
+	bonus: AccountBonus,
+	tracking?: BonusChurnAutomationResult | null,
+	today: string = getBonusChurnToday()
+): { paid: boolean; paidDate: string | null; amountCents: number | null; status: BonusStatus } {
+	const savedDate = actualDate(bonus.paidDate, today);
+	const savedPayment = Boolean(savedDate || bonus.status === 'paid');
+	const detectedDate =
+		bonus.paidDate == null &&
+		bonus.status !== 'abandoned' &&
+		tracking?.bonusId === bonus.id &&
+		tracking.dateSources.paidDate === 'transaction' &&
+		tracking.payoutTransactionId &&
+		tracking.payoutAmountCents !== null &&
+		Number.isSafeInteger(tracking.payoutAmountCents) &&
+		tracking.payoutAmountCents > 0
+			? actualDate(tracking.paidDate, today)
+			: null;
+	const paid = savedPayment || Boolean(detectedDate);
+	return {
+		paid,
+		paidDate: savedDate ?? detectedDate,
+		amountCents: savedPayment
+			? bonus.rewardCents
+			: detectedDate
+				? tracking!.payoutAmountCents
+				: null,
+		status:
+			paid && bonus.status !== 'closed' && bonus.status !== 'abandoned' ? 'paid' : bonus.status
 	};
 }

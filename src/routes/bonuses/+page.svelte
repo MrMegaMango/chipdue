@@ -1,9 +1,8 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
-	import type { BonusChurnAutomationResult } from '$lib/bonus-churn-automatic';
+	import { resolveBonusPayment, type BonusChurnAutomationResult } from '$lib/bonus-churn-automatic';
 	import {
-		automaticEarnedValueCents,
 		buildBonusOfferDraft,
 		buildBonusTracker,
 		getBonusOfferTemplate,
@@ -102,12 +101,17 @@
 	let toastTimer: ReturnType<typeof setTimeout> | undefined;
 	let queryPrefillHandled = false;
 
-	const activeBonuses = $derived(bonuses.filter((bonus) => activeStatuses.has(bonus.status)));
+	const activeBonuses = $derived(
+		bonuses.filter((bonus) => activeStatuses.has(paymentFor(bonus).status))
+	);
 	const pendingValueCents = $derived(
 		activeBonuses.reduce((total, bonus) => total + (bonus.rewardCents ?? 0), 0)
 	);
 	const earnedValueCents = $derived(
-		bonuses.reduce((total, bonus) => total + automaticEarnedValueCents(bonus, trackerFor(bonus)), 0)
+		bonuses.reduce((total, bonus) => {
+			const payment = paymentFor(bonus);
+			return total + (payment.paid ? (payment.amountCents ?? 0) : 0);
+		}, 0)
 	);
 	const upcomingBonuses = $derived(
 		activeBonuses
@@ -334,6 +338,10 @@
 
 	function linkedCard(bonus: AccountBonus): Card | null {
 		return cards.find((card) => card.id === bonus.cardId) ?? null;
+	}
+
+	function paymentFor(bonus: AccountBonus) {
+		return resolveBonusPayment(bonus, automaticTracking[bonus.id]);
 	}
 
 	function trackerFor(bonus: AccountBonus): BonusTracker | null {
@@ -736,9 +744,7 @@
 			</article>
 			<article>
 				<span>Potential value</span>
-				<strong
-					>{loading ? '—' : formatMoney(activeBonuses.length ? pendingValueCents : null)}</strong
-				>
+				<strong>{loading ? '—' : formatMoney(pendingValueCents)}</strong>
 			</article>
 			<article>
 				<span>Earned value</span>
@@ -780,7 +786,12 @@
 				<div class="finance-grid bonus-grid">
 					{#each bonuses as bonus (bonus.id)}
 						{@const bonusAccount = linkedAccount(bonus)}
+						{@const payment = paymentFor(bonus)}
 						{@const tracker = trackerFor(bonus)}
+						{@const retentionReviewDate =
+							tracker?.offer.safeToCloseRule === 'qualification-plus-1-year-plus-1'
+								? tracker.safeToCloseDate
+								: null}
 						{@const targetTier = tracker ? targetTierFor(bonus, tracker) : null}
 						{@const amountToTargetCents =
 							tracker && targetTier && tracker.balanceCents !== null
@@ -798,11 +809,11 @@
 											'No account linked'}
 									</p>
 								</div>
-								<span class="finance-pill {statusTone(bonus.status)}">
-									{statusLabel(bonus.status)}
+								<span class="finance-pill {statusTone(payment.status)}">
+									{statusLabel(payment.status)}
 								</span>
 							</header>
-							{#if bonusAccount && !tracker}
+							{#if bonusAccount && (!tracker || payment.paid)}
 								<div
 									class="bonus-live-metrics"
 									aria-label={`${bonusAccount.nickname} balance and bonus value`}
@@ -823,25 +834,36 @@
 										</small>
 									</div>
 									<div class="finance-card-value">
-										<span>Bonus value</span>
-										<strong>{formatMoney(bonus.rewardCents)}</strong>
+										<span>{payment.paid ? 'Received' : 'Bonus value'}</span>
+										<strong
+											>{formatMoney(payment.paid ? payment.amountCents : bonus.rewardCents)}</strong
+										>
 									</div>
 								</div>
 							{:else}
 								<div class="finance-card-value">
-									<span>Bonus value</span>
-									<strong>{formatMoney(bonus.rewardCents)}</strong>
+									<span>{payment.paid ? 'Received' : 'Bonus value'}</span>
+									<strong
+										>{formatMoney(payment.paid ? payment.amountCents : bonus.rewardCents)}</strong
+									>
 								</div>
 							{/if}
 
 							<div class="bonus-deadline">
-								<span class="finance-pill {deadlineTone(bonus.requirementDeadline)}">
-									{deadlineLabel(bonus.requirementDeadline)}
-								</span>
-								<strong>{formatDate(bonus.requirementDeadline)}</strong>
+								{#if payment.paid}
+									<span class="finance-pill good">Bonus received</span>
+									<strong
+										>{payment.paidDate ? formatDate(payment.paidDate) : 'Date not recorded'}</strong
+									>
+								{:else}
+									<span class="finance-pill {deadlineTone(bonus.requirementDeadline)}">
+										{deadlineLabel(bonus.requirementDeadline)}
+									</span>
+									<strong>{formatDate(bonus.requirementDeadline)}</strong>
+								{/if}
 							</div>
 
-							{#if tracker}
+							{#if tracker && !payment.paid}
 								<section
 									class="linked-tracker"
 									aria-label={`${tracker.offer.institution} offer tracker`}
@@ -1027,7 +1049,7 @@
 										)}.
 									</p>
 								</section>
-							{:else if trackerSetupOffers.length > 0}
+							{:else if !payment.paid && trackerSetupOffers.length > 0}
 								<section class="tracker-setup" aria-label="Bonus tracker setup needed">
 									<div>
 										<span>Tracker setup needed</span>
@@ -1045,7 +1067,7 @@
 								</section>
 							{/if}
 
-							{#if bonus.requirements.length > 0}
+							{#if !payment.paid && bonus.requirements.length > 0}
 								<section class="requirement-list" aria-label={`Requirements for ${bonus.name}`}>
 									<div class="requirement-heading">
 										<span>Requirements</span>
@@ -1069,17 +1091,77 @@
 								<CardDowngradeTiming {bonus} />
 							{/if}
 							<dl class="finance-details bonus-dates">
-								<div>
-									<dt>Expected payout</dt>
-									<dd>{formatDate(bonus.expectedPayoutDate)}</dd>
-								</div>
-								{#if !bonus.cardId}
+								{#if payment.paid && !bonus.cardId}
 									<div>
-										<dt>Safe to close</dt>
+										<dt>Account status</dt>
+										<dd>
+											{bonusAccount?.status === 'active'
+												? 'Open'
+												: bonusAccount?.status === 'closed'
+													? 'Closed'
+													: bonusAccount?.status === 'planned'
+														? 'Planned'
+														: 'Not confirmed'}
+										</dd>
+									</div>
+								{:else if !payment.paid}
+									<div>
+										<dt>Expected payout</dt>
+										<dd>{formatDate(bonus.expectedPayoutDate)}</dd>
+									</div>
+								{/if}
+								{#if retentionReviewDate}
+									<div>
+										<dt>Review after asset retention</dt>
+										<dd>{formatDate(retentionReviewDate)}</dd>
+									</div>
+								{:else if payment.paid && bonusAccount?.status === 'active' && tracker?.offer.transactionRule === 'capital-one-business'}
+									<div>
+										<dt>Next step</dt>
+										<dd>Confirm closing fees</dd>
+									</div>
+								{:else if !payment.paid && !bonus.cardId && bonus.safeToCloseDate}
+									<div>
+										<dt>Closing date to review</dt>
 										<dd>{formatDate(bonus.safeToCloseDate)}</dd>
 									</div>
 								{/if}
 							</dl>
+							{#if payment.paid && (tracker || bonus.requirements.length > 0 || (!bonus.cardId && bonus.safeToCloseDate))}
+								<details class="paid-offer-details">
+									<summary>Offer details</summary>
+									{#if automaticTracking[bonus.id]?.dateSources.paidDate === 'transaction'}
+										<p class="tracker-note">Payout matched to posted account activity.</p>
+									{/if}
+									{#if tracker}
+										<p class="tracker-note">
+											{#if retentionReviewDate}
+												Keep qualifying assets through the offer’s retention period. Early
+												withdrawals may reverse the bonus.
+											{/if}
+											<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- Provider terms are an external URL. -->
+											<a href={tracker.offer.sourceUrl} target="_blank" rel="noreferrer"
+												>Official terms</a
+											>
+											· {tracker.offer.versionLabel} · verified {formatDate(
+												tracker.offer.sourceVerifiedAt
+											)}.
+										</p>
+									{/if}
+									{#if !bonus.cardId && bonus.safeToCloseDate && !retentionReviewDate}
+										<p class="tracker-note">
+											Closing date to review: {formatDate(bonus.safeToCloseDate)}
+										</p>
+									{/if}
+									{#if bonus.requirements.length > 0}
+										<ul>
+											{#each bonus.requirements as requirement (requirement.id)}
+												<li>{requirement.label}</li>
+											{/each}
+										</ul>
+									{/if}
+								</details>
+							{/if}
 							<footer>
 								<button type="button" onclick={() => openEdit(bonus)}>Edit</button>
 								<button class="delete" type="button" onclick={() => deleteBonus(bonus)}>
@@ -1306,7 +1388,7 @@
 					</div>
 					<div class="finance-field">
 						<label for="bonus-close"
-							>{form.cardId ? 'Earliest downgrade (bonus hold)' : 'Safe to close'}</label
+							>{form.cardId ? 'Earliest downgrade (bonus hold)' : 'Closing date to review'}</label
 						>
 						<input
 							id="bonus-close"
@@ -1750,6 +1832,28 @@
 
 	.bonus-dates {
 		margin-top: 0.85rem;
+	}
+
+	.paid-offer-details {
+		margin-top: 0.8rem;
+		color: var(--muted);
+		font-size: 0.65rem;
+		line-height: 1.5;
+	}
+
+	.paid-offer-details summary {
+		color: var(--ink-soft);
+		font-weight: 680;
+		cursor: pointer;
+	}
+
+	.paid-offer-details p,
+	.paid-offer-details ul {
+		margin-top: 0.5rem;
+	}
+
+	.paid-offer-details ul {
+		padding-left: 1.2rem;
 	}
 
 	@media (max-width: 1040px) {

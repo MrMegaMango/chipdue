@@ -288,6 +288,7 @@
 	import { replaceState } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onMount, tick } from 'svelte';
+	import { resolveBonusPayment, type BonusChurnAutomationResult } from '$lib/bonus-churn-automatic';
 	import {
 		AUTOMATIC_CARD_REWARD_PROFILES,
 		type AutomaticCardRewardProfile
@@ -301,6 +302,7 @@
 	import { createDashboardLoader } from '$lib/dashboard-loader';
 	import { clearPrivateApiCache, reusePrivateApiGet } from '$lib/private-api-cache';
 	import type {
+		AccountBonus,
 		FinancialAccount,
 		CardCreditLimitReview as CreditLimitReviewData
 	} from '$lib/types';
@@ -445,23 +447,7 @@
 	};
 
 	type WorkspaceAccount = FinancialAccount;
-	type WorkspaceBonus = {
-		id: string;
-		cardId: string | null;
-		name: string;
-		status: 'planned' | 'active' | 'qualified' | 'pending' | 'paid' | 'closed' | 'abandoned';
-		rewardCents: number | null;
-		spendTargetCents: number | null;
-		openedDate: string | null;
-		requirementDeadline: string | null;
-		expectedPayoutDate: string | null;
-		safeToCloseDate: string | null;
-		feeFreeDowngradeDate: string | null;
-		feeFreeDowngradeDateSource: 'issuer_confirmed' | 'estimated';
-		institution: string | null;
-		currency: string;
-		notes: string | null;
-	};
+	type WorkspaceBonus = AccountBonus;
 
 	type CardForm = {
 		nickname: string;
@@ -583,6 +569,7 @@
 	let cards = $state<CardView[]>([]);
 	let workspaceAccounts = $state<WorkspaceAccount[]>([]);
 	let workspaceBonuses = $state<WorkspaceBonus[]>([]);
+	let workspaceBonusTracking = $state<Record<string, BonusChurnAutomationResult>>({});
 	let hasLoadedWorkspace = $state(false);
 	let plaid = $state<PlaidStatus>({ ...emptyPlaid });
 	let loading = $state(true);
@@ -668,7 +655,9 @@
 	);
 	const activeWorkspaceBonuses = $derived(
 		workspaceBonuses.filter((bonus) =>
-			['planned', 'active', 'qualified', 'pending'].includes(bonus.status)
+			['planned', 'active', 'qualified', 'pending'].includes(
+				resolveBonusPayment(bonus, workspaceBonusTracking[bonus.id]).status
+			)
 		)
 	);
 	const activeBonusValueCents = $derived(
@@ -1181,6 +1170,7 @@
 		hasLoadedCards = false;
 		workspaceAccounts = [];
 		workspaceBonuses = [];
+		workspaceBonusTracking = {};
 		hasLoadedWorkspace = false;
 		plaid = { ...emptyPlaid };
 		financialConnections = [];
@@ -1288,6 +1278,10 @@
 		if (payload.workspace.ok) {
 			workspaceAccounts = payload.workspace.data.accounts;
 			workspaceBonuses = payload.workspace.data.bonuses;
+			workspaceBonusTracking = {};
+			if (currentSection === 'overview' && workspaceBonuses.length > 0) {
+				void refreshWorkspaceBonusTracking();
+			}
 		}
 		// Cards remain usable if the broader workspace summary is temporarily unavailable.
 		if (!payload.cards.ok) {
@@ -1322,6 +1316,20 @@
 			}
 		}
 		return true;
+	}
+
+	async function refreshWorkspaceBonusTracking(): Promise<void> {
+		const epoch = privateStateEpoch;
+		const bonuses = workspaceBonuses;
+		try {
+			const response = await requestJson<{
+				tracking: Record<string, BonusChurnAutomationResult>;
+			}>(resolve('/api/bonuses/tracking'), {}, { memoryCache: 'bypass', privateEpoch: epoch });
+			if (!pageMounted || !isPrivateEpochCurrent(epoch) || workspaceBonuses !== bonuses) return;
+			workspaceBonusTracking = response.tracking;
+		} catch {
+			// The saved bonus state remains usable if payout activity is temporarily unavailable.
+		}
 	}
 
 	async function refreshPlaidStatus(

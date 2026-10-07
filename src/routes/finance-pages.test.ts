@@ -398,7 +398,7 @@ describe('financial workspace navigation', () => {
 		for (const marker of [
 			'Requirement deadline',
 			'Expected payout',
-			'Safe to close',
+			'Closing date to review',
 			'Payout pending',
 			'toggleRequirement'
 		]) {
@@ -407,7 +407,7 @@ describe('financial workspace navigation', () => {
 	});
 
 	it('calculates earned bonus value instead of asking for manual entry', () => {
-		expect(bonusesSource).toContain('automaticEarnedValueCents');
+		expect(bonusesSource).toContain('resolveBonusPayment(bonus, automaticTracking[bonus.id])');
 		expect(bonusesSource).toContain('formatMoney(earnedValueCents)');
 		expect(bonusesSource).not.toContain(
 			'formatMoney(paidBonuses.length ? earnedValueCents : null)'
@@ -434,7 +434,7 @@ describe('financial workspace navigation', () => {
 	});
 
 	it('shows the current account balance on linked bonuses without a verified tracker', () => {
-		expect(bonusesSource).toContain('{#if bonusAccount && !tracker}');
+		expect(bonusesSource).toContain('{#if bonusAccount && (!tracker || payment.paid)}');
 		expect(bonusesSource).toContain('class="bonus-account-balance"');
 		expect(bonusesSource).toContain('formatMoney(bonusAccount.currentBalanceCents)');
 		expect(bonusesSource).toContain('value={bonusAccount.lastSyncedAt}');

@@ -7,7 +7,11 @@ import type {
 	FinancialAccountTransaction
 } from '$lib/types';
 import { BONUS_CHURN_PRESETS } from './bonus-churn';
-import { resolveAutomaticBonusChurn, type BonusChurnActivity } from './bonus-churn-automatic';
+import {
+	resolveAutomaticBonusChurn,
+	resolveBonusPayment,
+	type BonusChurnActivity
+} from './bonus-churn-automatic';
 
 const account: FinancialAccount = {
 	id: 'account-1',
@@ -539,5 +543,139 @@ describe('automatic bonus churn resolution', () => {
 				resolveAutomaticBonusChurn(record, activity({ transactions: [] }), today).projectionDate
 			).toBeNull();
 		}
+	});
+});
+
+describe('bonus payment display', () => {
+	it('keeps lower-tier payouts for legacy Wells Fargo offers without assuming repeat rules', () => {
+		const legacy = { ...bonus, offerTemplateId: null };
+		const result = resolveAutomaticBonusChurn(legacy, activity(), today);
+		expect(resolveBonusPayment(legacy, result, today)).toEqual({
+			paid: true,
+			paidDate: '2024-04-15',
+			amountCents: 55_000,
+			status: 'paid'
+		});
+		expect(result.ruleSource).toBe('unmatched');
+		expect(result.effectiveRule).toBeNull();
+	});
+
+	it('uses the actual payout tier once and does not mutate the saved offer', () => {
+		const saved = structuredClone(bonus);
+		const detected = resolveAutomaticBonusChurn(bonus, activity(), today);
+		expect(detected.payoutAmountCents).toBe(55_000);
+		expect(resolveBonusPayment(bonus, detected, today)).toEqual({
+			paid: true,
+			paidDate: '2024-04-15',
+			amountCents: 55_000,
+			status: 'paid'
+		});
+		expect(bonus).toEqual(saved);
+		const withdrawn = resolveAutomaticBonusChurn(
+			bonus,
+			activity({ account: { ...account, currentBalanceCents: 0 } }),
+			today
+		);
+		expect(resolveBonusPayment(bonus, withdrawn, today)).toEqual(
+			resolveBonusPayment(bonus, detected, today)
+		);
+	});
+
+	it('respects a saved payment when linked activity is missing or disconnected', () => {
+		const saved = { ...bonus, paidDate: '2026-08-03', rewardCents: 40_000 };
+		const result = resolveAutomaticBonusChurn(saved, {}, today);
+		expect(resolveBonusPayment(saved, result, today)).toEqual({
+			paid: true,
+			paidDate: '2026-08-03',
+			amountCents: 40_000,
+			status: 'paid'
+		});
+		expect(resolveBonusPayment({ ...bonus, status: 'paid' }, undefined, today)).toEqual({
+			paid: true,
+			paidDate: null,
+			amountCents: 82_500,
+			status: 'paid'
+		});
+	});
+
+	it('keeps closed and abandoned records out of the active pipeline without inventing payment', () => {
+		const detected = resolveAutomaticBonusChurn(bonus, activity(), today);
+		expect(resolveBonusPayment({ ...bonus, status: 'closed' }, detected, today)).toMatchObject({
+			paid: true,
+			status: 'closed'
+		});
+		expect(resolveBonusPayment({ ...bonus, status: 'closed' }, undefined, today)).toMatchObject({
+			paid: false,
+			amountCents: null,
+			status: 'closed'
+		});
+		expect(resolveBonusPayment({ ...bonus, status: 'abandoned' }, detected, today)).toMatchObject({
+			paid: false,
+			amountCents: null,
+			status: 'abandoned'
+		});
+	});
+
+	it('does not count ambiguous, pending, reversed or unavailable activity as earned', () => {
+		const cases: Partial<BonusChurnActivity>[] = [
+			{ transactions: [credit({ pending: true })] },
+			{ transactions: [credit(), credit({ id: 'tx-2' })] },
+			{
+				transactions: [
+					credit(),
+					credit({ id: 'tx-2', amountCents: 55_000, name: 'BONUS REVERSAL' })
+				]
+			},
+			{ payoutAmbiguous: true },
+			{ activityState: 'unavailable' }
+		];
+		for (const changes of cases) {
+			const result = resolveAutomaticBonusChurn(bonus, activity(changes), today);
+			expect(result.payoutAmountCents).toBeNull();
+			expect(resolveBonusPayment(bonus, result, today)).toEqual({
+				paid: false,
+				paidDate: null,
+				amountCents: null,
+				status: 'active'
+			});
+		}
+	});
+
+	it('does not use another bonus receipt or override an invalid saved date', () => {
+		const detected = resolveAutomaticBonusChurn(bonus, activity(), today);
+		expect(resolveBonusPayment({ ...bonus, id: 'different-bonus' }, detected, today).paid).toBe(
+			false
+		);
+		expect(resolveBonusPayment({ ...bonus, paidDate: '2027-01-01' }, detected, today).paid).toBe(
+			false
+		);
+	});
+
+	it('recognizes a synthetic Capital One deposit bonus without waiting for the estimated payout', () => {
+		const capitalBonus = {
+			...bonus,
+			institution: 'Capital One',
+			offerTemplateId: 'capital-one-business-checking-sboffer500-2026',
+			name: 'Synthetic business bonus',
+			rewardCents: 50_000,
+			openedDate: '2026-04-01',
+			expectedPayoutDate: '2026-09-27'
+		};
+		const result = resolveAutomaticBonusChurn(
+			capitalBonus,
+			activity({
+				account: { ...account, institution: 'Capital One' },
+				transactions: [
+					credit({ name: 'Synthetic new deposit bonus', amountCents: -50_000, date: '2026-08-04' })
+				]
+			}),
+			today
+		);
+		expect(resolveBonusPayment(capitalBonus, result, today)).toEqual({
+			paid: true,
+			paidDate: '2026-08-04',
+			amountCents: 50_000,
+			status: 'paid'
+		});
 	});
 });
