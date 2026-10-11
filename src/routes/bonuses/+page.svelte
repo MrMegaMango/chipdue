@@ -104,6 +104,19 @@
 	const activeBonuses = $derived(
 		bonuses.filter((bonus) => activeStatuses.has(paymentFor(bonus).status))
 	);
+	const completedBonuses = $derived(
+		bonuses
+			.filter((bonus) => paymentFor(bonus).paid)
+			.toSorted((left, right) =>
+				(paymentFor(right).paidDate ?? '').localeCompare(paymentFor(left).paidDate ?? '')
+			)
+	);
+	const archivedBonuses = $derived(
+		bonuses.filter((bonus) => {
+			const payment = paymentFor(bonus);
+			return !payment.paid && !activeStatuses.has(payment.status);
+		})
+	);
 	const pendingValueCents = $derived(
 		activeBonuses.reduce((total, bonus) => total + (bonus.rewardCents ?? 0), 0)
 	);
@@ -710,6 +723,376 @@
 	}
 </script>
 
+{#snippet bonusCards(groupBonuses: AccountBonus[])}
+	<div class="finance-grid bonus-grid">
+		{#each groupBonuses as bonus (bonus.id)}
+			{@const bonusAccount = linkedAccount(bonus)}
+			{@const payment = paymentFor(bonus)}
+			{@const tracker = trackerFor(bonus)}
+			{@const retentionReviewDate =
+				tracker?.offer.safeToCloseRule === 'qualification-plus-1-year-plus-1'
+					? tracker.safeToCloseDate
+					: null}
+			{@const targetTier = tracker ? targetTierFor(bonus, tracker) : null}
+			{@const amountToTargetCents =
+				tracker && targetTier && tracker.balanceCents !== null
+					? Math.max(0, targetTier.thresholdCents - tracker.balanceCents)
+					: null}
+			{@const trackerSetupOffers = trackerSetupOffersFor(bonus)}
+			<article class="finance-card bonus-card" class:has-tracker={tracker !== null}>
+				<header>
+					<div>
+						<h3>{bonus.name}</h3>
+						<p>
+							{linkedCard(bonus)?.nickname ??
+								bonusAccount?.nickname ??
+								bonus.institution ??
+								'No account linked'}
+						</p>
+					</div>
+					<span class="finance-pill {statusTone(payment.status)}">
+						{statusLabel(payment.status)}
+					</span>
+				</header>
+				{#if bonusAccount && (!tracker || payment.paid)}
+					<div
+						class="bonus-live-metrics"
+						aria-label={`${bonusAccount.nickname} balance and bonus value`}
+					>
+						<div class="bonus-account-balance">
+							<span>
+								{bonusAccount.source === 'connected'
+									? 'Current synced balance'
+									: 'Current manual balance'}
+							</span>
+							<strong>{formatMoney(bonusAccount.currentBalanceCents)}</strong>
+							<small>
+								{#if bonusAccount.source === 'connected'}
+									<SyncedTime value={bonusAccount.lastSyncedAt} fallback="Not synced yet" />
+								{:else}
+									Saved in ChipDue
+								{/if}
+							</small>
+						</div>
+						<div class="finance-card-value">
+							<span>{payment.paid ? 'Received' : 'Bonus value'}</span>
+							<strong>{formatMoney(payment.paid ? payment.amountCents : bonus.rewardCents)}</strong>
+						</div>
+					</div>
+				{:else}
+					<div class="finance-card-value">
+						<span>{payment.paid ? 'Received' : 'Bonus value'}</span>
+						<strong>{formatMoney(payment.paid ? payment.amountCents : bonus.rewardCents)}</strong>
+					</div>
+				{/if}
+
+				<div class="bonus-deadline">
+					{#if payment.paid}
+						<span class="finance-pill good">Bonus received</span>
+						<strong>{payment.paidDate ? formatDate(payment.paidDate) : 'Date not recorded'}</strong>
+					{:else}
+						<span class="finance-pill {deadlineTone(bonus.requirementDeadline)}">
+							{deadlineLabel(bonus.requirementDeadline)}
+						</span>
+						<strong>{formatDate(bonus.requirementDeadline)}</strong>
+					{/if}
+				</div>
+
+				{#if tracker && !payment.paid}
+					<section class="linked-tracker" aria-label={`${tracker.offer.institution} offer tracker`}>
+						<header class="tracker-heading">
+							<div>
+								<span>{tracker.offer.institution} offer tracker</span>
+								<strong>{tracker.offer.accountProduct}</strong>
+							</div>
+							<span class="finance-pill good">
+								{tracker.account.source === 'connected' ? 'Synced + verified' : 'Manual + verified'}
+							</span>
+						</header>
+
+						<div class="tracker-metrics" class:balance-only={tracker.offer.activityMode === 'none'}>
+							<div>
+								<span>
+									{tracker.account.source === 'connected'
+										? 'Current synced balance'
+										: 'Current manual balance'}
+								</span>
+								<strong>{formatMoney(tracker.balanceCents)}</strong>
+								<small>
+									{#if amountToTargetCents === 0}
+										Your {formatMoney(targetTier?.rewardCents ?? null)} target is reached in this snapshot
+									{:else if amountToTargetCents !== null}
+										{formatMoney(amountToTargetCents)} to your {formatMoney(
+											targetTier?.rewardCents ?? null
+										)} target
+									{:else}
+										Waiting for a synced balance
+									{/if}
+								</small>
+							</div>
+							{#if tracker.offer.activityMode !== 'none'}
+								<div>
+									<span>
+										{tracker.offer.activityMode === 'recent'
+											? 'Recent activity'
+											: 'Likely qualifying activity'}
+									</span>
+									<strong
+										>{activityLoadingByAccount[tracker.account.id]
+											? '—'
+											: tracker.offer.activityMode === 'recent'
+												? `${tracker.likelyQualifyingTransactions.length} posted`
+												: `${tracker.likelyQualifyingTransactions.length} / ${tracker.offer.transactionTarget}`}</strong
+									>
+									<small>
+										{#if activityLoadingByAccount[tracker.account.id]}
+											Loading posted activity…
+										{:else if tracker.account.source !== 'connected'}
+											Manual account — verify activity with {tracker.offer.institution}
+										{:else if tracker.account.transactionHistoryStatus === 'preparing'}
+											The provider is still preparing older activity
+										{:else if tracker.account.transactionHistoryEnabled}
+											Posted since {formatDate(bonus.openedDate)}
+										{:else}
+											Check now to load posted activity
+										{/if}
+									</small>
+								</div>
+							{/if}
+						</div>
+
+						<progress
+							class="balance-progress"
+							max={targetTier?.thresholdCents ?? tracker.offer.tiers.at(-1)?.thresholdCents ?? 1}
+							value={Math.max(0, tracker.balanceCents ?? 0)}
+							aria-label={`Balance progress toward the ${formatMoney(targetTier?.rewardCents ?? tracker.offer.rewardCents)} target`}
+						></progress>
+
+						<div
+							class="tier-rail"
+							class:single-tier={tracker.offer.tiers.length === 1}
+							aria-label={`${tracker.offer.institution} bonus tiers`}
+						>
+							{#each tracker.offer.tiers as tier (tier.thresholdCents)}
+								<div
+									class:reached={(tracker.balanceCents ?? 0) >= tier.thresholdCents}
+									class:target={targetTier?.thresholdCents === tier.thresholdCents}
+								>
+									<strong>Reward {formatMoney(tier.rewardCents)}</strong>
+									<span>
+										{tier.label}{targetTier?.thresholdCents === tier.thresholdCents
+											? ' · Your target'
+											: ''}
+									</span>
+								</div>
+							{/each}
+						</div>
+
+						<dl class="tracker-dates">
+							<div>
+								<dt>Fund by</dt>
+								<dd>{formatDate(tracker.fundingDeadline)}</dd>
+							</div>
+							<div>
+								<dt>{tracker.offer.qualificationLabel}</dt>
+								<dd>{formatDate(tracker.qualificationDeadline)}</dd>
+							</div>
+							<div>
+								<dt>Payout by</dt>
+								<dd>{formatDate(tracker.latestPayoutDate)}</dd>
+							</div>
+						</dl>
+
+						{#if tracker.offer.activityMode !== 'none' && tracker.likelyQualifyingTransactions.length > 0}
+							<ul
+								class="tracker-activity"
+								aria-label={tracker.offer.activityMode === 'recent'
+									? 'Recent posted activity'
+									: 'Likely qualifying posted activity'}
+							>
+								{#each tracker.likelyQualifyingTransactions.slice(0, 5) as transaction (transaction.id)}
+									<li>
+										<strong>{transaction.merchantName ?? transaction.name}</strong>
+										<span>{formatDate(transaction.date)}</span>
+									</li>
+								{/each}
+							</ul>
+						{/if}
+
+						{#if activityErrors[tracker.account.id]}
+							<p class="tracker-error" role="alert">{activityErrors[tracker.account.id]}</p>
+						{/if}
+						<div class="tracker-actions">
+							{#if tracker.account.connectionId}
+								<button
+									type="button"
+									disabled={syncingAccountId !== null ||
+										activityLoadingByAccount[tracker.account.id]}
+									onclick={() => checkLinkedAccount(bonus)}
+								>
+									{syncingAccountId === tracker.account.id
+										? `Refreshing ${tracker.offer.institution}…`
+										: `Check ${tracker.offer.institution} now`}
+								</button>
+								<small>
+									<SyncedTime
+										value={activityByAccount[tracker.account.id]?.lastSyncedAt ??
+											tracker.account.lastSyncedAt}
+										fallback="Not checked yet"
+									/>
+								</small>
+							{:else}
+								<small>
+									{tracker.offer.activityMode === 'none'
+										? 'Connect this account to a provider to update its balance automatically.'
+										: 'Connect this account to a provider to estimate posted activity.'}
+								</small>
+							{/if}
+						</div>
+						<p class="tracker-note">
+							{#if bonus.offerDateOverrideConfirmed}
+								<strong>Bank-confirmed enrollment date exception.</strong>
+							{/if}
+							Balances are snapshots and cannot prove new-money sources or uninterrupted minimums.
+							{tracker.offer.activityMode === 'none'
+								? 'This promotion is balance-based.'
+								: tracker.offer.activityMode === 'recent'
+									? tracker.account.source === 'connected'
+										? 'Recent activity comes from posted provider investment transactions.'
+										: 'Recent activity remains a manual check until the account is connected to a provider.'
+									: tracker.account.source === 'connected'
+										? 'Activity is a conservative estimate from posted provider transactions.'
+										: 'Activity remains a manual check until the account is connected to a provider.'}
+							{tracker.offer.activityNote}
+							<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- Provider terms are an external URL. -->
+							<a href={tracker.offer.sourceUrl} target="_blank" rel="noreferrer">Official terms</a>
+							· {tracker.offer.versionLabel} · verified {formatDate(
+								tracker.offer.sourceVerifiedAt
+							)}.
+						</p>
+					</section>
+				{:else if !payment.paid && trackerSetupOffers.length > 0}
+					<section class="tracker-setup" aria-label="Bonus tracker setup needed">
+						<div>
+							<span>Tracker setup needed</span>
+							<strong>
+								Choose the exact {bonusAccount?.institution ?? bonus.institution} offer you enrolled in.
+							</strong>
+							<small>
+								{trackerSetupOffers.length} verified {trackerSetupOffers.length === 1
+									? 'offer matches'
+									: 'offers match'} this account and opening date.
+							</small>
+						</div>
+						<button type="button" onclick={() => openEdit(bonus)}>Choose offer</button>
+					</section>
+				{/if}
+
+				{#if !payment.paid && bonus.requirements.length > 0}
+					<section class="requirement-list" aria-label={`Requirements for ${bonus.name}`}>
+						<div class="requirement-heading">
+							<span>Requirements</span>
+							<strong>{completedCount(bonus)}/{bonus.requirements.length}</strong>
+						</div>
+						{#each bonus.requirements as requirement (requirement.id)}
+							<label class:completed={requirement.completed}>
+								<input
+									type="checkbox"
+									checked={requirement.completed}
+									disabled={requirementBusy !== null}
+									onchange={() => toggleRequirement(bonus, requirement.id)}
+								/>
+								<span>{requirement.label}</span>
+							</label>
+						{/each}
+					</section>
+				{/if}
+
+				{#if bonus.cardId}
+					<CardDowngradeTiming {bonus} />
+				{/if}
+				<dl class="finance-details bonus-dates">
+					{#if payment.paid && !bonus.cardId}
+						<div>
+							<dt>Account status</dt>
+							<dd>
+								{bonusAccount?.status === 'active'
+									? 'Open'
+									: bonusAccount?.status === 'closed'
+										? 'Closed'
+										: bonusAccount?.status === 'planned'
+											? 'Planned'
+											: 'Not confirmed'}
+							</dd>
+						</div>
+					{:else if !payment.paid}
+						<div>
+							<dt>Expected payout</dt>
+							<dd>{formatDate(bonus.expectedPayoutDate)}</dd>
+						</div>
+					{/if}
+					{#if retentionReviewDate}
+						<div>
+							<dt>Review after asset retention</dt>
+							<dd>{formatDate(retentionReviewDate)}</dd>
+						</div>
+					{:else if payment.paid && bonusAccount?.status === 'active' && tracker?.offer.transactionRule === 'capital-one-business'}
+						<div>
+							<dt>Next step</dt>
+							<dd>Confirm closing fees</dd>
+						</div>
+					{:else if !payment.paid && !bonus.cardId && bonus.safeToCloseDate}
+						<div>
+							<dt>Closing date to review</dt>
+							<dd>{formatDate(bonus.safeToCloseDate)}</dd>
+						</div>
+					{/if}
+				</dl>
+				{#if payment.paid && (tracker || bonus.requirements.length > 0 || (!bonus.cardId && bonus.safeToCloseDate))}
+					<details class="paid-offer-details">
+						<summary>Offer details</summary>
+						{#if automaticTracking[bonus.id]?.dateSources.paidDate === 'transaction'}
+							<p class="tracker-note">Payout matched to posted account activity.</p>
+						{/if}
+						{#if tracker}
+							<p class="tracker-note">
+								{#if retentionReviewDate}
+									Keep qualifying assets through the offer’s retention period. Early withdrawals may
+									reverse the bonus.
+								{/if}
+								<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- Provider terms are an external URL. -->
+								<a href={tracker.offer.sourceUrl} target="_blank" rel="noreferrer">Official terms</a
+								>
+								· {tracker.offer.versionLabel} · verified {formatDate(
+									tracker.offer.sourceVerifiedAt
+								)}.
+							</p>
+						{/if}
+						{#if !bonus.cardId && bonus.safeToCloseDate && !retentionReviewDate}
+							<p class="tracker-note">
+								Closing date to review: {formatDate(bonus.safeToCloseDate)}
+							</p>
+						{/if}
+						{#if bonus.requirements.length > 0}
+							<ul>
+								{#each bonus.requirements as requirement (requirement.id)}
+									<li>{requirement.label}</li>
+								{/each}
+							</ul>
+						{/if}
+					</details>
+				{/if}
+				<footer>
+					<button type="button" onclick={() => openEdit(bonus)}>Edit</button>
+					<button class="delete" type="button" onclick={() => deleteBonus(bonus)}>
+						{deletingId === bonus.id ? 'Deleting…' : 'Delete'}
+					</button>
+				</footer>
+			</article>
+		{/each}
+	</div>
+{/snippet}
+
 <svelte:head>
 	<title>Bonuses — ChipDue</title>
 	<meta
@@ -783,395 +1166,33 @@
 						<p>{dueSoonCount} with a requirement deadline in the next 30 days or overdue.</p>
 					</div>
 				</div>
-				<div class="finance-grid bonus-grid">
-					{#each bonuses as bonus (bonus.id)}
-						{@const bonusAccount = linkedAccount(bonus)}
-						{@const payment = paymentFor(bonus)}
-						{@const tracker = trackerFor(bonus)}
-						{@const retentionReviewDate =
-							tracker?.offer.safeToCloseRule === 'qualification-plus-1-year-plus-1'
-								? tracker.safeToCloseDate
-								: null}
-						{@const targetTier = tracker ? targetTierFor(bonus, tracker) : null}
-						{@const amountToTargetCents =
-							tracker && targetTier && tracker.balanceCents !== null
-								? Math.max(0, targetTier.thresholdCents - tracker.balanceCents)
-								: null}
-						{@const trackerSetupOffers = trackerSetupOffersFor(bonus)}
-						<article class="finance-card bonus-card" class:has-tracker={tracker !== null}>
-							<header>
-								<div>
-									<h3>{bonus.name}</h3>
-									<p>
-										{linkedCard(bonus)?.nickname ??
-											bonusAccount?.nickname ??
-											bonus.institution ??
-											'No account linked'}
-									</p>
-								</div>
-								<span class="finance-pill {statusTone(payment.status)}">
-									{statusLabel(payment.status)}
-								</span>
-							</header>
-							{#if bonusAccount && (!tracker || payment.paid)}
-								<div
-									class="bonus-live-metrics"
-									aria-label={`${bonusAccount.nickname} balance and bonus value`}
-								>
-									<div class="bonus-account-balance">
-										<span>
-											{bonusAccount.source === 'connected'
-												? 'Current synced balance'
-												: 'Current manual balance'}
-										</span>
-										<strong>{formatMoney(bonusAccount.currentBalanceCents)}</strong>
-										<small>
-											{#if bonusAccount.source === 'connected'}
-												<SyncedTime value={bonusAccount.lastSyncedAt} fallback="Not synced yet" />
-											{:else}
-												Saved in ChipDue
-											{/if}
-										</small>
-									</div>
-									<div class="finance-card-value">
-										<span>{payment.paid ? 'Received' : 'Bonus value'}</span>
-										<strong
-											>{formatMoney(payment.paid ? payment.amountCents : bonus.rewardCents)}</strong
-										>
-									</div>
-								</div>
-							{:else}
-								<div class="finance-card-value">
-									<span>{payment.paid ? 'Received' : 'Bonus value'}</span>
-									<strong
-										>{formatMoney(payment.paid ? payment.amountCents : bonus.rewardCents)}</strong
-									>
-								</div>
-							{/if}
-
-							<div class="bonus-deadline">
-								{#if payment.paid}
-									<span class="finance-pill good">Bonus received</span>
-									<strong
-										>{payment.paidDate ? formatDate(payment.paidDate) : 'Date not recorded'}</strong
-									>
-								{:else}
-									<span class="finance-pill {deadlineTone(bonus.requirementDeadline)}">
-										{deadlineLabel(bonus.requirementDeadline)}
-									</span>
-									<strong>{formatDate(bonus.requirementDeadline)}</strong>
-								{/if}
-							</div>
-
-							{#if tracker && !payment.paid}
-								<section
-									class="linked-tracker"
-									aria-label={`${tracker.offer.institution} offer tracker`}
-								>
-									<header class="tracker-heading">
-										<div>
-											<span>{tracker.offer.institution} offer tracker</span>
-											<strong>{tracker.offer.accountProduct}</strong>
-										</div>
-										<span class="finance-pill good">
-											{tracker.account.source === 'connected'
-												? 'Synced + verified'
-												: 'Manual + verified'}
-										</span>
-									</header>
-
-									<div
-										class="tracker-metrics"
-										class:balance-only={tracker.offer.activityMode === 'none'}
-									>
-										<div>
-											<span>
-												{tracker.account.source === 'connected'
-													? 'Current synced balance'
-													: 'Current manual balance'}
-											</span>
-											<strong>{formatMoney(tracker.balanceCents)}</strong>
-											<small>
-												{#if amountToTargetCents === 0}
-													Your {formatMoney(targetTier?.rewardCents ?? null)} target is reached in this
-													snapshot
-												{:else if amountToTargetCents !== null}
-													{formatMoney(amountToTargetCents)} to your {formatMoney(
-														targetTier?.rewardCents ?? null
-													)} target
-												{:else}
-													Waiting for a synced balance
-												{/if}
-											</small>
-										</div>
-										{#if tracker.offer.activityMode !== 'none'}
-											<div>
-												<span>
-													{tracker.offer.activityMode === 'recent'
-														? 'Recent activity'
-														: 'Likely qualifying activity'}
-												</span>
-												<strong
-													>{activityLoadingByAccount[tracker.account.id]
-														? '—'
-														: tracker.offer.activityMode === 'recent'
-															? `${tracker.likelyQualifyingTransactions.length} posted`
-															: `${tracker.likelyQualifyingTransactions.length} / ${tracker.offer.transactionTarget}`}</strong
-												>
-												<small>
-													{#if activityLoadingByAccount[tracker.account.id]}
-														Loading posted activity…
-													{:else if tracker.account.source !== 'connected'}
-														Manual account — verify activity with {tracker.offer.institution}
-													{:else if tracker.account.transactionHistoryStatus === 'preparing'}
-														The provider is still preparing older activity
-													{:else if tracker.account.transactionHistoryEnabled}
-														Posted since {formatDate(bonus.openedDate)}
-													{:else}
-														Check now to load posted activity
-													{/if}
-												</small>
-											</div>
-										{/if}
-									</div>
-
-									<progress
-										class="balance-progress"
-										max={targetTier?.thresholdCents ??
-											tracker.offer.tiers.at(-1)?.thresholdCents ??
-											1}
-										value={Math.max(0, tracker.balanceCents ?? 0)}
-										aria-label={`Balance progress toward the ${formatMoney(targetTier?.rewardCents ?? tracker.offer.rewardCents)} target`}
-									></progress>
-
-									<div
-										class="tier-rail"
-										class:single-tier={tracker.offer.tiers.length === 1}
-										aria-label={`${tracker.offer.institution} bonus tiers`}
-									>
-										{#each tracker.offer.tiers as tier (tier.thresholdCents)}
-											<div
-												class:reached={(tracker.balanceCents ?? 0) >= tier.thresholdCents}
-												class:target={targetTier?.thresholdCents === tier.thresholdCents}
-											>
-												<strong>Reward {formatMoney(tier.rewardCents)}</strong>
-												<span>
-													{tier.label}{targetTier?.thresholdCents === tier.thresholdCents
-														? ' · Your target'
-														: ''}
-												</span>
-											</div>
-										{/each}
-									</div>
-
-									<dl class="tracker-dates">
-										<div>
-											<dt>Fund by</dt>
-											<dd>{formatDate(tracker.fundingDeadline)}</dd>
-										</div>
-										<div>
-											<dt>{tracker.offer.qualificationLabel}</dt>
-											<dd>{formatDate(tracker.qualificationDeadline)}</dd>
-										</div>
-										<div>
-											<dt>Payout by</dt>
-											<dd>{formatDate(tracker.latestPayoutDate)}</dd>
-										</div>
-									</dl>
-
-									{#if tracker.offer.activityMode !== 'none' && tracker.likelyQualifyingTransactions.length > 0}
-										<ul
-											class="tracker-activity"
-											aria-label={tracker.offer.activityMode === 'recent'
-												? 'Recent posted activity'
-												: 'Likely qualifying posted activity'}
-										>
-											{#each tracker.likelyQualifyingTransactions.slice(0, 5) as transaction (transaction.id)}
-												<li>
-													<strong>{transaction.merchantName ?? transaction.name}</strong>
-													<span>{formatDate(transaction.date)}</span>
-												</li>
-											{/each}
-										</ul>
-									{/if}
-
-									{#if activityErrors[tracker.account.id]}
-										<p class="tracker-error" role="alert">{activityErrors[tracker.account.id]}</p>
-									{/if}
-									<div class="tracker-actions">
-										{#if tracker.account.connectionId}
-											<button
-												type="button"
-												disabled={syncingAccountId !== null ||
-													activityLoadingByAccount[tracker.account.id]}
-												onclick={() => checkLinkedAccount(bonus)}
-											>
-												{syncingAccountId === tracker.account.id
-													? `Refreshing ${tracker.offer.institution}…`
-													: `Check ${tracker.offer.institution} now`}
-											</button>
-											<small>
-												<SyncedTime
-													value={activityByAccount[tracker.account.id]?.lastSyncedAt ??
-														tracker.account.lastSyncedAt}
-													fallback="Not checked yet"
-												/>
-											</small>
-										{:else}
-											<small>
-												{tracker.offer.activityMode === 'none'
-													? 'Connect this account to a provider to update its balance automatically.'
-													: 'Connect this account to a provider to estimate posted activity.'}
-											</small>
-										{/if}
-									</div>
-									<p class="tracker-note">
-										{#if bonus.offerDateOverrideConfirmed}
-											<strong>Bank-confirmed enrollment date exception.</strong>
-										{/if}
-										Balances are snapshots and cannot prove new-money sources or uninterrupted minimums.
-										{tracker.offer.activityMode === 'none'
-											? 'This promotion is balance-based.'
-											: tracker.offer.activityMode === 'recent'
-												? tracker.account.source === 'connected'
-													? 'Recent activity comes from posted provider investment transactions.'
-													: 'Recent activity remains a manual check until the account is connected to a provider.'
-												: tracker.account.source === 'connected'
-													? 'Activity is a conservative estimate from posted provider transactions.'
-													: 'Activity remains a manual check until the account is connected to a provider.'}
-										{tracker.offer.activityNote}
-										<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- Provider terms are an external URL. -->
-										<a href={tracker.offer.sourceUrl} target="_blank" rel="noreferrer"
-											>Official terms</a
-										>
-										· {tracker.offer.versionLabel} · verified {formatDate(
-											tracker.offer.sourceVerifiedAt
-										)}.
-									</p>
-								</section>
-							{:else if !payment.paid && trackerSetupOffers.length > 0}
-								<section class="tracker-setup" aria-label="Bonus tracker setup needed">
-									<div>
-										<span>Tracker setup needed</span>
-										<strong>
-											Choose the exact {bonusAccount?.institution ?? bonus.institution} offer you enrolled
-											in.
-										</strong>
-										<small>
-											{trackerSetupOffers.length} verified {trackerSetupOffers.length === 1
-												? 'offer matches'
-												: 'offers match'} this account and opening date.
-										</small>
-									</div>
-									<button type="button" onclick={() => openEdit(bonus)}>Choose offer</button>
-								</section>
-							{/if}
-
-							{#if !payment.paid && bonus.requirements.length > 0}
-								<section class="requirement-list" aria-label={`Requirements for ${bonus.name}`}>
-									<div class="requirement-heading">
-										<span>Requirements</span>
-										<strong>{completedCount(bonus)}/{bonus.requirements.length}</strong>
-									</div>
-									{#each bonus.requirements as requirement (requirement.id)}
-										<label class:completed={requirement.completed}>
-											<input
-												type="checkbox"
-												checked={requirement.completed}
-												disabled={requirementBusy !== null}
-												onchange={() => toggleRequirement(bonus, requirement.id)}
-											/>
-											<span>{requirement.label}</span>
-										</label>
-									{/each}
-								</section>
-							{/if}
-
-							{#if bonus.cardId}
-								<CardDowngradeTiming {bonus} />
-							{/if}
-							<dl class="finance-details bonus-dates">
-								{#if payment.paid && !bonus.cardId}
-									<div>
-										<dt>Account status</dt>
-										<dd>
-											{bonusAccount?.status === 'active'
-												? 'Open'
-												: bonusAccount?.status === 'closed'
-													? 'Closed'
-													: bonusAccount?.status === 'planned'
-														? 'Planned'
-														: 'Not confirmed'}
-										</dd>
-									</div>
-								{:else if !payment.paid}
-									<div>
-										<dt>Expected payout</dt>
-										<dd>{formatDate(bonus.expectedPayoutDate)}</dd>
-									</div>
-								{/if}
-								{#if retentionReviewDate}
-									<div>
-										<dt>Review after asset retention</dt>
-										<dd>{formatDate(retentionReviewDate)}</dd>
-									</div>
-								{:else if payment.paid && bonusAccount?.status === 'active' && tracker?.offer.transactionRule === 'capital-one-business'}
-									<div>
-										<dt>Next step</dt>
-										<dd>Confirm closing fees</dd>
-									</div>
-								{:else if !payment.paid && !bonus.cardId && bonus.safeToCloseDate}
-									<div>
-										<dt>Closing date to review</dt>
-										<dd>{formatDate(bonus.safeToCloseDate)}</dd>
-									</div>
-								{/if}
-							</dl>
-							{#if payment.paid && (tracker || bonus.requirements.length > 0 || (!bonus.cardId && bonus.safeToCloseDate))}
-								<details class="paid-offer-details">
-									<summary>Offer details</summary>
-									{#if automaticTracking[bonus.id]?.dateSources.paidDate === 'transaction'}
-										<p class="tracker-note">Payout matched to posted account activity.</p>
-									{/if}
-									{#if tracker}
-										<p class="tracker-note">
-											{#if retentionReviewDate}
-												Keep qualifying assets through the offer’s retention period. Early
-												withdrawals may reverse the bonus.
-											{/if}
-											<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- Provider terms are an external URL. -->
-											<a href={tracker.offer.sourceUrl} target="_blank" rel="noreferrer"
-												>Official terms</a
-											>
-											· {tracker.offer.versionLabel} · verified {formatDate(
-												tracker.offer.sourceVerifiedAt
-											)}.
-										</p>
-									{/if}
-									{#if !bonus.cardId && bonus.safeToCloseDate && !retentionReviewDate}
-										<p class="tracker-note">
-											Closing date to review: {formatDate(bonus.safeToCloseDate)}
-										</p>
-									{/if}
-									{#if bonus.requirements.length > 0}
-										<ul>
-											{#each bonus.requirements as requirement (requirement.id)}
-												<li>{requirement.label}</li>
-											{/each}
-										</ul>
-									{/if}
-								</details>
-							{/if}
-							<footer>
-								<button type="button" onclick={() => openEdit(bonus)}>Edit</button>
-								<button class="delete" type="button" onclick={() => deleteBonus(bonus)}>
-									{deletingId === bonus.id ? 'Deleting…' : 'Delete'}
-								</button>
-							</footer>
-						</article>
-					{/each}
-				</div>
+				{#if activeBonuses.length > 0}
+					{@render bonusCards(activeBonuses)}
+				{:else}
+					<p class="pipeline-empty">No active bonuses.</p>
+				{/if}
 			</section>
+			{#if completedBonuses.length > 0}
+				<details class="bonus-history">
+					<summary>
+						<span
+							>Completed bonuses <span class="history-count">{completedBonuses.length}</span></span
+						>
+						<strong>{formatMoney(earnedValueCents)} received</strong>
+					</summary>
+					{@render bonusCards(completedBonuses)}
+				</details>
+			{/if}
+			{#if archivedBonuses.length > 0}
+				<details class="bonus-history">
+					<summary>
+						<span
+							>Closed or abandoned <span class="history-count">{archivedBonuses.length}</span></span
+						>
+					</summary>
+					{@render bonusCards(archivedBonuses)}
+				</details>
+			{/if}
 			<BonusChurnPanel
 				{bonuses}
 				{accounts}
@@ -1464,6 +1485,45 @@
 
 	.skip-link:focus {
 		transform: translateY(0);
+	}
+
+	.pipeline-empty {
+		margin: 0;
+		padding: 1rem 0;
+		color: var(--muted);
+		font-size: 0.82rem;
+	}
+
+	.bonus-history {
+		margin-top: 1.5rem;
+		border-top: 1px solid var(--line);
+	}
+
+	.bonus-history > summary {
+		padding: 1rem 0;
+		color: var(--ink);
+		font-size: 0.9rem;
+		font-weight: 720;
+		cursor: pointer;
+	}
+
+	.bonus-history > summary:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 4px;
+		border-radius: 4px;
+	}
+
+	.history-count {
+		margin-left: 0.35rem;
+		color: var(--muted);
+		font-weight: 560;
+	}
+
+	.bonus-history > summary > strong {
+		display: inline-block;
+		margin-left: 1rem;
+		color: var(--positive);
+		font-size: 0.75rem;
 	}
 
 	.bonus-card {
