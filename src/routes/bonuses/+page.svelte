@@ -1,3 +1,29 @@
+<script module lang="ts">
+	import type { AccountBonus, FinancialAccount } from '$lib/types';
+
+	type AcceptedOfferContext = Pick<
+		AccountBonus,
+		'offerTemplateId' | 'accountId' | 'openedDate' | 'offerDateOverrideConfirmed'
+	>;
+
+	export function preservesDisconnectedOffer(
+		saved: AcceptedOfferContext | null | undefined,
+		selection: AcceptedOfferContext,
+		account: Pick<FinancialAccount, 'id'> | null
+	): boolean {
+		return Boolean(
+			saved?.offerTemplateId &&
+			saved.accountId &&
+			saved.openedDate &&
+			!account &&
+			saved.offerTemplateId === selection.offerTemplateId &&
+			saved.accountId === selection.accountId &&
+			saved.openedDate === selection.openedDate &&
+			saved.offerDateOverrideConfirmed === selection.offerDateOverrideConfirmed
+		);
+	}
+</script>
+
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
@@ -17,10 +43,8 @@
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
 	import { clearPrivateApiCache, reusePrivateApiGet } from '$lib/private-api-cache';
 	import type {
-		AccountBonus,
 		BonusStatus,
 		Card,
-		FinancialAccount,
 		FinancialAccountTransaction,
 		TransactionHistoryStatus
 	} from '$lib/types';
@@ -593,7 +617,8 @@
 
 	async function saveBonus(event: SubmitEvent): Promise<void> {
 		event.preventDefault();
-		if (form.offerTemplateId) {
+		const saved = editingId ? bonuses.find((bonus) => bonus.id === editingId) : null;
+		if (form.offerTemplateId && !preservesDisconnectedOffer(saved, form, formAccount)) {
 			const offer = getBonusOfferTemplate(form.offerTemplateId);
 			if (!offer || !formAccount || !form.openedDate) {
 				formError = 'A verified offer needs a linked account and opening date.';
@@ -1274,6 +1299,9 @@
 							disabled={Boolean(form.cardId)}
 						>
 							<option value="">No linked account</option>
+							{#if form.accountId && !formAccount}
+								<option value={form.accountId}>Saved account (no longer connected)</option>
+							{/if}
 							{#each accounts as account (account.id)}
 								<option value={account.id}>{account.nickname}</option>
 							{/each}
