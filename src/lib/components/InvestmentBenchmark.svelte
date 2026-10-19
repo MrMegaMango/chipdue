@@ -373,7 +373,7 @@
 		padding: 1.5rem;
 		border: 1px solid var(--line);
 		border-radius: 18px;
-		background: white;
+		background: var(--paper);
 	}
 	.heading,
 	.controls,
@@ -408,7 +408,7 @@
 	.estimate-label {
 		padding: 0.35rem 0.65rem;
 		border-radius: 20px;
-		background: #f2f4f8;
+		background: var(--paper-soft);
 		color: var(--muted);
 		white-space: nowrap;
 		font-size: 0.65rem;
@@ -428,7 +428,7 @@
 		padding: 0.6rem 2rem 0.6rem 0.75rem;
 		border: 1px solid var(--line);
 		border-radius: 8px;
-		background: white;
+		background: var(--paper);
 		font: inherit;
 		font-size: 0.8rem;
 		color: var(--ink);
@@ -438,7 +438,7 @@
 		gap: 0.25rem;
 		padding: 0.2rem;
 		border-radius: 9px;
-		background: #f2f4f8;
+		background: var(--paper-soft);
 	}
 	button {
 		cursor: pointer;
@@ -453,9 +453,9 @@
 		font-weight: 700;
 	}
 	.ranges button[aria-pressed='true'] {
-		background: white;
+		background: var(--paper);
 		color: var(--accent);
-		box-shadow: 0 1px 4px #11182712;
+		box-shadow: var(--shadow-sm);
 	}
 	.metrics {
 		display: grid;
@@ -473,16 +473,16 @@
 		color: var(--muted);
 	}
 	.metrics strong {
-		color: #167554;
+		color: var(--positive);
 		font-size: 1.8rem;
 		letter-spacing: -0.045em;
 		font-variant-numeric: tabular-nums;
 	}
 	.metrics .spy strong {
-		color: #a36616;
+		color: var(--amber);
 	}
 	.metrics strong.negative {
-		color: #b4424d;
+		color: var(--red);
 	}
 	.metrics small {
 		font-size: 0.62rem;
@@ -512,7 +512,7 @@
 		background: var(--accent);
 	}
 	.legend .spy-line {
-		background: #bd8429;
+		background: var(--amber);
 	}
 	.chart {
 		display: block;
@@ -525,11 +525,11 @@
 		font-size: 11px;
 	}
 	.grid {
-		stroke: #e9edf2;
+		stroke: var(--line);
 		stroke-width: 1;
 	}
 	.zero {
-		stroke: #cbd2df;
+		stroke: var(--line-strong);
 		stroke-dasharray: 3 5;
 	}
 	.line {
@@ -540,21 +540,21 @@
 		stroke-linecap: round;
 	}
 	.spy-stroke {
-		stroke: #bd8429;
+		stroke: var(--amber);
 		stroke-dasharray: 6 4;
 	}
 	.cursor {
-		stroke: #bac3d1;
+		stroke: var(--line-strong);
 		stroke-dasharray: 3 4;
 	}
 	.account-dot {
 		fill: var(--accent);
-		stroke: white;
+		stroke: var(--paper);
 		stroke-width: 2;
 	}
 	.spy-dot {
-		fill: #bd8429;
-		stroke: white;
+		fill: var(--amber);
+		stroke: var(--paper);
 		stroke-width: 2;
 	}
 	.point-detail {
@@ -582,7 +582,7 @@
 		accent-color: var(--accent);
 	}
 	.dollar-comparison {
-		background: #f7f9fc;
+		background: var(--paper-soft);
 		padding: 0.9rem 1rem;
 		border-radius: 10px;
 		font-size: 0.75rem;
@@ -616,13 +616,13 @@
 		font-size: 0.8rem;
 		color: var(--muted);
 		line-height: 1.7;
-		background: #f8f9fc;
+		background: var(--paper-soft);
 		border-radius: 10px;
 	}
 	.retry {
 		padding: 0.45rem 0.8rem;
 		border: 1px solid var(--line);
-		background: white;
+		background: var(--paper);
 		border-radius: 7px;
 		color: var(--accent);
 	}

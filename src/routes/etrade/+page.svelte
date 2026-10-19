@@ -438,10 +438,10 @@
 	.etrade-card {
 		margin-top: 1.25rem;
 		padding: clamp(1.25rem, 3vw, 2rem);
-		border: 1px solid var(--finance-border, #d9d4ca);
+		border: 1px solid var(--line);
 		border-radius: 1.25rem;
-		background: #fffefa;
-		box-shadow: 0 18px 45px rgb(42 39 31 / 6%);
+		background: var(--paper);
+		box-shadow: var(--shadow-md);
 	}
 
 	.etrade-card h2 {
@@ -450,7 +450,7 @@
 	}
 
 	.etrade-card p {
-		color: #5e6473;
+		color: var(--muted);
 		line-height: 1.6;
 	}
 
@@ -468,8 +468,8 @@
 		flex: none;
 		padding: 0.4rem 0.7rem;
 		border-radius: 999px;
-		background: #eeeae1;
-		color: #626775;
+		background: var(--paper-soft);
+		color: var(--muted);
 		font-size: 0.75rem;
 		font-weight: 800;
 		letter-spacing: 0.04em;
@@ -478,14 +478,14 @@
 
 	.status-badge.connected,
 	.encrypted-badge {
-		background: #e6f4e8;
-		color: #27623d;
+		background: var(--positive-soft);
+		color: var(--positive);
 	}
 
 	.official-link {
 		display: inline-flex;
 		margin: 0.25rem 0 1.15rem;
-		color: #253b9a;
+		color: var(--accent-dark);
 		font-weight: 750;
 	}
 
@@ -501,7 +501,7 @@
 		display: grid;
 		gap: 0.45rem;
 		font-weight: 750;
-		color: #343947;
+		color: var(--ink-soft);
 	}
 
 	.credential-form input,
@@ -509,9 +509,10 @@
 		width: 100%;
 		box-sizing: border-box;
 		padding: 0.8rem 0.9rem;
-		border: 1px solid #c9c5ba;
+		border: 1px solid var(--line-strong);
 		border-radius: 0.7rem;
-		background: #fff;
+		color: var(--ink);
+		background: var(--paper);
 		font: inherit;
 	}
 
@@ -529,7 +530,7 @@
 		margin-top: 1rem;
 		padding: 1rem;
 		border-radius: 0.9rem;
-		background: #f6f3eb;
+		background: var(--paper-soft);
 	}
 
 	.etrade-message {
@@ -539,13 +540,13 @@
 	}
 
 	.etrade-message.error {
-		background: #fff0ed;
-		color: #8e3027;
+		background: var(--red-soft);
+		color: var(--red);
 	}
 
 	.etrade-message.success {
-		background: #eaf6ec;
-		color: #275f3b;
+		background: var(--positive-soft);
+		color: var(--positive);
 	}
 
 	.text-button,
@@ -559,12 +560,12 @@
 
 	.text-button {
 		justify-self: start;
-		color: #253b9a;
+		color: var(--accent-dark);
 	}
 
 	.danger-button {
 		padding: 0.65rem 0.75rem;
-		color: #9a3028;
+		color: var(--red);
 	}
 
 	button:disabled {
@@ -578,7 +579,7 @@
 		height: 0.8rem;
 		margin: 0.6rem 0;
 		border-radius: 999px;
-		background: #ece8df;
+		background: var(--line);
 	}
 
 	.loading-card span:nth-child(2) {

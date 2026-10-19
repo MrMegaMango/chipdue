@@ -413,7 +413,8 @@ describe('banking visual identity', () => {
 		expect(pageSource).not.toContain('var(--green');
 		expect(layoutSource).toContain('--ink: #111827');
 		expect(layoutSource).toContain('--accent: #3d5afe');
-		expect(layoutSource).toContain('background: #f1ede5');
+		expect(layoutSource).toContain('--canvas: #f1ede5');
+		expect(layoutSource).toContain('background: var(--canvas)');
 	});
 
 	it('uses the native UI font and readable secondary-text contrast', () => {

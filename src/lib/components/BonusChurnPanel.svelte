@@ -754,7 +754,7 @@
 		border-top: 1px solid var(--line);
 	}
 	.churn-row.ready {
-		background: rgba(34, 139, 94, 0.055);
+		background: color-mix(in srgb, var(--positive) 5.5%, transparent);
 	}
 	.churn-name,
 	.churn-state {
@@ -812,21 +812,21 @@
 	}
 	.churn-badge[data-status='ready'] {
 		color: var(--positive);
-		background: rgba(34, 139, 94, 0.1);
+		background: color-mix(in srgb, var(--positive) 10%, transparent);
 	}
 	.churn-badge[data-status='waiting'] {
 		color: var(--accent-dark);
-		background: rgba(61, 90, 254, 0.08);
+		background: color-mix(in srgb, var(--accent) 8%, transparent);
 	}
 	.churn-badge[data-status='needs_info'] {
-		color: #895612;
-		background: #fff2d8;
+		color: var(--amber);
+		background: var(--amber-soft);
 	}
 	.churn-row > button {
 		border: 1px solid var(--line);
 		padding: 0.5rem 0.65rem;
 		border-radius: 7px;
-		background: white;
+		background: var(--paper);
 		color: var(--accent-dark);
 		font-size: 0.65rem;
 		font-weight: 700;
@@ -858,8 +858,8 @@
 		color: var(--muted);
 	}
 	.churn-error {
-		color: #895612;
-		background: #fff2d8;
+		color: var(--amber);
+		background: var(--amber-soft);
 	}
 	.churn-dialog {
 		padding: 0;
@@ -1030,9 +1030,9 @@
 		display: grid;
 		gap: 0.35rem;
 		padding: 0.8rem;
-		border: 1px solid rgba(61, 90, 254, 0.2);
+		border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
 		border-radius: 8px;
-		background: rgba(61, 90, 254, 0.04);
+		background: color-mix(in srgb, var(--accent) 4%, transparent);
 	}
 	.churn-preview span {
 		font-size: 0.68rem;

@@ -584,7 +584,7 @@
 		padding: 1.35rem 1.45rem 1.15rem;
 		border: 1px solid var(--line);
 		border-radius: 12px;
-		background: rgba(255, 253, 249, 0.86);
+		background: color-mix(in srgb, var(--paper) 86%, transparent);
 		box-shadow: var(--shadow-sm);
 	}
 
@@ -621,10 +621,10 @@
 	.estimate-badge {
 		padding: 0.32rem 0.52rem;
 		border-radius: 999px;
-		color: #6b4c13;
+		color: var(--amber);
 		font-size: 0.59rem;
 		font-weight: 750;
-		background: #fff3d8;
+		background: var(--amber-soft);
 	}
 
 	.net-worth-metrics {
@@ -640,7 +640,7 @@
 		display: grid;
 		gap: 0.2rem;
 		padding: 0.8rem 0.9rem;
-		background: rgba(246, 243, 236, 0.64);
+		background: color-mix(in srgb, var(--paper-soft) 64%, transparent);
 	}
 
 	.net-worth-metrics > div + div {
@@ -695,8 +695,8 @@
 	}
 
 	.range-controls button[aria-pressed='true'] {
-		color: white;
-		background: var(--ink-soft);
+		color: var(--inverse-ink);
+		background: var(--inverse-surface);
 	}
 
 	.chart-wrap {
@@ -719,18 +719,18 @@
 	}
 
 	.grid-line {
-		stroke: rgba(187, 180, 168, 0.42);
+		stroke: color-mix(in srgb, var(--line-strong) 42%, transparent);
 		stroke-dasharray: 3 5;
 	}
 
 	.date-grid-line {
-		stroke: rgba(187, 180, 168, 0.22);
+		stroke: color-mix(in srgb, var(--line-strong) 22%, transparent);
 		stroke-dasharray: 3 6;
 	}
 
 	.date-axis-line,
 	.date-axis-tick {
-		stroke: rgba(131, 124, 113, 0.7);
+		stroke: color-mix(in srgb, var(--muted) 70%, transparent);
 		stroke-width: 1.25;
 	}
 
@@ -743,14 +743,14 @@
 	}
 
 	.value-dot {
-		fill: white;
+		fill: var(--paper);
 		stroke: var(--accent);
 		stroke-width: 3;
 	}
 
 	.value-dot.selected {
 		fill: var(--accent);
-		stroke: white;
+		stroke: var(--paper);
 		stroke-width: 2.5;
 	}
 
@@ -774,7 +774,7 @@
 		padding: 0.55rem 0.65rem;
 		border: 1px solid var(--line);
 		border-radius: 8px;
-		background: white;
+		background: var(--paper);
 		box-shadow: var(--shadow-md);
 		pointer-events: none;
 		transform: translate(-50%, calc(-100% - 12px));
@@ -795,7 +795,7 @@
 		margin-top: 0.9rem;
 		border: 1px solid var(--line);
 		border-radius: 10px;
-		background: rgba(246, 243, 236, 0.52);
+		background: color-mix(in srgb, var(--paper-soft) 52%, transparent);
 		overflow: hidden;
 	}
 
@@ -806,7 +806,7 @@
 		align-items: center;
 		padding: 0.8rem 0.9rem;
 		border-bottom: 1px solid var(--line);
-		background: rgba(255, 253, 249, 0.82);
+		background: color-mix(in srgb, var(--paper) 82%, transparent);
 	}
 
 	.date-breakdown header p,
@@ -871,7 +871,7 @@
 		color: var(--muted);
 		font-size: 1rem;
 		line-height: 1;
-		background: white;
+		background: var(--paper);
 		cursor: pointer;
 	}
 
@@ -919,7 +919,7 @@
 	.date-breakdown th,
 	.date-breakdown td {
 		padding: 0.58rem 0.9rem;
-		border-bottom: 1px solid rgba(214, 207, 196, 0.72);
+		border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
 		text-align: left;
 	}
 
@@ -954,17 +954,17 @@
 		color: var(--muted);
 		font-size: 0.52rem;
 		font-weight: 720;
-		background: #e9e5dc;
+		background: var(--line);
 	}
 
 	.source-pill.estimated {
-		color: #6b4c13;
-		background: #fff0cf;
+		color: var(--amber);
+		background: var(--amber-soft);
 	}
 
 	.source-pill.backfilled {
-		color: #4d5672;
-		background: #e7eafa;
+		color: var(--accent-dark);
+		background: var(--accent-soft);
 	}
 
 	.breakdown-note {
@@ -1005,7 +1005,7 @@
 	.net-worth-loading span {
 		height: 54px;
 		border-radius: 9px;
-		background: linear-gradient(90deg, #e8e2d8 25%, #f8f5ee 50%, #e8e2d8 75%);
+		background: linear-gradient(90deg, var(--line) 25%, var(--paper-soft) 50%, var(--line) 75%);
 		background-size: 200% 100%;
 		animation: shimmer 1.5s infinite;
 	}
@@ -1111,7 +1111,7 @@
 			grid-template-columns: minmax(0, 1fr) auto;
 			gap: 0.14rem 0.75rem;
 			padding: 0.58rem 0.9rem;
-			border-bottom: 1px solid rgba(214, 207, 196, 0.72);
+			border-bottom: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
 		}
 
 		.date-breakdown tbody th,

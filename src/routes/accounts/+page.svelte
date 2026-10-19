@@ -2119,7 +2119,7 @@
 		z-index: 100;
 		padding: 0.65rem 0.9rem;
 		border-radius: 0.5rem;
-		color: white;
+		color: var(--on-accent);
 		background: var(--accent-dark);
 		transform: translateY(-150%);
 	}
@@ -2304,9 +2304,9 @@
 		justify-content: space-between;
 		margin-top: 0.8rem;
 		padding: 0.65rem 0.7rem;
-		border: 1px solid rgba(61, 90, 254, 0.22);
+		border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
 		border-radius: 9px;
-		background: rgba(61, 90, 254, 0.065);
+		background: color-mix(in srgb, var(--accent) 6.5%, transparent);
 	}
 
 	.bonus-offer-callout div {
@@ -2359,7 +2359,7 @@
 		font: inherit;
 		font-size: 0.54rem;
 		font-weight: 760;
-		background: white;
+		background: var(--paper);
 		cursor: pointer;
 	}
 
@@ -2492,7 +2492,7 @@
 		padding: 0.42rem 0.58rem;
 		border: 1px solid var(--accent);
 		border-radius: 7px;
-		color: white;
+		color: var(--on-accent);
 		font: inherit;
 		font-size: 0.56rem;
 		font-weight: 760;
@@ -2508,7 +2508,7 @@
 		border-radius: 7px;
 		font-size: 0.54rem;
 		font-weight: 700;
-		background: white;
+		background: var(--paper);
 	}
 
 	.history-estimate-action button:disabled {
@@ -2709,14 +2709,14 @@
 		justify-content: space-between;
 		margin-bottom: 1rem;
 		padding: 1rem 1.15rem;
-		border: 1px solid #e8b8b1;
+		border: 1px solid color-mix(in srgb, var(--red) 35%, var(--line));
 		border-radius: 12px;
 		background: var(--red-soft);
 	}
 
 	.connection-paused {
-		border-color: #c7d1df;
-		background: #f2f5f9;
+		border-color: color-mix(in srgb, var(--blue) 25%, var(--line));
+		background: var(--blue-soft);
 	}
 
 	.connection-attention h2,
@@ -2763,7 +2763,7 @@
 	}
 
 	.account-sync-paused {
-		color: #405064;
+		color: var(--blue);
 		font-weight: 700;
 	}
 
@@ -2795,7 +2795,7 @@
 	}
 
 	.finance-toast.error {
-		border-color: #e8b8b1;
+		border-color: color-mix(in srgb, var(--red) 35%, var(--line));
 		color: var(--red);
 		background: var(--red-soft);
 	}

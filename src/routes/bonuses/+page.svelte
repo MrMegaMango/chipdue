@@ -1506,7 +1506,7 @@
 		z-index: 100;
 		padding: 0.65rem 0.9rem;
 		border-radius: 0.5rem;
-		color: white;
+		color: var(--on-accent);
 		background: var(--accent-dark);
 		transform: translateY(-150%);
 	}
@@ -1575,7 +1575,7 @@
 		padding: 0.8rem;
 		border: 1px solid var(--line);
 		border-radius: 10px;
-		background: rgba(255, 255, 255, 0.62);
+		background: color-mix(in srgb, var(--paper) 62%, transparent);
 	}
 
 	.bonus-live-metrics span,
@@ -1618,9 +1618,13 @@
 		gap: 0.75rem;
 		margin-top: 0.85rem;
 		padding: 0.9rem;
-		border: 1px solid rgba(61, 90, 254, 0.22);
+		border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
 		border-radius: 12px;
-		background: linear-gradient(145deg, rgba(61, 90, 254, 0.075), rgba(255, 253, 249, 0.82));
+		background: linear-gradient(
+			145deg,
+			color-mix(in srgb, var(--accent) 7.5%, transparent),
+			color-mix(in srgb, var(--paper) 82%, transparent)
+		);
 	}
 
 	.tracker-setup {
@@ -1630,9 +1634,9 @@
 		justify-content: space-between;
 		margin-top: 0.85rem;
 		padding: 0.8rem;
-		border: 1px solid rgba(61, 90, 254, 0.22);
+		border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
 		border-radius: 10px;
-		background: rgba(61, 90, 254, 0.06);
+		background: color-mix(in srgb, var(--accent) 6%, transparent);
 	}
 
 	.tracker-setup div {
@@ -1665,7 +1669,7 @@
 		font-size: 0.62rem;
 		font-weight: 740;
 		white-space: nowrap;
-		background: white;
+		background: var(--paper);
 		cursor: pointer;
 	}
 
@@ -1713,7 +1717,7 @@
 		padding: 0.62rem;
 		border: 1px solid var(--line);
 		border-radius: 9px;
-		background: rgba(255, 255, 255, 0.7);
+		background: color-mix(in srgb, var(--paper) 70%, transparent);
 	}
 
 	.tracker-metrics strong {
@@ -1733,11 +1737,11 @@
 		border: 0;
 		border-radius: 999px;
 		overflow: hidden;
-		background: rgba(61, 90, 254, 0.12);
+		background: color-mix(in srgb, var(--accent) 12%, transparent);
 	}
 
 	.balance-progress::-webkit-progress-bar {
-		background: rgba(61, 90, 254, 0.12);
+		background: color-mix(in srgb, var(--accent) 12%, transparent);
 	}
 
 	.balance-progress::-webkit-progress-value,
@@ -1764,12 +1768,12 @@
 		padding: 0.5rem;
 		border: 1px solid var(--line);
 		border-radius: 8px;
-		background: rgba(255, 255, 255, 0.58);
+		background: color-mix(in srgb, var(--paper) 58%, transparent);
 	}
 
 	.tier-rail > div.reached {
-		border-color: rgba(34, 139, 94, 0.35);
-		background: rgba(34, 139, 94, 0.09);
+		border-color: color-mix(in srgb, var(--positive) 35%, transparent);
+		background: color-mix(in srgb, var(--positive) 9%, transparent);
 	}
 
 	.tier-rail > div.target {
@@ -1799,7 +1803,7 @@
 	.tracker-activity li {
 		padding: 0.34rem 0.45rem;
 		border-radius: 7px;
-		background: rgba(255, 255, 255, 0.56);
+		background: color-mix(in srgb, var(--paper) 56%, transparent);
 	}
 
 	.tracker-activity li span {
@@ -1814,7 +1818,7 @@
 		color: var(--accent-dark);
 		font-size: 0.62rem;
 		font-weight: 740;
-		background: white;
+		background: var(--paper);
 		cursor: pointer;
 	}
 
@@ -1860,7 +1864,7 @@
 		padding: 0.65rem;
 		border: 1px solid color-mix(in srgb, var(--red) 35%, var(--line));
 		border-radius: 8px;
-		background: color-mix(in srgb, var(--red) 5%, white);
+		background: color-mix(in srgb, var(--red) 5%, var(--paper));
 		text-transform: none;
 	}
 

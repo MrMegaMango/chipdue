@@ -127,16 +127,16 @@
 		max-width: min(32rem, calc(100vw - 1rem));
 		margin: 0;
 		padding: 0.48rem 0.62rem;
-		border: 1px solid rgba(255, 255, 255, 0.18);
+		border: 1px solid color-mix(in srgb, var(--inverse-ink) 18%, transparent);
 		border-radius: 7px;
-		color: white;
+		color: var(--inverse-ink);
 		font-family: inherit;
 		font-size: 0.7rem;
 		font-weight: 650;
 		line-height: 1.35;
 		text-align: left;
-		background: var(--ink-soft, #1b2942);
-		box-shadow: 0 8px 24px rgba(17, 24, 39, 0.22);
+		background: var(--inverse-surface);
+		box-shadow: var(--shadow-md);
 		pointer-events: none;
 	}
 

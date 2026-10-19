@@ -124,7 +124,7 @@
 	.downgrade-timing {
 		margin-top: 12px;
 		padding-top: 12px;
-		border-top: 1px solid #dcdff7;
+		border-top: 1px solid var(--line);
 	}
 	dl {
 		display: grid;
@@ -133,32 +133,32 @@
 		margin: 0;
 	}
 	dt {
-		color: #626d82;
+		color: var(--faint);
 		font-size: 12px;
 		line-height: 1.45;
 	}
 	dd {
 		margin: 2px 0 0;
-		color: #182132;
+		color: var(--ink);
 		font-size: 14px;
 		font-weight: 750;
 	}
 	p {
 		margin: 10px 0 0;
-		color: #626d82;
+		color: var(--faint);
 		font-size: 12px;
 		line-height: 1.5;
 	}
 	dd small {
 		display: block;
 		margin-top: 3px;
-		color: #626d82;
+		color: var(--faint);
 		font-size: 11px;
 		font-weight: 500;
 	}
 	.date-help {
 		margin-top: 6px;
-		color: #626d82;
+		color: var(--faint);
 		font-size: 11px;
 		font-weight: 450;
 		line-height: 1.45;
@@ -168,25 +168,25 @@
 		margin-bottom: 4px;
 	}
 	.conflict .timing-message {
-		color: #9b3b20;
+		color: var(--red);
 	}
 	.goal {
 		font-size: 11px;
 	}
 	details {
 		margin-top: 12px;
-		border-top: 1px solid #dcdff7;
+		border-top: 1px solid var(--line);
 		padding-top: 10px;
 	}
 	summary {
-		color: #354db3;
+		color: var(--accent-dark);
 		font-size: 12px;
 		font-weight: 650;
 		cursor: pointer;
 	}
 	.context-label {
 		font-weight: 700;
-		color: #182132;
+		color: var(--ink);
 	}
 	.saved-notes {
 		white-space: pre-wrap;
@@ -195,17 +195,17 @@
 	blockquote {
 		margin: 8px 0 12px;
 		padding-left: 10px;
-		border-left: 2px solid #c8d0f3;
+		border-left: 2px solid color-mix(in srgb, var(--accent) 25%, var(--line));
 		font-size: 12px;
 		line-height: 1.5;
-		color: #465163;
+		color: var(--muted);
 	}
 	button {
 		padding: 7px 10px;
-		border: 1px solid #c8d0f3;
+		border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line));
 		border-radius: 5px;
-		color: #354db3;
-		background: #f7f8ff;
+		color: var(--accent-dark);
+		background: color-mix(in srgb, var(--accent-soft) 30%, var(--paper));
 		font: inherit;
 		font-size: 12px;
 		font-weight: 650;

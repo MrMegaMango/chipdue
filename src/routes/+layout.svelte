@@ -1,8 +1,12 @@
 <script lang="ts">
 	import { asset } from '$app/paths';
+	import { onMount } from 'svelte';
+	import { initializeTheme } from '$lib/theme.svelte';
 	import './layout.css';
 
 	let { children } = $props();
+
+	onMount(initializeTheme);
 </script>
 
 <svelte:head>
@@ -11,7 +15,6 @@
 		name="description"
 		content="A private, local-first dashboard for financial accounts, signup bonuses, brokerage performance, and credit-card deadlines."
 	/>
-	<meta name="theme-color" content="#f7f6f1" />
 	<meta name="application-name" content="ChipDue" />
 	<meta name="apple-mobile-web-app-title" content="ChipDue" />
 	<link rel="apple-touch-icon" sizes="180x180" href={asset('/apple-touch-icon.png')} />

@@ -143,18 +143,18 @@
 <style>
 	.limit-review {
 		padding: 12px 18px;
-		border: 1px solid #e4e8ee;
+		border: 1px solid var(--line);
 		border-radius: 12px;
-		background: white;
+		background: var(--paper);
 	}
 	.tracked {
-		background: #f7f9ff;
-		border-color: #dce3f8;
+		background: color-mix(in srgb, var(--accent-soft) 30%, var(--paper));
+		border-color: color-mix(in srgb, var(--accent) 20%, var(--line));
 		padding: 18px;
 	}
 	.due {
-		border-color: #aad6be;
-		background: #f5fbf7;
+		border-color: color-mix(in srgb, var(--positive) 35%, var(--line));
+		background: color-mix(in srgb, var(--positive-soft) 30%, var(--paper));
 	}
 	header {
 		display: flex;
@@ -166,28 +166,28 @@
 	h4 {
 		margin: 0 0 7px;
 		font-size: 12px;
-		color: #626d82;
+		color: var(--faint);
 		font-weight: 600;
 	}
 	strong {
 		font-size: 20px;
-		color: #182132;
+		color: var(--ink);
 	}
 	.countdown {
 		border-radius: 20px;
 		padding: 5px 9px;
-		background: #e8edfc;
-		color: #354db3;
+		background: var(--accent-soft);
+		color: var(--accent-dark);
 		font-size: 11px;
 		font-weight: 650;
 	}
 	.due .countdown {
-		background: #e1f2e7;
-		color: #246c47;
+		background: var(--positive-soft);
+		color: var(--positive);
 	}
 	p {
 		margin: 8px 0 0;
-		color: #626d82;
+		color: var(--faint);
 		font-size: 12px;
 		line-height: 1.5;
 	}
@@ -198,7 +198,7 @@
 		margin: 12px 0;
 	}
 	summary {
-		color: #354db3;
+		color: var(--accent-dark);
 		cursor: pointer;
 		font-size: 12px;
 	}
@@ -216,11 +216,11 @@
 		gap: 6px;
 		font-size: 12px;
 		font-weight: 600;
-		color: #354156;
+		color: var(--ink-soft);
 	}
 	small {
 		font-weight: 400;
-		color: #626d82;
+		color: var(--faint);
 	}
 	input,
 	select,
@@ -228,22 +228,22 @@
 		box-sizing: border-box;
 		width: 100%;
 		min-width: 0;
-		border: 1px solid #cbd3df;
+		border: 1px solid var(--line-strong);
 		border-radius: 6px;
 		padding: 9px;
 		font: inherit;
-		background: white;
-		color: #182132;
+		background: var(--paper);
+		color: var(--ink);
 	}
 	textarea {
 		resize: vertical;
 	}
 	button {
 		padding: 7px 10px;
-		border: 1px solid #c8d0f3;
+		border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--line));
 		border-radius: 6px;
-		color: #354db3;
-		background: white;
+		color: var(--accent-dark);
+		background: var(--paper);
 		font: inherit;
 		font-size: 12px;
 		font-weight: 600;
@@ -255,7 +255,7 @@
 	}
 	button:focus-visible,
 	summary:focus-visible {
-		outline: 2px solid #354db3;
+		outline: 2px solid var(--focus-ring);
 		outline-offset: 3px;
 	}
 	.edit {
@@ -267,9 +267,9 @@
 		margin-top: 12px;
 	}
 	.primary {
-		background: #354db3;
-		color: white;
-		border-color: #354db3;
+		background: var(--accent-dark);
+		color: var(--on-accent);
+		border-color: var(--accent-dark);
 	}
 	.actions {
 		display: flex;
@@ -277,6 +277,6 @@
 		flex-wrap: wrap;
 	}
 	.error {
-		color: #b43b3b;
+		color: var(--red);
 	}
 </style>

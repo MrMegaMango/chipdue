@@ -536,7 +536,11 @@
 		padding: 0.9rem;
 		border: 1px solid var(--line);
 		border-radius: 11px;
-		background: linear-gradient(180deg, rgba(233, 237, 255, 0.48), rgba(255, 253, 249, 0.65));
+		background: linear-gradient(
+			180deg,
+			color-mix(in srgb, var(--accent-soft) 48%, transparent),
+			color-mix(in srgb, var(--paper) 65%, transparent)
+		);
 	}
 
 	.history-heading {
@@ -567,7 +571,7 @@
 		color: var(--accent-dark);
 		font-size: 0.5rem;
 		font-weight: 760;
-		background: color-mix(in srgb, var(--accent) 8%, white);
+		background: color-mix(in srgb, var(--accent) 8%, var(--paper));
 	}
 
 	.history-metrics {
@@ -585,7 +589,7 @@
 		display: grid;
 		min-width: 0;
 		padding: 0.58rem 0.65rem;
-		background: rgba(255, 253, 249, 0.92);
+		background: color-mix(in srgb, var(--paper) 92%, transparent);
 	}
 
 	.history-metrics span {
@@ -690,7 +694,7 @@
 	.range-controls button:hover,
 	.range-controls button[aria-pressed='true'] {
 		color: var(--accent-dark);
-		background: white;
+		background: var(--paper);
 		box-shadow: 0 0 0 1px var(--line);
 	}
 
@@ -737,7 +741,7 @@
 	}
 
 	.value-dot {
-		fill: white;
+		fill: var(--paper);
 		stroke: var(--accent);
 		stroke-width: 3;
 		vector-effect: non-scaling-stroke;
@@ -768,7 +772,7 @@
 	}
 
 	.contributions-dot {
-		fill: white;
+		fill: var(--paper);
 		stroke: var(--amber);
 		stroke-width: 2.5;
 		vector-effect: non-scaling-stroke;
@@ -780,13 +784,13 @@
 		z-index: 2;
 		min-width: 104px;
 		padding: 0.45rem 0.55rem;
-		border: 1px solid var(--ink-soft);
+		border: 1px solid var(--line);
 		border-radius: 7px;
-		color: white;
+		color: var(--inverse-ink);
 		font-size: 0.57rem;
 		line-height: 1.4;
-		background: var(--ink-soft);
-		box-shadow: 0 8px 20px rgba(17, 24, 39, 0.18);
+		background: var(--inverse-surface);
+		box-shadow: var(--shadow-md);
 		pointer-events: none;
 		transform: translate(-50%, calc(-100% - 9px));
 	}
@@ -825,7 +829,7 @@
 		padding: 0.75rem;
 		border: 1px dashed var(--line-strong);
 		border-radius: 8px;
-		background: rgba(255, 255, 255, 0.52);
+		background: color-mix(in srgb, var(--paper) 52%, transparent);
 	}
 
 	.history-empty svg {

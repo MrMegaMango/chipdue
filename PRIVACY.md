@@ -73,7 +73,7 @@ The ChipDue application contains no analytics, advertising, telemetry, crash-rep
 
 ## Logs, caches, and browser storage
 
-ChipDue does not intentionally log request or response bodies, cookies, tokens, account identifiers, card fields, database parameters, or raw provider errors. Financial data remains in browser memory only; the application does not use `localStorage`, `sessionStorage`, or IndexedDB for it.
+ChipDue does not intentionally log request or response bodies, cookies, tokens, account identifiers, card fields, database parameters, or raw provider errors. Financial data remains in browser memory only; the application does not use `localStorage`, `sessionStorage`, or IndexedDB for it. The only localStorage value is an optional light or dark appearance preference, stored on this browser and never sent to the server. System appearance is the default.
 
 Dashboard and API responses use `Cache-Control: no-store`. Local mode rejects non-loopback hosts by default. Cloud mode rejects any host not on its exact allowlist, rejects non-HTTPS forwarded requests, requires same-origin changes, and does not enable cross-origin API access.
 

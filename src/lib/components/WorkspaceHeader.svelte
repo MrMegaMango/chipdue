@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { asset, resolve } from '$app/paths';
+	import ThemePicker from './ThemePicker.svelte';
 
 	type WorkspaceSection = 'overview' | 'cards' | 'accounts' | 'bonuses' | 'settings';
 	type Props = {
@@ -43,6 +44,7 @@
 	</nav>
 
 	<div class="header-controls">
+		<ThemePicker />
 		<a
 			class="settings-link"
 			href={resolve('/settings')}
@@ -72,7 +74,7 @@
 		gap: 1.5rem;
 		align-items: start;
 		min-height: 78px;
-		border-bottom: 1px solid rgba(187, 180, 168, 0.55);
+		border-bottom: 1px solid var(--line);
 	}
 
 	.workspace-brand {
@@ -125,7 +127,7 @@
 		margin: 15px 0;
 		border: 1px solid var(--line);
 		border-radius: 10px;
-		background: rgba(255, 253, 249, 0.82);
+		background: var(--paper);
 		box-shadow: var(--shadow-sm);
 	}
 
@@ -187,7 +189,7 @@
 
 	.settings-link {
 		display: inline-flex;
-		min-height: 34px;
+		min-height: 44px;
 		gap: 0.4rem;
 		align-items: center;
 		padding: 0.4rem 0.6rem;
@@ -203,7 +205,7 @@
 	.settings-link[aria-current='page'] {
 		border-color: var(--line);
 		color: var(--ink);
-		background: rgba(255, 255, 255, 0.65);
+		background: var(--paper);
 	}
 
 	.settings-link svg {
@@ -217,21 +219,21 @@
 	}
 
 	button {
-		min-height: 34px;
+		min-height: 44px;
 		padding: 0.4rem 0.65rem;
 		border: 1px solid var(--line-strong);
 		border-radius: 8px;
 		color: var(--muted);
 		font-size: 0.68rem;
 		font-weight: 700;
-		background: rgba(255, 255, 255, 0.65);
+		background: var(--paper);
 		cursor: pointer;
 	}
 
 	button:hover:not(:disabled) {
 		color: var(--red);
-		border-color: #d7aaa6;
-		background: white;
+		border-color: var(--red);
+		background: var(--paper);
 	}
 
 	button:disabled {
@@ -239,7 +241,7 @@
 		opacity: 0.6;
 	}
 
-	@media (max-width: 820px) {
+	@media (max-width: 1020px) {
 		.workspace-header {
 			grid-template-columns: 1fr auto;
 			gap: 0 1rem;
@@ -254,6 +256,19 @@
 	}
 
 	@media (max-width: 480px) {
+		.workspace-header {
+			column-gap: 0.5rem;
+		}
+
+		.header-controls {
+			gap: 0.25rem;
+		}
+
+		.settings-link {
+			min-width: 44px;
+			justify-content: center;
+		}
+
 		.brand-copy small {
 			display: none;
 		}

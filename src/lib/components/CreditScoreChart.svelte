@@ -237,7 +237,7 @@
 		overflow: hidden;
 		border: 1px solid var(--line);
 		border-radius: 10px;
-		background: #fff;
+		background: var(--paper);
 	}
 
 	svg {
@@ -248,27 +248,27 @@
 	}
 
 	.score-band.exceptional {
-		fill: rgba(8, 127, 117, 0.12);
+		fill: color-mix(in srgb, var(--positive) 12%, transparent);
 	}
 
 	.score-band.very-good {
-		fill: rgba(8, 127, 117, 0.075);
+		fill: color-mix(in srgb, var(--positive) 7.5%, transparent);
 	}
 
 	.score-band.good {
-		fill: rgba(61, 90, 254, 0.055);
+		fill: color-mix(in srgb, var(--accent) 5.5%, transparent);
 	}
 
 	.score-band.fair {
-		fill: rgba(155, 90, 22, 0.07);
+		fill: color-mix(in srgb, var(--amber) 7%, transparent);
 	}
 
 	.score-band.poor {
-		fill: rgba(182, 63, 84, 0.065);
+		fill: color-mix(in srgb, var(--red) 6.5%, transparent);
 	}
 
 	line {
-		stroke: rgba(70, 81, 99, 0.18);
+		stroke: color-mix(in srgb, var(--muted) 18%, transparent);
 		stroke-width: 1;
 	}
 
@@ -291,26 +291,26 @@
 	}
 
 	.score-point {
-		fill: white;
+		fill: var(--paper);
 		stroke: var(--bureau-color);
 		stroke-width: 3;
 		transition: r 120ms ease;
 	}
 
 	.experian {
-		--bureau-color: #3d5afe;
+		--bureau-color: var(--accent);
 	}
 
 	.equifax {
-		--bureau-color: #087f75;
+		--bureau-color: var(--positive);
 	}
 
 	.transunion {
-		--bureau-color: #9b5a16;
+		--bureau-color: var(--amber);
 	}
 
 	.other {
-		--bureau-color: #7c4d9f;
+		--bureau-color: color-mix(in srgb, var(--accent) 50%, var(--red));
 	}
 
 	.score-tooltip {
@@ -323,7 +323,7 @@
 		padding: 0.5rem 0.65rem;
 		border: 1px solid var(--line);
 		border-radius: 8px;
-		background: rgba(255, 253, 249, 0.94);
+		background: color-mix(in srgb, var(--paper) 94%, transparent);
 		box-shadow: var(--shadow-sm);
 		pointer-events: none;
 	}
