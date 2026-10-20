@@ -1180,8 +1180,24 @@ export async function listFinancialAccountTransactions(
 		throw new AppError('INVALID_REQUEST', 'The request is invalid.', 400);
 	}
 	const row = await getRow(accountId);
-	const payload = row ? decodeRecord(row) : null;
-	if (!row || payload?.recordType !== 'account') {
+	if (!row) throw new AppError('ACCOUNT_NOT_FOUND', 'Account not found.', 404);
+	return financialAccountTransactionsFromRow(row, limit);
+}
+
+export function financialAccountTransactionsFromRow(
+	row: PrivateRecordRow,
+	limit = 500
+): {
+	transactions: FinancialAccountTransaction[];
+	status: TransactionHistoryStatus;
+	lastSyncedAt: string | null;
+} {
+	if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10_000) {
+		throw new AppError('INVALID_REQUEST', 'The request is invalid.', 400);
+	}
+	const accountId = row.id;
+	const payload = decodeRecord(row);
+	if (payload?.recordType !== 'account') {
 		throw new AppError('ACCOUNT_NOT_FOUND', 'Account not found.', 404);
 	}
 	if (row.source === 'manual') {

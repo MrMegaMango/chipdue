@@ -6,7 +6,13 @@ import type { TransactionHistoryStatus } from '$lib/types';
 import { GET } from '../../routes/api/bonuses/tracking/+server';
 import { listAutomaticBonusTracking } from './bonus-churn-tracking';
 import { listCards, replaceConnectedCards, type StoredFinancialTransaction } from './cards';
-import { resetCryptoStateForTests } from './crypto';
+import {
+	resetCloudDatabaseForTests,
+	setCloudDatabaseAdapterForTests,
+	type CloudDatabaseAdapter,
+	type CloudRow
+} from './cloud-database';
+import { decryptJson, encryptJson, getMasterKey, resetCryptoStateForTests } from './crypto';
 import { closeDatabaseForTests, getDatabase } from './database';
 import * as financialRecords from './financial-records';
 import {
@@ -19,8 +25,9 @@ import {
 	type ConnectedFinancialAccountSnapshot
 } from './financial-records';
 import { savePlaidItem } from './plaid-store';
+import type { PrivateRecordRow } from './record-rows';
 import { createBonusSchema, type CreateBonusData } from './schemas';
-import { runAsTenant } from './tenant';
+import { runAsTenant, tenantReference } from './tenant';
 
 const FIRST_TENANT = '10000000-0000-4000-8000-000000000001';
 const SECOND_TENANT = '20000000-0000-4000-8000-000000000002';
@@ -179,6 +186,53 @@ async function getTracking() {
 	return (await GET({ request, url: new URL(request.url) } as never)) as Response;
 }
 
+function cloudSnapshot() {
+	const rows = (getDatabase().prepare('SELECT * FROM cards').all() as PrivateRecordRow[]).map(
+		(row) => ({
+			...row,
+			tenant_ref: decryptJson<{ tenantRef: string }>(row.payload_enc, `card:${row.id}`).tenantRef
+		})
+	);
+	const masterKey = getMasterKey().toString('base64url');
+	vi.stubEnv('CARDDUE_MODE', 'cloud');
+	vi.stubEnv(
+		'DATABASE_URL',
+		[
+			'postgresql://carddue_runtime:synthetic-password',
+			'ep-chipdue-test.us-west-2.aws.neon.tech/carddue?sslmode=require'
+		].join('@')
+	);
+	vi.stubEnv('CARDDUE_MASTER_KEY', masterKey);
+	vi.stubEnv('CARDDUE_AUTH_MODE', 'password');
+	vi.stubEnv(
+		'CARDDUE_OWNER_PASSWORD_HASH',
+		`scrypt$16384$8$1$${Buffer.alloc(16, 2).toString('base64url')}$${Buffer.alloc(32, 3).toString('base64url')}`
+	);
+	vi.stubEnv('CARDDUE_ALLOWED_HOSTS', 'cards.example.test');
+	vi.stubEnv('CARDDUE_GOOGLE_CLIENT_ID', undefined);
+	vi.stubEnv('CARDDUE_GOOGLE_CLIENT_SECRET', undefined);
+	vi.stubEnv('CARDDUE_GOOGLE_BOOTSTRAP_HASH', undefined);
+	vi.stubEnv('CARDDUE_SESSION_TTL_HOURS', undefined);
+	const reads: Array<{ text: string; params: unknown[] }> = [];
+	const adapter: CloudDatabaseAdapter = {
+		async query<T extends CloudRow>(text: string, params: unknown[] = []): Promise<T[]> {
+			if (!text.includes('SELECT') || !text.includes('FROM public.carddue_cards')) {
+				throw new Error('Tracking must only read stored records.');
+			}
+			reads.push({ text, params });
+			const [tenantRef, id] = params;
+			return rows
+				.filter((row) => row.tenant_ref === tenantRef && (id === undefined || row.id === id))
+				.map((row) => ({ ...row })) as unknown as T[];
+		},
+		async transaction(): Promise<CloudRow[][]> {
+			throw new Error('Tracking must not write stored records.');
+		}
+	};
+	setCloudDatabaseAdapterForTests(adapter);
+	return { rows, reads };
+}
+
 describe.sequential('automatic bonus tracking from encrypted stored history', () => {
 	let temporaryDirectory: string;
 	let network: ReturnType<typeof vi.fn>;
@@ -191,6 +245,7 @@ describe.sequential('automatic bonus tracking from encrypted stored history', ()
 		vi.stubEnv('DATABASE_URL', '');
 		vi.stubEnv('VERCEL', '');
 		closeDatabaseForTests();
+		resetCloudDatabaseForTests();
 		resetCryptoStateForTests();
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date(NOW));
@@ -206,6 +261,7 @@ describe.sequential('automatic bonus tracking from encrypted stored history', ()
 		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
 		closeDatabaseForTests();
+		resetCloudDatabaseForTests();
 		resetCryptoStateForTests();
 		vi.unstubAllEnvs();
 		rmSync(temporaryDirectory, { recursive: true, force: true });
@@ -357,11 +413,11 @@ describe.sequential('automatic bonus tracking from encrypted stored history', ()
 		const healthy = await connectedBusiness('healthy', [payout()]);
 		const unavailableBonus = await wellsBonus(unavailable.accountId);
 		const healthyBonus = await wellsBonus(healthy.accountId);
-		const readHistory = financialRecords.listFinancialAccountTransactions;
-		vi.spyOn(financialRecords, 'listFinancialAccountTransactions').mockImplementation(
-			async (accountId, limit) => {
-				if (accountId === unavailable.accountId) throw new Error('Synthetic history unavailable');
-				return readHistory(accountId, limit);
+		const readHistory = financialRecords.financialAccountTransactionsFromRow;
+		vi.spyOn(financialRecords, 'financialAccountTransactionsFromRow').mockImplementation(
+			(row, limit) => {
+				if (row.id === unavailable.accountId) throw new Error('Synthetic history unavailable');
+				return readHistory(row, limit);
 			}
 		);
 
@@ -397,7 +453,7 @@ describe.sequential('automatic bonus tracking from encrypted stored history', ()
 					openedDate: '2026-07-01'
 				})
 			);
-			const historySpy = vi.spyOn(financialRecords, 'listFinancialAccountTransactions');
+			const historySpy = vi.spyOn(financialRecords, 'financialAccountTransactionsFromRow');
 			const response = await getTracking();
 			const body = await response.json();
 			expect(response.status).toBe(200);
@@ -412,7 +468,7 @@ describe.sequential('automatic bonus tracking from encrypted stored history', ()
 				});
 			}
 			expect(body.tracking).not.toHaveProperty(foreign.bonusId);
-			expect(historySpy.mock.calls.map(([id]) => id)).not.toContain(foreign.accountId);
+			expect(historySpy.mock.calls.map(([row]) => row.id)).not.toContain(foreign.accountId);
 		});
 		await runAsTenant(EMPTY_TENANT, async () => {
 			expect(await listAutomaticBonusTracking()).toEqual({});
@@ -439,5 +495,101 @@ describe.sequential('automatic bonus tracking from encrypted stored history', ()
 			statusLabel: 'Offer-specific terms'
 		});
 		expect(await getBonus(bonus.id)).toEqual(bonus);
+	});
+
+	it('uses one cloud record read for both bank and card payouts, including full stored history', async () => {
+		await runAsTenant(FIRST_TENANT, async () => {
+			const { accountId } = await connectedBusiness('cloud-bank', [
+				payout(),
+				...Array.from({ length: 501 }, (_, index) => ordinaryExpense(index))
+			]);
+			const bankBonus = await wellsBonus(accountId);
+			const card = await connectedUpgradeCard('cloud-card');
+			const cardBonus = await createBonus(
+				createBonusSchema.parse({
+					cardId: card.id,
+					name: 'Synthetic Blue Cash Preferred upgrade bonus',
+					institution: 'American Express',
+					rewardCents: 15_000,
+					openedDate: '2026-07-01'
+				})
+			);
+			const { reads } = cloudSnapshot();
+
+			const response = await getTracking();
+			expect(response.status).toBe(200);
+			expect(await response.json()).toMatchObject({
+				tracking: {
+					[bankBonus.id]: { paidDate: '2026-08-01', dateSources: { paidDate: 'transaction' } },
+					[cardBonus.id]: { paidDate: '2026-08-20', dateSources: { paidDate: 'transaction' } }
+				}
+			});
+			expect(reads).toHaveLength(1);
+			expect(reads[0].text).toContain('WHERE tenant_ref = $1');
+			expect(reads[0].params).toEqual([tenantReference()]);
+		});
+	});
+
+	it('keeps simultaneous cloud snapshots and linked payouts inside their owning tenant', async () => {
+		const foreign = await runAsTenant(SECOND_TENANT, async () => {
+			const { accountId } = await connectedBusiness('cloud-second', [
+				payout({ date: '2026-08-09' })
+			]);
+			return { accountId, bonus: await wellsBonus(accountId) };
+		});
+		const own = await runAsTenant(FIRST_TENANT, async () => {
+			const { accountId } = await connectedBusiness('cloud-first', [payout()]);
+			return {
+				bonus: await wellsBonus(accountId),
+				foreignLink: await wellsBonus(foreign.accountId)
+			};
+		});
+		const { reads } = cloudSnapshot();
+
+		const [first, second] = await Promise.all([
+			runAsTenant(FIRST_TENANT, () => listAutomaticBonusTracking()),
+			runAsTenant(SECOND_TENANT, () => listAutomaticBonusTracking())
+		]);
+		expect(Object.keys(first).sort()).toEqual([own.bonus.id, own.foreignLink.id].sort());
+		expect(first[own.bonus.id].paidDate).toBe('2026-08-01');
+		expect(first[own.foreignLink.id]).toMatchObject({
+			paidDate: null,
+			dateSources: { paidDate: null }
+		});
+		expect(Object.keys(second)).toEqual([foreign.bonus.id]);
+		expect(second[foreign.bonus.id].paidDate).toBe('2026-08-09');
+		expect(reads).toHaveLength(2);
+		expect(reads.map((read) => read.params)).toEqual(
+			expect.arrayContaining([[tenantReference(FIRST_TENANT)], [tenantReference(SECOND_TENANT)]])
+		);
+	});
+
+	it('reads a fresh cloud snapshot on the next request after a stored payout changes', async () => {
+		await runAsTenant(FIRST_TENANT, async () => {
+			const { accountId } = await connectedBusiness('cloud-fresh', [payout({ pending: true })]);
+			const bonus = await wellsBonus(accountId);
+			const { rows, reads } = cloudSnapshot();
+			const before = await listAutomaticBonusTracking();
+			expect(before[bonus.id].paidDate).toBeNull();
+			expect(reads).toHaveLength(1);
+
+			const accountRow = rows.find((row) => row.id === accountId)!;
+			const payload = decryptJson<{
+				transactionHistory: { transactions: StoredFinancialTransaction[] };
+			}>(accountRow.payload_enc, `card:${accountId}`);
+			payload.transactionHistory.transactions = [payout({ date: '2026-08-02' })];
+			accountRow.payload_enc = encryptJson(payload, `card:${accountId}`);
+			accountRow.last_synced_at = '2026-09-13T19:05:00.000Z';
+			vi.setSystemTime(new Date('2026-09-13T19:05:00.000Z'));
+			const after = await listAutomaticBonusTracking();
+
+			expect(after[bonus.id]).toMatchObject({
+				paidDate: '2026-08-02',
+				dateSources: { paidDate: 'transaction' },
+				checkedAt: '2026-09-13T19:05:00.000Z'
+			});
+			expect(reads).toHaveLength(2);
+			expect(reads.every((read) => read.params.length === 1)).toBe(true);
+		});
 	});
 });

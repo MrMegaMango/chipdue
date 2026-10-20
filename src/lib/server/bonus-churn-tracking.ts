@@ -3,12 +3,13 @@ import {
 	type BonusChurnActivity,
 	type BonusChurnAutomationResult
 } from '$lib/bonus-churn-automatic';
-import { listCards, listCardTransactions } from './cards';
+import { cardsFromRows, cardTransactionsFromRow } from './cards';
 import {
-	listBonuses,
-	listFinancialAccounts,
-	listFinancialAccountTransactions
+	bonusesFromRows,
+	financialAccountsFromRows,
+	financialAccountTransactionsFromRow
 } from './financial-records';
+import { listRecordRows } from './record-rows';
 
 // Read the stored history, not the paginated activity preview. Provider syncs already
 // maintain this data; viewing or polling tracking must not request a bank refresh.
@@ -17,11 +18,11 @@ const HISTORY_LIMIT = 10_000;
 export async function listAutomaticBonusTracking(): Promise<
 	Record<string, BonusChurnAutomationResult>
 > {
-	const [bonuses, accounts, cards] = await Promise.all([
-		listBonuses(),
-		listFinancialAccounts(),
-		listCards()
-	]);
+	const rows = await listRecordRows();
+	const bonuses = bonusesFromRows(rows);
+	const accounts = financialAccountsFromRows(rows);
+	const cards = cardsFromRows(rows);
+	const rowsById = new Map(rows.map((row) => [row.id, row]));
 	const accountsById = new Map(accounts.map((account) => [account.id, account]));
 	const cardsById = new Map(cards.map((card) => [card.id, card]));
 	type History = Pick<BonusChurnActivity, 'transactions' | 'activityState' | 'lastSyncedAt'>;
@@ -44,9 +45,10 @@ export async function listAutomaticBonusTracking(): Promise<
 				if (!pending) {
 					pending = (async (): Promise<History> => {
 						try {
+							const row = rowsById.get(linked.id)!;
 							const result = account
-								? await listFinancialAccountTransactions(account.id, HISTORY_LIMIT)
-								: await listCardTransactions(linked.id, HISTORY_LIMIT);
+								? financialAccountTransactionsFromRow(row, HISTORY_LIMIT)
+								: cardTransactionsFromRow(row, HISTORY_LIMIT);
 							return {
 								transactions: result.transactions,
 								activityState:
