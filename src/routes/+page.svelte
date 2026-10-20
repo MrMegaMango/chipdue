@@ -301,7 +301,12 @@
 	import { financialProviderName } from '$lib/financial-data';
 	import type { DashboardResponse } from '$lib/dashboard';
 	import { createDashboardLoader } from '$lib/dashboard-loader';
-	import { clearPrivateApiCache, reusePrivateApiGet } from '$lib/private-api-cache';
+	import {
+		clearPrivateApiCache,
+		PrivateApiError,
+		reusePrivateApiGet,
+		revalidatePrivateApiGet
+	} from '$lib/private-api-cache';
 	import type {
 		AccountBonus,
 		FinancialAccount,
@@ -333,7 +338,7 @@
 	};
 	type RequestOptions = {
 		handleUnauthorized?: boolean;
-		memoryCache?: 'reuse' | 'bypass';
+		memoryCache?: 'reuse' | 'bypass' | 'revalidate';
 		privateEpoch?: number;
 	};
 
@@ -842,9 +847,10 @@
 	): Promise<T> {
 		const requestEpoch = options.privateEpoch ?? privateStateEpoch;
 		const method = (init.method ?? 'GET').toUpperCase();
-		const load = async (): Promise<T> => {
+		const loadResponse = async (etag: string | null = null): Promise<Response> => {
 			const headers = new Headers(init.headers);
 			headers.set('Accept', 'application/json');
+			if (etag) headers.set('If-None-Match', etag);
 			if (init.body && !headers.has('Content-Type'))
 				headers.set('Content-Type', 'application/json');
 
@@ -855,15 +861,8 @@
 				cache: 'no-store'
 			});
 
-			const payload = await response.json().catch(() => null);
-			if (
-				response.status === 401 &&
-				options.handleUnauthorized !== false &&
-				isPrivateEpochCurrent(requestEpoch)
-			) {
-				lockCloudSession('Your session expired. Sign in to continue.');
-			}
-			if (!response.ok) {
+			if (!response.ok && response.status !== 304) {
+				const payload = await response.json().catch(() => null);
 				const detail =
 					typeof payload?.error === 'string'
 						? payload.error
@@ -872,17 +871,32 @@
 							: typeof payload?.message === 'string'
 								? payload.message
 								: `Request failed (${response.status})`;
-				throw new Error(detail);
+				throw new PrivateApiError(response.status, detail);
 			}
-			return payload as T;
+			return response;
 		};
+		const load = async (): Promise<T> => (await loadResponse()).json().catch(() => null);
 
-		const payload =
-			method === 'GET' && options.memoryCache !== 'bypass'
-				? await reusePrivateApiGet(url, load)
-				: await load();
-		if (method !== 'GET') clearPrivateApiCache();
-		return payload;
+		try {
+			const payload =
+				method === 'GET' && options.memoryCache === 'revalidate'
+					? await revalidatePrivateApiGet<T>(url, loadResponse)
+					: method === 'GET' && options.memoryCache !== 'bypass'
+						? await reusePrivateApiGet(url, load)
+						: await load();
+			if (method !== 'GET') clearPrivateApiCache();
+			return payload;
+		} catch (error) {
+			if (
+				error instanceof PrivateApiError &&
+				error.status === 401 &&
+				options.handleUnauthorized !== false &&
+				isPrivateEpochCurrent(requestEpoch)
+			) {
+				lockCloudSession('Your session expired. Sign in to continue.');
+			}
+			throw error;
+		}
 	}
 
 	async function initializeAuth(): Promise<void> {
@@ -1325,7 +1339,7 @@
 		try {
 			const response = await requestJson<{
 				tracking: Record<string, BonusChurnAutomationResult>;
-			}>(resolve('/api/bonuses/tracking'), {}, { memoryCache: 'bypass', privateEpoch: epoch });
+			}>(resolve('/api/bonuses/tracking'), {}, { memoryCache: 'revalidate', privateEpoch: epoch });
 			if (!pageMounted || !isPrivateEpochCurrent(epoch) || workspaceBonuses !== bonuses) return;
 			workspaceBonusTracking = response.tracking;
 		} catch {

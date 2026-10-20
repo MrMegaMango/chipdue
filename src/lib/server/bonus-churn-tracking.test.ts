@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -181,8 +182,10 @@ function persistedState() {
 	};
 }
 
-async function getTracking() {
-	const request = new Request('http://localhost/api/bonuses/tracking');
+async function getTracking(etag?: string) {
+	const request = new Request('http://localhost/api/bonuses/tracking', {
+		headers: etag ? { 'if-none-match': etag } : {}
+	});
 	return (await GET({ request, url: new URL(request.url) } as never)) as Response;
 }
 
@@ -190,7 +193,8 @@ function cloudSnapshot() {
 	const rows = (getDatabase().prepare('SELECT * FROM cards').all() as PrivateRecordRow[]).map(
 		(row) => ({
 			...row,
-			tenant_ref: decryptJson<{ tenantRef: string }>(row.payload_enc, `card:${row.id}`).tenantRef
+			tenant_ref: decryptJson<{ tenantRef: string }>(row.payload_enc, `card:${row.id}`).tenantRef,
+			xmin: '1'
 		})
 	);
 	const masterKey = getMasterKey().toString('base64url');
@@ -221,9 +225,21 @@ function cloudSnapshot() {
 			}
 			reads.push({ text, params });
 			const [tenantRef, id] = params;
-			return rows
-				.filter((row) => row.tenant_ref === tenantRef && (id === undefined || row.id === id))
-				.map((row) => ({ ...row })) as unknown as T[];
+			const selected = rows.filter(
+				(row) => row.tenant_ref === tenantRef && (id === undefined || row.id === id)
+			);
+			if (text.includes('AS revision')) {
+				const revision = createHash('md5')
+					.update(
+						selected
+							.toSorted((left, right) => left.id.localeCompare(right.id))
+							.map((row) => `${row.id}:${row.updated_at}:${row.xmin}`)
+							.join(',')
+					)
+					.digest('hex');
+				return [{ revision }] as unknown as T[];
+			}
+			return selected.map((row) => ({ ...row })) as unknown as T[];
 		},
 		async transaction(): Promise<CloudRow[][]> {
 			throw new Error('Tracking must not write stored records.');
@@ -497,7 +513,7 @@ describe.sequential('automatic bonus tracking from encrypted stored history', ()
 		expect(await getBonus(bonus.id)).toEqual(bonus);
 	});
 
-	it('uses one cloud record read for both bank and card payouts, including full stored history', async () => {
+	it('uses one cloud payload read for both bank and card payouts, including full stored history', async () => {
 		await runAsTenant(FIRST_TENANT, async () => {
 			const { accountId } = await connectedBusiness('cloud-bank', [
 				payout(),
@@ -524,9 +540,10 @@ describe.sequential('automatic bonus tracking from encrypted stored history', ()
 					[cardBonus.id]: { paidDate: '2026-08-20', dateSources: { paidDate: 'transaction' } }
 				}
 			});
-			expect(reads).toHaveLength(1);
-			expect(reads[0].text).toContain('WHERE tenant_ref = $1');
-			expect(reads[0].params).toEqual([tenantReference()]);
+			const payloadReads = reads.filter((read) => read.text.includes('payload_enc'));
+			expect(payloadReads).toHaveLength(1);
+			expect(payloadReads[0].text).toContain('WHERE tenant_ref = $1');
+			expect(payloadReads[0].params).toEqual([tenantReference()]);
 		});
 	});
 
@@ -590,6 +607,123 @@ describe.sequential('automatic bonus tracking from encrypted stored history', ()
 			});
 			expect(reads).toHaveLength(2);
 			expect(reads.every((read) => read.params.length === 1)).toBe(true);
+		});
+	});
+
+	it('returns a private 304 from only the compact cloud revision when stored tracking is unchanged', async () => {
+		await runAsTenant(FIRST_TENANT, async () => {
+			const { accountId } = await connectedBusiness('cloud-conditional', [payout()]);
+			await wellsBonus(accountId);
+			const { reads } = cloudSnapshot();
+			const first = await getTracking();
+			expect(first.status).toBe(200);
+			const etag = first.headers.get('etag')!;
+			expect(etag).toMatch(/^W\/"[A-Za-z0-9_-]{43}"$/);
+			expect(reads[0].text).toContain('AS revision');
+			expect(reads[1].text).toContain('payload_enc');
+			reads.length = 0;
+
+			const unchanged = await getTracking(`"unrelated", ${etag}`);
+			expect(unchanged.status).toBe(304);
+			expect(await unchanged.text()).toBe('');
+			expect(unchanged.headers.get('etag')).toBe(etag);
+			expect(unchanged.headers.get('cache-control')).toContain('no-store');
+			expect(unchanged.headers.get('pragma')).toBe('no-cache');
+			expect(unchanged.headers.get('x-content-type-options')).toBe('nosniff');
+			expect(reads).toHaveLength(1);
+			expect(reads[0].text).toContain('md5(COALESCE(string_agg(');
+			expect(reads[0].text).toContain('ORDER BY id');
+			expect(reads[0].text).not.toContain('payload_enc');
+			expect(reads[0].params).toEqual([tenantReference()]);
+		});
+	});
+
+	it('invalidates cloud tracking for same-millisecond writes and record deletion', async () => {
+		await runAsTenant(FIRST_TENANT, async () => {
+			const { accountId } = await connectedBusiness('cloud-revision-write', [
+				payout({ pending: true })
+			]);
+			const bonus = await wellsBonus(accountId);
+			const { rows, reads } = cloudSnapshot();
+			const first = await getTracking();
+			const firstTag = first.headers.get('etag')!;
+			const row = rows.find((candidate) => candidate.id === accountId)!;
+			const payload = decryptJson<{
+				transactionHistory: { transactions: StoredFinancialTransaction[] };
+			}>(row.payload_enc, `card:${row.id}`);
+			payload.transactionHistory.transactions = [payout()];
+			row.payload_enc = encryptJson(payload, `card:${row.id}`);
+			row.xmin = '2';
+			reads.length = 0;
+
+			const updated = await getTracking(firstTag);
+			expect(updated.status).toBe(200);
+			expect(updated.headers.get('etag')).not.toBe(firstTag);
+			expect(await updated.json()).toMatchObject({
+				tracking: { [bonus.id]: { paidDate: '2026-08-01' } }
+			});
+			expect(reads[0].text).toContain('xmin::text');
+			expect(reads.filter((read) => read.text.includes('payload_enc'))).toHaveLength(1);
+
+			rows.splice(
+				rows.findIndex((candidate) => candidate.id === bonus.id),
+				1
+			);
+			const deleted = await getTracking(updated.headers.get('etag')!);
+			expect(deleted.status).toBe(200);
+			expect(deleted.headers.get('etag')).not.toBe(updated.headers.get('etag'));
+			expect(await deleted.json()).toEqual({ tracking: {} });
+		});
+	});
+
+	it('keeps revision validators private to their tenant even for empty inventories', async () => {
+		const { reads } = cloudSnapshot();
+		const first = await runAsTenant(FIRST_TENANT, () => getTracking());
+		const firstTag = first.headers.get('etag')!;
+		const second = await runAsTenant(SECOND_TENANT, () => getTracking(firstTag));
+		expect(first.status).toBe(200);
+		expect(second.status).toBe(200);
+		expect(second.headers.get('etag')).not.toBe(firstTag);
+		expect(await second.json()).toEqual({ tracking: {} });
+		expect(
+			reads.filter((read) => read.text.includes('AS revision')).map((read) => read.params)
+		).toEqual([[tenantReference(FIRST_TENANT)], [tenantReference(SECOND_TENANT)]]);
+	});
+
+	it('invalidates unchanged records at Pacific midnight and after a deployment changes', async () => {
+		cloudSnapshot();
+		vi.stubEnv('VERCEL_GIT_COMMIT_SHA', 'synthetic-build-one');
+		vi.setSystemTime(new Date('2026-09-14T06:59:59.000Z'));
+		const first = await getTracking();
+		const firstTag = first.headers.get('etag')!;
+		vi.setSystemTime(new Date('2026-09-14T07:00:00.000Z'));
+		const nextDay = await getTracking(firstTag);
+		expect(nextDay.status).toBe(200);
+		expect(nextDay.headers.get('etag')).not.toBe(firstTag);
+		const sameDay = await getTracking(nextDay.headers.get('etag')!);
+		expect(sameDay.status).toBe(304);
+
+		vi.stubEnv('VERCEL_GIT_COMMIT_SHA', 'synthetic-build-two');
+		const nextBuild = await getTracking(nextDay.headers.get('etag')!);
+		expect(nextBuild.status).toBe(200);
+		expect(nextBuild.headers.get('etag')).not.toBe(nextDay.headers.get('etag'));
+	});
+
+	it('invalidates local tracking from the encrypted nonce when writes share a timestamp', async () => {
+		const { accountId, sync } = await connectedBusiness('local-revision', [
+			payout({ pending: true })
+		]);
+		const bonus = await wellsBonus(accountId);
+		const first = await getTracking();
+		const firstTag = first.headers.get('etag')!;
+		expect((await getTracking(firstTag)).status).toBe(304);
+
+		await sync([payout()]);
+		const updated = await getTracking(firstTag);
+		expect(updated.status).toBe(200);
+		expect(updated.headers.get('etag')).not.toBe(firstTag);
+		expect(await updated.json()).toMatchObject({
+			tracking: { [bonus.id]: { paidDate: '2026-08-01' } }
 		});
 	});
 });

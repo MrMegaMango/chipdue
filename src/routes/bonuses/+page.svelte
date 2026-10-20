@@ -41,7 +41,12 @@
 	import BonusChurnPanel from '$lib/components/BonusChurnPanel.svelte';
 	import CardDowngradeTiming from '$lib/components/CardDowngradeTiming.svelte';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
-	import { clearPrivateApiCache, reusePrivateApiGet } from '$lib/private-api-cache';
+	import {
+		clearPrivateApiCache,
+		PrivateApiError,
+		reusePrivateApiGet,
+		revalidatePrivateApiGet
+	} from '$lib/private-api-cache';
 	import type {
 		BonusStatus,
 		Card,
@@ -116,7 +121,6 @@
 	let automaticTracking = $state<Record<string, BonusChurnAutomationResult>>({});
 	let automaticTrackingLoading = $state(false);
 	let automaticTrackingError = $state('');
-	let trackingController: AbortController | undefined;
 	let trackingGeneration = 0;
 	let trackingReady = false;
 	let mounted = false;
@@ -192,7 +196,6 @@
 		return () => {
 			mounted = false;
 			trackingGeneration += 1;
-			trackingController?.abort();
 			window.removeEventListener('focus', refreshVisibleTracking);
 			document.removeEventListener('visibilitychange', refreshVisibleTracking);
 			clearInterval(interval);
@@ -258,53 +261,78 @@
 		}
 	}
 
-	async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
+	async function requestJson<T>(
+		url: string,
+		init?: RequestInit,
+		options: { memoryCache?: 'revalidate' } = {}
+	): Promise<T> {
 		const method = (init?.method ?? 'GET').toUpperCase();
-		const load = async (): Promise<T> => {
+		const loadResponse = async (etag: string | null = null): Promise<Response> => {
+			const headers = new Headers(init?.headers);
+			if (init?.body && !headers.has('content-type'))
+				headers.set('content-type', 'application/json');
+			if (etag) headers.set('if-none-match', etag);
 			const response = await fetch(url, {
 				...init,
-				headers: init?.body
-					? { 'content-type': 'application/json', ...init.headers }
-					: init?.headers
+				headers,
+				cache: 'no-store'
 			});
-			if (response.status === 401) {
-				clearPrivateApiCache();
-				window.location.assign(resolve('/'));
-				throw new Error('Your private session has ended.');
-			}
-			if (!response.ok) {
+			if (!response.ok && response.status !== 304) {
 				const payload = (await response.json().catch(() => null)) as {
 					error?: { message?: string };
 				} | null;
-				throw new Error(payload?.error?.message || 'The request could not be completed.');
+				throw new PrivateApiError(
+					response.status,
+					payload?.error?.message || 'The request could not be completed.'
+				);
 			}
+			return response;
+		};
+		const load = async (): Promise<T> => {
+			const response = await loadResponse();
 			return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
 		};
-		const payload =
-			method === 'GET' && init?.cache !== 'no-store'
-				? await reusePrivateApiGet(url, load)
-				: await load();
-		if (method !== 'GET') clearPrivateApiCache();
-		return payload;
+		try {
+			const payload =
+				method === 'GET' && options.memoryCache === 'revalidate'
+					? await revalidatePrivateApiGet<T>(url, loadResponse)
+					: method === 'GET' && init?.cache !== 'no-store'
+						? await reusePrivateApiGet(url, load)
+						: await load();
+			if (method !== 'GET') clearPrivateApiCache();
+			return payload;
+		} catch (error) {
+			if (
+				error instanceof PrivateApiError &&
+				error.status === 401 &&
+				(mounted || options.memoryCache !== 'revalidate')
+			) {
+				clearPrivateApiCache();
+				window.location.assign(resolve('/'));
+			}
+			throw error;
+		}
 	}
 
 	async function loadAutomaticTracking(): Promise<void> {
 		if (!mounted) return;
 		const generation = ++trackingGeneration;
-		trackingController?.abort();
-		const controller = new AbortController();
-		trackingController = controller;
 		automaticTrackingLoading = true;
 		try {
 			const response = await requestJson<{ tracking: Record<string, BonusChurnAutomationResult> }>(
 				resolve('/api/bonuses/tracking'),
-				{ cache: 'no-store', signal: controller.signal }
+				{},
+				{ memoryCache: 'revalidate' }
 			);
 			if (generation !== trackingGeneration) return;
 			automaticTracking = response.tracking;
 			automaticTrackingError = '';
-		} catch {
-			if (generation !== trackingGeneration || controller.signal.aborted) return;
+		} catch (error) {
+			if (
+				generation !== trackingGeneration ||
+				(error instanceof DOMException && error.name === 'AbortError')
+			)
+				return;
 			automaticTrackingError =
 				'Activity could not be checked. Showing the last available result; tracking will retry automatically.';
 		} finally {
