@@ -59,7 +59,7 @@
 		"@vercel/blob": "^2.8.2",
 		"@vercel/functions": "^3.10.3",
 		"better-sqlite3": "^13.0.3",
-		"jose": "^6.2.10",
+		"jose": "^6.2.12",
 		"plaid": "^46.0.0",
 		"zod": "^4.6.6"
 	}
