@@ -11,6 +11,16 @@ import {
 } from './auth';
 import { cloudQuery } from './cloud-database';
 import { decryptJson, encryptJson, privateFingerprint, secretsEqual } from './crypto';
+import {
+	clearEmergencySessionCookie,
+	consumeEmergencyGoogleStartRateLimit,
+	consumeEmergencyTransaction,
+	EMERGENCY_SESSION_COOKIE_NAME,
+	issueEmergencySessionForGoogle,
+	revokeEmergencySession,
+	saveEmergencyGoogleIdentity,
+	saveEmergencyTransaction
+} from './emergency-auth';
 import { AppError } from './errors';
 import { assertSecureCloudRequest, expectedRequestOrigin } from './request-security';
 import { getCloudRuntimeConfig, getRuntimeMode, type GoogleOidcConfig } from './runtime';
@@ -44,7 +54,7 @@ const OUTBOUND_TIMEOUT_MS = 8_000;
 const OPAQUE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const SUBJECT_PATTERN = /^[A-Za-z0-9_-]{1,255}$/;
 
-export type GoogleOidcIntent = 'login' | 'link';
+export type GoogleOidcIntent = 'login' | 'link' | 'emergency';
 type GoogleTransactionIntent = GoogleOidcIntent | 'bootstrap';
 
 interface GoogleTransaction {
@@ -72,7 +82,7 @@ const transactionSchema = z
 	.object({
 		version: z.literal(2),
 		transactionToken: z.string().regex(OPAQUE_TOKEN_PATTERN),
-		intent: z.enum(['login', 'link', 'bootstrap']),
+		intent: z.enum(['login', 'link', 'bootstrap', 'emergency']),
 		state: z.string().regex(OPAQUE_TOKEN_PATTERN),
 		nonce: z.string().regex(OPAQUE_TOKEN_PATTERN),
 		codeVerifier: z.string().regex(OPAQUE_TOKEN_PATTERN),
@@ -443,14 +453,24 @@ export function clearGoogleTransactionCookie(cookies: Cookies): void {
 	});
 }
 
-function readTransactionCookie(cookies: Cookies): GoogleTransaction {
+function parseTransactionCookie(cookies: Cookies): GoogleTransaction {
 	const envelope = cookies.get(GOOGLE_TRANSACTION_COOKIE_NAME);
 	if (!envelope || envelope.length > 2_048) {
 		throw new AppError('GOOGLE_AUTH_FAILED', 'Google authentication could not be completed.', 401);
 	}
-	const transaction = transactionSchema.parse(
-		decryptJson<unknown>(envelope, TRANSACTION_COOKIE_PURPOSE)
-	);
+	return transactionSchema.parse(decryptJson<unknown>(envelope, TRANSACTION_COOKIE_PURPOSE));
+}
+
+export function googleOidcReturnPath(cookies: Cookies): '/' | '/emergency' {
+	try {
+		return parseTransactionCookie(cookies).intent === 'emergency' ? '/emergency' : '/';
+	} catch {
+		return '/';
+	}
+}
+
+function readTransactionCookie(cookies: Cookies): GoogleTransaction {
+	const transaction = parseTransactionCookie(cookies);
 	if (
 		(transaction.intent === 'link') !== Boolean(transaction.linkSessionToken) ||
 		(transaction.intent === 'bootstrap') !== Boolean(transaction.bootstrapClaimRef) ||
@@ -476,7 +496,11 @@ function authorizationUrl(config: GoogleOidcConfig, transaction: GoogleTransacti
 	authorization.searchParams.set('nonce', transaction.nonce);
 	authorization.searchParams.set('code_challenge', challenge);
 	authorization.searchParams.set('code_challenge_method', 'S256');
-	if (transaction.intent === 'link' || transaction.intent === 'bootstrap') {
+	if (
+		transaction.intent === 'link' ||
+		transaction.intent === 'bootstrap' ||
+		transaction.intent === 'emergency'
+	) {
 		authorization.searchParams.set('prompt', 'select_account');
 	}
 	return authorization.toString();
@@ -527,9 +551,18 @@ export async function beginGoogleOidc(
 		}
 	}
 
-	await consumeGoogleOidcStartRateLimit(request, intent);
+	if (intent === 'emergency') {
+		try {
+			await revokeEmergencySession(cookies.get(EMERGENCY_SESSION_COOKIE_NAME));
+		} finally {
+			clearEmergencySessionCookie(cookies);
+		}
+		await consumeEmergencyGoogleStartRateLimit(request);
+	} else {
+		await consumeGoogleOidcStartRateLimit(request, intent);
+	}
 	const now = Date.now();
-	await pruneExpiredTransactions(now);
+	if (intent !== 'emergency') await pruneExpiredTransactions(now);
 	const transaction: GoogleTransaction = {
 		version: 2,
 		transactionToken: randomOpaqueToken(),
@@ -542,7 +575,11 @@ export async function beginGoogleOidc(
 		linkSessionToken,
 		bootstrapClaimRef: null
 	};
-	await saveTransaction(transaction, now);
+	if (intent === 'emergency') {
+		await saveEmergencyTransaction(transaction.transactionToken, transaction.expiresAt);
+	} else {
+		await saveTransaction(transaction, now);
+	}
 	setTransactionCookie(cookies, transaction);
 	return authorizationUrl(config, transaction);
 }
@@ -770,7 +807,8 @@ export async function completeGoogleOidc(
 	url: URL,
 	cookies: Cookies
 ): Promise<
-	{ outcome: 'login'; sessionToken: string } | { outcome: 'linked'; sessionToken?: string }
+	| { outcome: 'login' | 'emergency'; sessionToken: string }
+	| { outcome: 'linked'; sessionToken?: string }
 > {
 	const config = googleConfig();
 	const runtimeConfig = getCloudRuntimeConfig();
@@ -797,7 +835,11 @@ export async function completeGoogleOidc(
 		await requireCurrentBootstrapClaim(transaction.bootstrapClaimRef);
 	}
 	const now = Date.now();
-	await consumeTransaction(transaction, now);
+	if (transaction.intent === 'emergency') {
+		await consumeEmergencyTransaction(transaction.transactionToken);
+	} else {
+		await consumeTransaction(transaction, now);
+	}
 	if (callback.providerError || !callback.code) {
 		throw new AppError('GOOGLE_AUTH_FAILED', 'Google authentication could not be completed.', 401);
 	}
@@ -817,6 +859,7 @@ export async function completeGoogleOidc(
 			throw new AppError('AUTH_REQUIRED', 'Authentication is required.', 401);
 		}
 		await linkSubjectToTenant(subjectReference, tenantId);
+		await saveEmergencyGoogleIdentity(subjectReference, tenantId);
 		return { outcome: 'linked' };
 	}
 	if (transaction.intent === 'bootstrap') {
@@ -830,14 +873,24 @@ export async function completeGoogleOidc(
 		await requireCurrentBootstrapClaim(transaction.bootstrapClaimRef);
 		await bootstrapSubject(subjectReference, transaction.bootstrapClaimRef);
 		await linkSubjectToTenant(subjectReference, LEGACY_TENANT_ID);
+		const sessionToken = await issueGoogleOidcSession(LEGACY_TENANT_ID);
+		await saveEmergencyGoogleIdentity(subjectReference, LEGACY_TENANT_ID);
 		return {
 			outcome: 'linked',
-			sessionToken: await issueGoogleOidcSession(LEGACY_TENANT_ID)
+			sessionToken
+		};
+	}
+	if (transaction.intent === 'emergency') {
+		return {
+			outcome: 'emergency',
+			sessionToken: await issueEmergencySessionForGoogle(subjectReference)
 		};
 	}
 
 	const tenantId = await findOrCreateGoogleTenant(subjectReference);
-	return { outcome: 'login', sessionToken: await issueGoogleOidcSession(tenantId) };
+	const sessionToken = await issueGoogleOidcSession(tenantId);
+	await saveEmergencyGoogleIdentity(subjectReference, tenantId);
+	return { outcome: 'login', sessionToken };
 }
 
 export function resetGoogleOidcStateForTests(): void {

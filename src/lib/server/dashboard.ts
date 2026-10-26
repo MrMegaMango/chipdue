@@ -8,6 +8,7 @@ import { asAppError } from './errors';
 import { financialConnectionsStatus } from './financial-connections';
 import { bonusesFromRows, financialAccountsFromRows } from './financial-records';
 import { listRecordRows } from './record-rows';
+import { refreshEmergencySnapshot } from './emergency-refresh';
 
 async function section<T>(operation: () => T | Promise<T>): Promise<DashboardResult<T>> {
 	try {
@@ -22,6 +23,7 @@ export async function loadDashboard(
 	options: { includeActivity?: boolean } = {}
 ): Promise<DashboardResponse> {
 	// Share only this request's rows. Every refresh reads current tenant data again.
+	const capturedAt = Date.now();
 	const rows = await listRecordRows();
 	const [cards, workspace] = await Promise.all([
 		section(async () => {
@@ -60,5 +62,6 @@ export async function loadDashboard(
 				})
 		);
 	}
+	await refreshEmergencySnapshot(rows, capturedAt);
 	return { cards, workspace, recentActivity };
 }

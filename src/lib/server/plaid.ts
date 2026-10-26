@@ -57,6 +57,7 @@ import {
 } from './plaid-config';
 import { providerAccountReference } from './provider-storage';
 import { currentTenantId, LEGACY_TENANT_ID, runAsTenant } from './tenant';
+import { refreshEmergencySnapshot } from './emergency-refresh';
 
 const TRANSACTION_HISTORY_DAYS = 730;
 const MAX_TRANSACTION_SYNC_PAGES = 100;
@@ -1264,6 +1265,13 @@ export async function syncAllPlaidItems(): Promise<{
 			status: appError.status
 		});
 	}
+	// Once per tenant after every connection finishes, reusing the tenant IDs
+	// already read for this sync. A failed connection can still have saved updates.
+	await Promise.all(
+		[...new Set(eligibleConnections.map(({ tenantId }) => tenantId))].map((tenantId) =>
+			runAsTenant(tenantId, () => refreshEmergencySnapshot())
+		)
+	);
 	if (failedItems > 0 && results.length === 0) throw firstFailure;
 	return {
 		syncedItems: results.length,

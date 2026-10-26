@@ -11,7 +11,7 @@ function parseIntent(url: URL): GoogleOidcIntent {
 	const values = url.searchParams.getAll('intent');
 	if (
 		values.length !== 1 ||
-		(values[0] !== 'login' && values[0] !== 'link') ||
+		(values[0] !== 'login' && values[0] !== 'link' && values[0] !== 'emergency') ||
 		[...url.searchParams.keys()].some((name) => name !== 'intent')
 	) {
 		throw new AppError('INVALID_REQUEST', 'The request is invalid.', 400);
@@ -20,8 +20,11 @@ function parseIntent(url: URL): GoogleOidcIntent {
 }
 
 export const GET: RequestHandler = async ({ cookies, request, url }) => {
+	let returnPath = '/';
 	try {
-		const location = await beginGoogleOidc(request, url, cookies, parseIntent(url));
+		const intent = parseIntent(url);
+		if (intent === 'emergency') returnPath = '/emergency';
+		const location = await beginGoogleOidc(request, url, cookies, intent);
 		return new Response(null, {
 			status: 303,
 			headers: { ...privateResponseHeaders, location }
@@ -30,7 +33,7 @@ export const GET: RequestHandler = async ({ cookies, request, url }) => {
 		clearGoogleTransactionCookie(cookies);
 		return new Response(null, {
 			status: 303,
-			headers: { ...privateResponseHeaders, location: '/?google=error' }
+			headers: { ...privateResponseHeaders, location: `${returnPath}?google=error` }
 		});
 	}
 };

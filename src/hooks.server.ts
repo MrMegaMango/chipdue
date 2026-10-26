@@ -1,5 +1,6 @@
 import type { Handle, HandleServerError } from '@sveltejs/kit';
 import { authenticatedTenantId, SESSION_COOKIE_NAME } from '$lib/server/auth';
+import { changesSavedFinances, refreshEmergencySnapshot } from '$lib/server/emergency-refresh';
 import { apiError, apiJson } from '$lib/server/http';
 import {
 	assertSecureCloudRequest,
@@ -36,6 +37,9 @@ export function isPublicCloudApiPath(path: string): boolean {
 		path === '/api/auth/google/callback' ||
 		path === '/api/auth/google/bootstrap' ||
 		path === '/api/auth/google/bootstrap/continue' ||
+		path === '/api/emergency/session' ||
+		path === '/api/emergency/logout' ||
+		path === '/api/emergency/snapshot' ||
 		path === '/api/cron/plaid-sync/[candidate]'
 	);
 }
@@ -101,7 +105,18 @@ export const handle: Handle = async ({ event, resolve }) => {
 
 	if (tenantId) {
 		if (event.locals) event.locals.tenantId = tenantId;
-		return secureHeaders(await runAsTenant(tenantId, () => resolve(event)));
+		return secureHeaders(
+			await runAsTenant(tenantId, async () => {
+				const response = await resolve(event);
+				if (
+					response.ok &&
+					changesSavedFinances(event.request.method, event.route?.id ?? event.url.pathname)
+				) {
+					await refreshEmergencySnapshot();
+				}
+				return response;
+			})
+		);
 	}
 	return secureHeaders(await resolve(event));
 };

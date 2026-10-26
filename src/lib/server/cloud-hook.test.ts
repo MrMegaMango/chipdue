@@ -122,6 +122,19 @@ describe.sequential('cloud request guard', () => {
 		expect(await response.text()).toBe('resolved');
 	});
 
+	it('delegates only the three emergency routes to their separate authentication guard', async () => {
+		for (const path of [
+			'/api/emergency/session',
+			'/api/emergency/snapshot',
+			'/api/emergency/logout'
+		]) {
+			expect((await cloudRequest(path)).status).toBe(200);
+		}
+		for (const path of ['/api/emergency/admin', '/api/emergency/snapshot/write', '/api/cards']) {
+			expect((await cloudRequest(path)).status).toBe(401);
+		}
+	});
+
 	it('allows unauthenticated visitors to start an admin access request', async () => {
 		const response = await cloudRequest('/api/access-request');
 		expect(response.status).toBe(200);

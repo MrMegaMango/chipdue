@@ -229,6 +229,20 @@ Use browser developer tools and provider dashboards locally for these checks. Do
 
 ## Backups and recovery
 
+### Saved finances during a Neon outage
+
+Connect a dedicated **private** Vercel Blob store in the Function region to this project's **Production** environment only. Keep Blob credentials out of Preview, Development, source files, and browser code. The Blob SDK uses the connection's `BLOB_STORE_ID` and Vercel OIDC identity, or its server-only `BLOB_READ_WRITE_TOKEN`. This feature is available on Hobby within Blob's separate storage, transfer, and operation allowances; check [current limits](https://vercel.com/docs/vercel-blob/usage-and-pricing) before enabling it. An exhausted Blob allowance can also make the emergency view unavailable.
+
+After connecting the store and deploying through Git, complete a normal Google sign-in and open the dashboard while Neon is available. Then open `/emergency`, sign in, and verify the saved copy and capture time. Existing sessions alone do not establish a Google-to-tenant binding for emergency access. An outage before this first successful save has no recoverable emergency copy.
+
+The app writes one encrypted object per tenant using private Blob access and the existing application key, with the object key bound into authenticated encryption. Financial views exclude bank credentials and provider identifiers. Authentication state is also encrypted and stored separately in Blob: immutable Google subject-to-tenant bindings, rate limits, one-time OAuth transactions, and revocable session records. Auth reads bypass the CDN cache; concurrent updates require the last observed ETag. The normal database session never falls back to this store. Emergency cookies authorize only the read-only emergency routes and expire after at most one hour.
+
+Successful financial mutations refresh the copy, including removals; dashboard reads reuse their existing rows, and scheduled bank syncs refresh once per affected tenant. Unchanged content skips uploads. Failed saves preserve the prior snapshot and log a generic failure, so the displayed capture time is the freshness boundary. Snapshots contain at most 100 recent transactions per account and are bounded to 3 MB. They are display copies, not restorable database backups. Vercel controls both ciphertext and its runtime decryption key, just as it does for the primary app.
+
+For identity recovery, revocation of all sessions, tenant removal, or decommissioning, include the corresponding emergency Blob identity and session records and financial snapshot. Removing an identity binding prevents new emergency sessions but does not revoke existing ones; revoke their session objects too. Never restore old emergency auth objects, because that could revive revoked access. Disable Google access before a reviewed identity reset, remove stale deployments, and clear emergency authentication state before re-enabling the same Google client. Preserve the application encryption key. Blob's retained copies follow the provider's deletion and retention behavior.
+
+### Database recovery backups
+
 Neon point-in-time recovery is useful but is not the only backup. Provider retention is limited and plan-dependent.
 
 1. Create periodic logical backups from a trusted environment without putting a database URL on the command line.

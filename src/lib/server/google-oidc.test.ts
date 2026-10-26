@@ -7,6 +7,10 @@ import { GET as bootstrapContinueEndpoint } from '../../routes/api/auth/google/b
 import { GET as startEndpoint } from '../../routes/api/auth/google/start/+server';
 import { POST as passwordLoginEndpoint } from '../../routes/api/auth/login/+server';
 import { GET as sessionEndpoint } from '../../routes/api/auth/session/+server';
+import { POST as logoutEndpoint } from '../../routes/api/auth/logout/+server';
+import { POST as emergencyLogoutEndpoint } from '../../routes/api/emergency/logout/+server';
+import { GET as emergencySessionEndpoint } from '../../routes/api/emergency/session/+server';
+import { GET as emergencySnapshotEndpoint } from '../../routes/api/emergency/snapshot/+server';
 import {
 	authenticatedTenantId,
 	authenticateSession,
@@ -24,6 +28,14 @@ import {
 } from './cloud-database';
 import { decryptJson, privateFingerprint, resetCryptoStateForTests } from './crypto';
 import {
+	EMERGENCY_SESSION_COOKIE_NAME,
+	getEmergencyTenant,
+	issueEmergencySessionForGoogle,
+	saveEmergencyGoogleIdentity
+} from './emergency-auth';
+import { AppError } from './errors';
+import { publishEmergencySnapshot } from './emergency-snapshot';
+import {
 	GOOGLE_CALLBACK_PATH,
 	GOOGLE_BOOTSTRAP_CONTINUE_PATH,
 	GOOGLE_ISSUER,
@@ -33,6 +45,35 @@ import {
 	verifyGoogleIdToken
 } from './google-oidc';
 import { getCloudRuntimeConfig } from './runtime';
+import { runAsTenant } from './tenant';
+
+const emergencyStore = vi.hoisted(() => ({
+	configured: false,
+	failWrites: false,
+	revision: 0,
+	objects: new Map<string, { value: unknown; etag: string }>()
+}));
+
+vi.mock('./emergency-store', () => ({
+	emergencyStorageConfigured: () => emergencyStore.configured,
+	readEmergencyObject: async (key: string) => {
+		const value = emergencyStore.objects.get(key);
+		return value ? structuredClone(value) : null;
+	},
+	writeEmergencyObject: async (key: string, value: unknown, etag?: string) => {
+		if (emergencyStore.failWrites) throw new AppError('EMERGENCY_UNAVAILABLE', 'Unavailable.', 503);
+		const current = emergencyStore.objects.get(key);
+		if (etag === undefined ? current !== undefined : current?.etag !== etag) {
+			throw new AppError('EMERGENCY_CONFLICT', 'Changed.', 409);
+		}
+		const next = String(++emergencyStore.revision);
+		emergencyStore.objects.set(key, { value: structuredClone(value), etag: next });
+		return next;
+	},
+	deleteEmergencyObject: async (key: string) => {
+		emergencyStore.objects.delete(key);
+	}
+}));
 
 const GOOGLE_ENV_KEYS = [
 	'CARDDUE_MODE',
@@ -72,7 +113,7 @@ interface StoredSession {
 
 interface GoogleTransaction {
 	transactionToken: string;
-	intent: 'login' | 'link' | 'bootstrap';
+	intent: 'login' | 'link' | 'bootstrap' | 'emergency';
 	state: string;
 	nonce: string;
 	codeVerifier: string;
@@ -330,7 +371,10 @@ function setGoogleOnlyEnvironment(token: string): void {
 	process.env.CARDDUE_GOOGLE_BOOTSTRAP_HASH = bootstrapHash(token);
 }
 
-function startRequest(intent: 'login' | 'link', headers: Record<string, string> = {}): Request {
+function startRequest(
+	intent: 'login' | 'link' | 'emergency',
+	headers: Record<string, string> = {}
+): Request {
 	return new Request(`https://cards.example.test/api/auth/google/start?intent=${intent}`, {
 		headers: {
 			host: 'cards.example.test',
@@ -459,6 +503,10 @@ describe.sequential('Google OIDC account isolation', () => {
 	beforeEach(() => {
 		previousEnvironment = Object.fromEntries(GOOGLE_ENV_KEYS.map((key) => [key, process.env[key]]));
 		setCloudEnvironment();
+		emergencyStore.configured = false;
+		emergencyStore.failWrites = false;
+		emergencyStore.revision = 0;
+		emergencyStore.objects.clear();
 		adapter = new GoogleMemoryAdapter();
 		setCloudDatabaseAdapterForTests(adapter);
 		resetCryptoStateForTests();
@@ -482,6 +530,231 @@ describe.sequential('Google OIDC account isolation', () => {
 
 	afterAll(() => {
 		resetGoogleOidcStateForTests();
+	});
+
+	it('opens only the learned tenant through emergency Google sign-in while Neon is unavailable', async () => {
+		emergencyStore.configured = true;
+		const normalCookies = new TestCookies();
+		await callStart(normalCookies, startRequest('login'));
+		const normalTransaction = readTransaction(normalCookies);
+		installTokenResponse(
+			await signIdToken({ nonce: normalTransaction.nonce, subject: 'saved-user' })
+		);
+		expect(
+			(await callCallback(normalCookies, callbackUrl(normalTransaction))).headers.get('location')
+		).toBe('/?google=login');
+		const tenantId = await authenticatedTenantId(normalCookies.get(SESSION_COOKIE_NAME));
+		if (!tenantId) throw new Error('Expected normal login to establish a tenant.');
+		const capturedAt = Date.now() - 60_000;
+		await runAsTenant(tenantId, () => publishEmergencySnapshot([], capturedAt));
+		await runAsTenant('20000000-0000-4000-8000-000000000002', () =>
+			publishEmergencySnapshot([], capturedAt + 1000)
+		);
+		expect((await emergencySnapshotEndpoint({ cookies: new TestCookies() } as never)).status).toBe(
+			401
+		);
+		expect((await emergencySnapshotEndpoint({ cookies: normalCookies } as never)).status).toBe(401);
+		const query = vi.spyOn(adapter, 'query').mockRejectedValue(new Error('synthetic Neon outage'));
+		const transaction = vi
+			.spyOn(adapter, 'transaction')
+			.mockRejectedValue(new Error('synthetic Neon outage'));
+
+		const cookies = new TestCookies();
+		const started = await callStart(cookies, startRequest('emergency'));
+		const authorization = new URL(started.headers.get('location')!);
+		expect(authorization.pathname).toBe('/o/oauth2/v2/auth');
+		expect(authorization.searchParams.get('redirect_uri')).toBe(
+			`https://cards.example.test${GOOGLE_CALLBACK_PATH}`
+		);
+		expect(authorization.searchParams.get('code_challenge_method')).toBe('S256');
+		expect(authorization.searchParams.get('scope')).toBe('openid');
+		const emergencyTransaction = readTransaction(cookies);
+		const savedCookie = cookies.get(GOOGLE_TRANSACTION_COOKIE_NAME)!;
+		const tokenFetch = installTokenResponse(
+			await signIdToken({ nonce: emergencyTransaction.nonce, subject: 'saved-user' })
+		);
+		const completed = await callCallback(cookies, callbackUrl(emergencyTransaction));
+		expect(completed.headers.get('location')).toBe('/emergency');
+		expect(cookies.get(SESSION_COOKIE_NAME)).toBeUndefined();
+		const token = cookies.get(EMERGENCY_SESSION_COOKIE_NAME)!;
+		expect(await getEmergencyTenant(token)).toBe(tenantId);
+		expect(cookies.setOptions.get(EMERGENCY_SESSION_COOKIE_NAME)).toMatchObject({
+			httpOnly: true,
+			secure: true,
+			sameSite: 'strict',
+			path: '/',
+			maxAge: 3600
+		});
+		const status = await emergencySessionEndpoint({ cookies } as never);
+		expect(await status.json()).toEqual({
+			configured: true,
+			authenticated: true,
+			sessionRef: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/)
+		});
+		const snapshot = await emergencySnapshotEndpoint({ cookies } as never);
+		expect(snapshot.status).toBe(200);
+		expect(await snapshot.json()).toMatchObject({
+			snapshot: { capturedAt: new Date(capturedAt).toISOString() }
+		});
+		expect(query).not.toHaveBeenCalled();
+		expect(transaction).not.toHaveBeenCalled();
+		cookies.values.set(GOOGLE_TRANSACTION_COOKIE_NAME, savedCookie);
+		expect(
+			(await callCallback(cookies, callbackUrl(emergencyTransaction))).headers.get('location')
+		).toBe('/emergency?google=error');
+		expect(tokenFetch).toHaveBeenCalledTimes(1);
+		query.mockRestore();
+		transaction.mockRestore();
+		expect(await authenticatedTenantId(token)).toBeNull();
+	});
+
+	it('never creates an emergency tenant for an unknown Google identity', async () => {
+		emergencyStore.configured = true;
+		const query = vi.spyOn(adapter, 'query').mockRejectedValue(new Error('synthetic Neon outage'));
+		const cookies = new TestCookies();
+		await callStart(cookies, startRequest('emergency'));
+		const transaction = readTransaction(cookies);
+		installTokenResponse(await signIdToken({ nonce: transaction.nonce, subject: 'unknown-user' }));
+		expect((await callCallback(cookies, callbackUrl(transaction))).headers.get('location')).toBe(
+			'/emergency?google=error'
+		);
+		expect(cookies.get(EMERGENCY_SESSION_COOKIE_NAME)).toBeUndefined();
+		expect(cookies.get(SESSION_COOKIE_NAME)).toBeUndefined();
+		expect(query).not.toHaveBeenCalled();
+		expect([...emergencyStore.objects.keys()].some((key) => key.startsWith('auth/identity/'))).toBe(
+			false
+		);
+	});
+
+	it('invalidates emergency access and pending sign-in when the password verifier rotates', async () => {
+		emergencyStore.configured = true;
+		const normalCookies = new TestCookies();
+		await callStart(normalCookies, startRequest('login'));
+		const normalTransaction = readTransaction(normalCookies);
+		installTokenResponse(
+			await signIdToken({ nonce: normalTransaction.nonce, subject: 'saved-user' })
+		);
+		await callCallback(normalCookies, callbackUrl(normalTransaction));
+		const subjectReference = linkedReference('saved-user');
+		const previousToken = await issueEmergencySessionForGoogle(subjectReference);
+		const tenantId = await getEmergencyTenant(previousToken);
+		expect(tenantId).toBeTruthy();
+		const pendingCookies = new TestCookies();
+		await callStart(pendingCookies, startRequest('emergency'));
+		const pending = readTransaction(pendingCookies);
+		const exchange = installTokenResponse(
+			await signIdToken({ nonce: pending.nonce, subject: 'saved-user' })
+		);
+
+		process.env.CARDDUE_OWNER_PASSWORD_HASH = passwordHash('rotated recovery password');
+		expect(await authenticatedTenantId(normalCookies.get(SESSION_COOKIE_NAME))).toBeNull();
+		expect(await getEmergencyTenant(previousToken)).toBeNull();
+		await expect(issueEmergencySessionForGoogle(subjectReference)).rejects.toBeDefined();
+		expect((await callCallback(pendingCookies, callbackUrl(pending))).headers.get('location')).toBe(
+			'/emergency?google=error'
+		);
+		expect(exchange).not.toHaveBeenCalled();
+
+		await callStart(normalCookies, startRequest('login'));
+		const refreshed = readTransaction(normalCookies);
+		installTokenResponse(await signIdToken({ nonce: refreshed.nonce, subject: 'saved-user' }));
+		expect(
+			(await callCallback(normalCookies, callbackUrl(refreshed))).headers.get('location')
+		).toBe('/?google=login');
+		const currentToken = await issueEmergencySessionForGoogle(subjectReference);
+		expect(await getEmergencyTenant(currentToken)).toBe(tenantId);
+		expect(await getEmergencyTenant(previousToken)).toBeNull();
+	});
+
+	it('retires the previous emergency account before a new Google account is selected', async () => {
+		emergencyStore.configured = true;
+		await saveEmergencyGoogleIdentity(
+			linkedReference('previous-user'),
+			'20000000-0000-4000-8000-000000000002'
+		);
+		const previousToken = await issueEmergencySessionForGoogle(linkedReference('previous-user'));
+		const cookies = new TestCookies();
+		cookies.values.set(EMERGENCY_SESSION_COOKIE_NAME, previousToken);
+		await callStart(cookies, startRequest('emergency'));
+		expect(cookies.get(EMERGENCY_SESSION_COOKIE_NAME)).toBeUndefined();
+		expect(await getEmergencyTenant(previousToken)).toBeNull();
+		const transaction = readTransaction(cookies);
+		installTokenResponse(
+			await signIdToken({ nonce: transaction.nonce, subject: 'unknown-next-user' })
+		);
+		expect((await callCallback(cookies, callbackUrl(transaction))).headers.get('location')).toBe(
+			'/emergency?google=error'
+		);
+		expect((await emergencySnapshotEndpoint({ cookies } as never)).status).toBe(401);
+	});
+
+	it('keeps a successful normal login available when backup identity persistence fails', async () => {
+		emergencyStore.configured = true;
+		emergencyStore.failWrites = true;
+		const cookies = new TestCookies();
+		await callStart(cookies, startRequest('login'));
+		const transaction = readTransaction(cookies);
+		installTokenResponse(await signIdToken({ nonce: transaction.nonce }));
+		expect((await callCallback(cookies, callbackUrl(transaction))).headers.get('location')).toBe(
+			'/?google=login'
+		);
+		expect(await authenticatedTenantId(cookies.get(SESSION_COOKIE_NAME))).toBeTruthy();
+	});
+
+	it('does not learn an emergency identity when the normal session cannot be issued', async () => {
+		emergencyStore.configured = true;
+		const cookies = new TestCookies();
+		await callStart(cookies, startRequest('login'));
+		const transaction = readTransaction(cookies);
+		installTokenResponse(await signIdToken({ nonce: transaction.nonce }));
+		vi.spyOn(adapter, 'transaction').mockRejectedValue(new Error('synthetic session failure'));
+		expect((await callCallback(cookies, callbackUrl(transaction))).headers.get('location')).toBe(
+			'/?google=error'
+		);
+		expect([...emergencyStore.objects.keys()].some((key) => key.startsWith('auth/identity/'))).toBe(
+			false
+		);
+	});
+
+	it('revokes emergency access on normal logout even if Neon fails, and scopes emergency logout', async () => {
+		emergencyStore.configured = true;
+		const cookies = new TestCookies();
+		await callStart(cookies, startRequest('login'));
+		const transaction = readTransaction(cookies);
+		installTokenResponse(await signIdToken({ nonce: transaction.nonce, subject: 'saved-user' }));
+		await callCallback(cookies, callbackUrl(transaction));
+		const normalToken = cookies.get(SESSION_COOKIE_NAME)!;
+		const firstEmergency = await issueEmergencySessionForGoogle(linkedReference('saved-user'));
+		cookies.values.set(EMERGENCY_SESSION_COOKIE_NAME, firstEmergency);
+		const emergencyRequest = new Request('https://cards.example.test/api/emergency/logout', {
+			method: 'POST',
+			headers: { host: 'cards.example.test', origin: 'https://cards.example.test' }
+		});
+		expect(
+			(
+				await emergencyLogoutEndpoint({
+					cookies,
+					request: emergencyRequest,
+					url: new URL(emergencyRequest.url)
+				} as never)
+			).status
+		).toBe(204);
+		expect(await getEmergencyTenant(firstEmergency)).toBeNull();
+		expect(cookies.get(SESSION_COOKIE_NAME)).toBe(normalToken);
+		expect(await authenticatedTenantId(normalToken)).toBeTruthy();
+		const secondEmergency = await issueEmergencySessionForGoogle(linkedReference('saved-user'));
+		cookies.values.set(EMERGENCY_SESSION_COOKIE_NAME, secondEmergency);
+		vi.spyOn(adapter, 'query').mockRejectedValue(new Error('synthetic Neon outage'));
+		const request = new Request('https://cards.example.test/api/auth/logout', {
+			method: 'POST',
+			headers: { host: 'cards.example.test', origin: 'https://cards.example.test' }
+		});
+		expect(
+			(await logoutEndpoint({ cookies, request, url: new URL(request.url) } as never)).status
+		).toBe(503);
+		expect(cookies.get(SESSION_COOKIE_NAME)).toBeUndefined();
+		expect(cookies.get(EMERGENCY_SESSION_COOKIE_NAME)).toBeUndefined();
+		expect(await getEmergencyTenant(secondEmergency)).toBeNull();
 	});
 
 	it('fails closed for partial, empty, whitespace, or implausible Google configuration', () => {

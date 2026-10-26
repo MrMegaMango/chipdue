@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DASHBOARD_ACTIVITY_LIMIT } from '$lib/dashboard';
 import { GET as dashboardEndpoint } from '../../routes/api/dashboard/+server';
 import { GET as cardsEndpoint } from '../../routes/api/cards/+server';
+import { DELETE as deleteCardEndpoint } from '../../routes/api/cards/[id]/+server';
 import { handle } from '../../hooks.server';
+import * as auth from './auth';
 import * as cards from './cards';
 import {
 	resetCloudDatabaseForTests,
@@ -19,6 +21,8 @@ import {
 	listFinancialAccounts
 } from './financial-records';
 import * as connections from './financial-connections';
+import * as emergencySnapshot from './emergency-snapshot';
+import * as emergencyStore from './emergency-store';
 import type { PrivateRecordRow } from './record-rows';
 import {
 	createBonusSchema,
@@ -75,6 +79,12 @@ class DashboardAdapter implements CloudDatabaseAdapter {
 			if (!row || row.tenant_ref !== tenantRef) return [];
 			Object.assign(row, { payload_enc: payload, updated_at: now });
 			return [{ ...row }] as unknown as T[];
+		}
+		if (text.includes('DELETE FROM public.carddue_cards')) {
+			const [tenantRef, id] = params as string[];
+			const row = this.rows.get(id);
+			if (row?.tenant_ref === tenantRef && row.source === 'manual') this.rows.delete(id);
+			return [];
 		}
 		if (text.includes('FROM public.carddue_cards')) {
 			this.reads.push({ text, params });
@@ -417,6 +427,114 @@ describe.sequential('dashboard shared encrypted record reads', () => {
 				error: { code: 'DATABASE_UNAVAILABLE', message: 'Encrypted cloud storage is unavailable.' }
 			});
 		});
+	});
+
+	it.each([false, true])(
+		'reuses dashboard rows for backup and preserves the live response when backup fails=%s',
+		async (failBackup) => {
+			vi.spyOn(emergencyStore, 'emergencyStorageConfigured').mockReturnValue(true);
+			const publish = vi.spyOn(emergencySnapshot, 'publishEmergencySnapshot');
+			if (failBackup) publish.mockRejectedValue(new Error('private backup diagnostic'));
+			else publish.mockResolvedValue();
+			const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+			await runAsTenant(FIRST_TENANT, async () => {
+				await fixture(adapter);
+				adapter.reads.length = 0;
+				const response = await dashboardEndpoint({
+					url: new URL('https://cards.example.test/api/dashboard')
+				} as never);
+				expect(response.status).toBe(200);
+				const result = await response.json();
+				expect(result.cards.ok).toBe(true);
+				expect(result.workspace.ok).toBe(true);
+				expect(adapter.reads).toHaveLength(1);
+				expect(publish).toHaveBeenCalledExactlyOnceWith([...adapter.rows.values()], Date.now());
+				expect(JSON.stringify(result)).not.toContain('private backup diagnostic');
+				if (failBackup) {
+					expect(log).toHaveBeenCalledExactlyOnceWith(
+						'The emergency financial copy could not be refreshed.'
+					);
+				} else expect(log).not.toHaveBeenCalled();
+			});
+		}
+	);
+
+	it.each([false, true])(
+		'captures current rows after deletion, including an empty workspace (keep another=%s)',
+		async (keepAnother) => {
+			vi.spyOn(auth, 'authenticatedTenantId').mockResolvedValue(FIRST_TENANT);
+			vi.spyOn(emergencyStore, 'emergencyStorageConfigured').mockReturnValue(true);
+			const publish = vi.spyOn(emergencySnapshot, 'publishEmergencySnapshot').mockResolvedValue();
+			const removed = await runAsTenant(FIRST_TENANT, async () => {
+				const card = await cards.createManualCard(
+					createManualCardSchema.parse({ nickname: 'Delete this card' })
+				);
+				if (keepAnother) {
+					await cards.createManualCard(
+						createManualCardSchema.parse({ nickname: 'Keep this card' })
+					);
+				}
+				return card;
+			});
+			const request = new Request(`https://cards.example.test/api/cards/${removed.id}`, {
+				method: 'DELETE',
+				headers: { host: 'cards.example.test', origin: 'https://cards.example.test' }
+			});
+			const event = {
+				request,
+				url: new URL(request.url),
+				route: { id: '/api/cards/[id]' },
+				params: { id: removed.id },
+				cookies: { get: () => 'synthetic-session' },
+				locals: {}
+			};
+			const response = await handle({
+				event: event as never,
+				resolve: (() => deleteCardEndpoint(event as never)) as never
+			});
+			expect(response.status).toBe(204);
+			expect(adapter.rows.has(removed.id)).toBe(false);
+			expect(adapter.rows.size).toBe(keepAnother ? 1 : 0);
+			expect(publish).toHaveBeenCalledExactlyOnceWith([...adapter.rows.values()], Date.now());
+		}
+	);
+
+	it.each([
+		['GET', '/api/dashboard', 200],
+		['GET', '/api/cards', 200],
+		['GET', '/api/accounts', 200],
+		['GET', '/api/bonuses', 200],
+		['POST', '/api/auth/logout', 204],
+		['POST', '/api/emergency/logout', 204],
+		['GET', '/api/emergency/snapshot', 200],
+		['POST', '/api/plaid/link-token', 200],
+		['POST', '/api/plaid/items/[id]/update', 200],
+		['POST', '/api/plaid/items/[id]/transactions/update', 200],
+		['PATCH', '/api/connections/[id]', 200],
+		['POST', '/api/accounts-extra', 200],
+		['POST', '/api/cards', 400],
+		['DELETE', '/api/accounts/[id]', 500]
+	] as const)('does not back up %s %s with status %s', async (method, route, status) => {
+		vi.spyOn(auth, 'authenticatedTenantId').mockResolvedValue(FIRST_TENANT);
+		vi.spyOn(emergencyStore, 'emergencyStorageConfigured').mockReturnValue(true);
+		const publish = vi.spyOn(emergencySnapshot, 'publishEmergencySnapshot').mockResolvedValue();
+		const request = new Request(`https://cards.example.test${route}`, {
+			method,
+			headers: { host: 'cards.example.test', origin: 'https://cards.example.test' }
+		});
+		const response = await handle({
+			event: {
+				request,
+				url: new URL(request.url),
+				route: { id: route },
+				cookies: { get: () => 'synthetic-session' },
+				locals: {}
+			} as never,
+			resolve: (() => new Response(null, { status })) as never
+		});
+		expect(response.status).toBe(status);
+		expect(publish).not.toHaveBeenCalled();
+		expect(adapter.reads).toHaveLength(0);
 	});
 
 	it('requires authentication before the new endpoint can load rows', async () => {

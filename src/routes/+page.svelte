@@ -2674,6 +2674,7 @@
 			<p>{authError || 'ChipDue could not verify this session.'}</p>
 			<button class="button button-primary" type="button" onclick={initializeAuth}>Try again</button
 			>
+			<a class="text-link" href={resolve('/emergency')}>Open saved finances</a>
 		</section>
 	</main>
 {:else if authMode === 'cloud' && !authenticated}
@@ -2706,6 +2707,7 @@
 			{/if}
 			{#if authError}
 				<p id="login-error" class="login-error auth-login-error" role="alert">{authError}</p>
+				<a class="text-link" href={resolve('/emergency')}>Open saved finances</a>
 			{/if}
 
 			{#if googleLoginAvailable}

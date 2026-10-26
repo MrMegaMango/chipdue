@@ -2,7 +2,7 @@
 	import { asset, resolve } from '$app/paths';
 	import ThemePicker from './ThemePicker.svelte';
 
-	type WorkspaceSection = 'overview' | 'cards' | 'accounts' | 'bonuses' | 'settings';
+	type WorkspaceSection = 'overview' | 'cards' | 'accounts' | 'bonuses' | 'settings' | 'emergency';
 	type Props = {
 		current: WorkspaceSection;
 		mode: 'local' | 'cloud' | null;
@@ -41,6 +41,11 @@
 				{link.label}
 			</a>
 		{/each}
+		{#if mode === 'cloud' || current === 'emergency'}
+			<a href={resolve('/emergency')} aria-current={current === 'emergency' ? 'page' : undefined}
+				>Saved finances</a
+			>
+		{/if}
 	</nav>
 
 	<div class="header-controls">
