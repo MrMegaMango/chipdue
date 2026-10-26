@@ -60,6 +60,7 @@
 	let snapshotLoaded = $state(false);
 	let loading = $state(true);
 	let loggingOut = $state(false);
+	let setupRequired = $state(false);
 	let error = $state('');
 	let generation = 0;
 	let checking = false;
@@ -164,6 +165,7 @@
 				if (previouslyAuthenticated) error = 'Your saved-finances session expired. Sign in again.';
 				return;
 			}
+			setupRequired = false;
 			shouldReadSnapshot = readSnapshot || changed;
 			error = '';
 		} catch {
@@ -198,7 +200,9 @@
 	}
 
 	onMount(() => {
-		if (new URL(window.location.href).searchParams.get('google') === 'error') {
+		const googleResult = new URL(window.location.href).searchParams.get('google');
+		setupRequired = googleResult === 'setup-required';
+		if (googleResult === 'error') {
 			error = 'Google sign-in could not be completed. Try again.';
 		}
 		void checkSession(true);
@@ -255,21 +259,38 @@
 			</section>
 		{:else if !session.authenticated}
 			<section class="empty">
-				<h2>Sign in to view your saved copy</h2>
-				<p>Use the Google account you use for ChipDue.</p>
-				<p>Requires a successful normal sign-in and saved copy before an outage.</p>
-				<a
-					class="google-login"
-					href={resolve('/api/auth/google/start?intent=emergency')}
-					data-sveltekit-reload
-				>
-					<img
-						src={asset('/google-sign-in.svg')}
-						alt="Sign in with Google"
-						width="180"
-						height="40"
-					/>
-				</a>
+				{#if setupRequired}
+					<h2>Saved-finances access is not set up</h2>
+					<p>
+						This Google account needs a successful sign-in to the live dashboard first. Once
+						database access returns, sign in there and open your finances to save your emergency
+						copy.
+					</p>
+					<a class="finance-button secondary" href={resolve('/')} data-sveltekit-reload
+						>Open live dashboard</a
+					>
+					<p>
+						<a href={resolve('/api/auth/google/start?intent=emergency')} data-sveltekit-reload
+							>Choose a different Google account</a
+						>
+					</p>
+				{:else}
+					<h2>Sign in to view your saved copy</h2>
+					<p>Use the Google account you use for ChipDue.</p>
+					<p>Requires a successful normal sign-in and saved copy before an outage.</p>
+					<a
+						class="google-login"
+						href={resolve('/api/auth/google/start?intent=emergency')}
+						data-sveltekit-reload
+					>
+						<img
+							src={asset('/google-sign-in.svg')}
+							alt="Sign in with Google"
+							width="180"
+							height="40"
+						/>
+					</a>
+				{/if}
 			</section>
 		{:else if !snapshotLoaded}
 			<button class="finance-button secondary" onclick={() => checkSession(true)}>Try again</button>

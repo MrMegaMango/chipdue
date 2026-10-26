@@ -616,7 +616,7 @@ describe.sequential('Google OIDC account isolation', () => {
 		const transaction = readTransaction(cookies);
 		installTokenResponse(await signIdToken({ nonce: transaction.nonce, subject: 'unknown-user' }));
 		expect((await callCallback(cookies, callbackUrl(transaction))).headers.get('location')).toBe(
-			'/emergency?google=error'
+			'/emergency?google=setup-required'
 		);
 		expect(cookies.get(EMERGENCY_SESSION_COOKIE_NAME)).toBeUndefined();
 		expect(cookies.get(SESSION_COOKIE_NAME)).toBeUndefined();
@@ -625,6 +625,79 @@ describe.sequential('Google OIDC account isolation', () => {
 			false
 		);
 	});
+
+	it('requests normal setup for a stale binding when emergency sign-in starts after password rotation', async () => {
+		emergencyStore.configured = true;
+		const subject = 'stale-user';
+		await saveEmergencyGoogleIdentity(
+			linkedReference(subject),
+			'20000000-0000-4000-8000-000000000002'
+		);
+		process.env.CARDDUE_OWNER_PASSWORD_HASH = passwordHash('rotated recovery password');
+		const query = vi.spyOn(adapter, 'query').mockRejectedValue(new Error('synthetic Neon outage'));
+		const cookies = new TestCookies();
+		await callStart(cookies, startRequest('emergency'));
+		const transaction = readTransaction(cookies);
+		const exchange = installTokenResponse(await signIdToken({ nonce: transaction.nonce, subject }));
+		expect((await callCallback(cookies, callbackUrl(transaction))).headers.get('location')).toBe(
+			'/emergency?google=setup-required'
+		);
+		expect(exchange).toHaveBeenCalledTimes(1);
+		expect(cookies.get(EMERGENCY_SESSION_COOKIE_NAME)).toBeUndefined();
+		expect(cookies.get(SESSION_COOKIE_NAME)).toBeUndefined();
+		expect(query).not.toHaveBeenCalled();
+		expect([...emergencyStore.objects.keys()].some((key) => key.startsWith('auth/session/'))).toBe(
+			false
+		);
+	});
+
+	it.each(['invalid-token', 'corrupt-binding', 'unavailable-binding'] as const)(
+		'keeps %s failures generic instead of reporting missing emergency setup',
+		async (failure) => {
+			emergencyStore.configured = true;
+			const subject = 'unverified-user';
+			const identityKey = `auth/identity/${linkedReference(subject)}`;
+			if (failure === 'corrupt-binding') {
+				await saveEmergencyGoogleIdentity(
+					linkedReference(subject),
+					'20000000-0000-4000-8000-000000000002'
+				);
+				const stored = emergencyStore.objects.get(identityKey)!;
+				stored.value = { ...(stored.value as Record<string, unknown>), tenantId: 'invalid-tenant' };
+			}
+			const read = emergencyStore.objects.get.bind(emergencyStore.objects);
+			const reads = vi.spyOn(emergencyStore.objects, 'get').mockImplementation((key) => {
+				if (failure === 'unavailable-binding' && key === identityKey) {
+					throw new AppError('EMERGENCY_UNAVAILABLE', 'Unavailable.', 503);
+				}
+				return read(key);
+			});
+			const cookies = new TestCookies();
+			await callStart(cookies, startRequest('emergency'));
+			const transaction = readTransaction(cookies);
+			const exchange = installTokenResponse(
+				await signIdToken({
+					nonce: transaction.nonce,
+					subject,
+					expiresIn: failure === 'invalid-token' ? -60 : 300
+				})
+			);
+			expect((await callCallback(cookies, callbackUrl(transaction))).headers.get('location')).toBe(
+				'/emergency?google=error'
+			);
+			expect(exchange).toHaveBeenCalledTimes(1);
+			expect(cookies.get(EMERGENCY_SESSION_COOKIE_NAME)).toBeUndefined();
+			expect(cookies.get(SESSION_COOKIE_NAME)).toBeUndefined();
+			expect(cookies.get(GOOGLE_TRANSACTION_COOKIE_NAME)).toBeUndefined();
+			expect(
+				[...emergencyStore.objects.keys()].some((key) => key.startsWith('auth/session/'))
+			).toBe(false);
+			expect(adapter.observedParameters).toHaveLength(0);
+			if (failure === 'invalid-token') {
+				expect(reads.mock.calls.some(([key]) => key === identityKey)).toBe(false);
+			}
+		}
+	);
 
 	it('invalidates emergency access and pending sign-in when the password verifier rotates', async () => {
 		emergencyStore.configured = true;
@@ -683,7 +756,7 @@ describe.sequential('Google OIDC account isolation', () => {
 			await signIdToken({ nonce: transaction.nonce, subject: 'unknown-next-user' })
 		);
 		expect((await callCallback(cookies, callbackUrl(transaction))).headers.get('location')).toBe(
-			'/emergency?google=error'
+			'/emergency?google=setup-required'
 		);
 		expect((await emergencySnapshotEndpoint({ cookies } as never)).status).toBe(401);
 	});

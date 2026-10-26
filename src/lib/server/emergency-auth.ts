@@ -208,7 +208,11 @@ export async function issueEmergencySessionForGoogle(subjectReference: string): 
 	const stored = await readEmergencyObject<unknown>(`auth/identity/${subjectReference}`);
 	const identity = stored ? parseStored(identitySchema, stored.value) : null;
 	if (!identity || !secretsEqual(identity.configRef, configRef)) {
-		throw new AppError('GOOGLE_AUTH_FAILED', 'Google authentication could not be completed.', 401);
+		throw new AppError(
+			'EMERGENCY_SETUP_REQUIRED',
+			'Sign in to the live dashboard to set up saved-finances access.',
+			401
+		);
 	}
 	const token = randomBytes(32).toString('base64url');
 	const now = Date.now();

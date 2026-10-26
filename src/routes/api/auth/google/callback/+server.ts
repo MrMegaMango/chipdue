@@ -10,7 +10,8 @@ import {
 import { privateResponseHeaders } from '$lib/server/http';
 
 export const GET: RequestHandler = async ({ cookies, request, url }) => {
-	let location = `${googleOidcReturnPath(cookies)}?google=error`;
+	const returnPath = googleOidcReturnPath(cookies);
+	let location = `${returnPath}?google=error`;
 	try {
 		const result = await completeGoogleOidc(request, url, cookies);
 		if (result.outcome === 'emergency') {
@@ -21,6 +22,13 @@ export const GET: RequestHandler = async ({ cookies, request, url }) => {
 			location = `/?google=${result.outcome}`;
 		}
 	} catch (error) {
+		if (
+			returnPath === '/emergency' &&
+			error instanceof AppError &&
+			error.code === 'EMERGENCY_SETUP_REQUIRED'
+		) {
+			location = '/emergency?google=setup-required';
+		}
 		console.error('Google OIDC callback failed', {
 			code: error instanceof AppError ? error.code : 'INTERNAL_ERROR',
 			location:
@@ -28,7 +36,8 @@ export const GET: RequestHandler = async ({ cookies, request, url }) => {
 					? error.stack?.split('\n').find((line) => line.trimStart().startsWith('at '))
 					: undefined
 		});
-		// Provider and validation failures deliberately collapse to one fixed local redirect.
+		// Provider and validation failures remain generic. Only a verified Google
+		// identity without emergency access gets the fixed setup guidance above.
 	} finally {
 		clearGoogleTransactionCookie(cookies);
 	}

@@ -99,7 +99,10 @@ describe.sequential('emergency Google authentication', () => {
 	});
 
 	it('refuses to issue a session for an identity that was never learned', async () => {
-		await expect(issueEmergencySessionForGoogle(FIRST_SUBJECT)).rejects.toThrow();
+		await expect(issueEmergencySessionForGoogle(FIRST_SUBJECT)).rejects.toMatchObject({
+			code: 'EMERGENCY_SETUP_REQUIRED',
+			status: 401
+		});
 		expect(store.write).not.toHaveBeenCalled();
 	});
 
@@ -198,6 +201,22 @@ describe.sequential('emergency Google authentication', () => {
 		const token = await knownSession();
 		vi.stubEnv('CARDDUE_GOOGLE_CLIENT_ID', 'synthetic-replacement.apps.googleusercontent.com');
 		await expect(getEmergencyTenant(token)).resolves.toBeNull();
+		await expect(issueEmergencySessionForGoogle(FIRST_SUBJECT)).rejects.toMatchObject({
+			code: 'EMERGENCY_SETUP_REQUIRED',
+			status: 401
+		});
+	});
+
+	it('does not classify a corrupt identity binding as missing setup', async () => {
+		await saveEmergencyGoogleIdentity(FIRST_SUBJECT, FIRST_TENANT);
+		const stored = store.objects.get(`auth/identity/${FIRST_SUBJECT}`)!;
+		stored.value = { ...(stored.value as Record<string, unknown>), tenantId: 'invalid-tenant' };
+		store.write.mockClear();
+		await expect(issueEmergencySessionForGoogle(FIRST_SUBJECT)).rejects.toMatchObject({
+			code: 'EMERGENCY_UNAVAILABLE',
+			status: 503
+		});
+		expect(store.write).not.toHaveBeenCalled();
 	});
 
 	it('consumes a transaction exactly once and rejects replay', async () => {
@@ -283,13 +302,20 @@ describe.sequential('emergency Google authentication', () => {
 		await expect(consumeEmergencyGoogleStartRateLimit(startRequest())).rejects.toThrow();
 	});
 
-	it('does not grant a session if session persistence fails', async () => {
-		await saveEmergencyGoogleIdentity(FIRST_SUBJECT, FIRST_TENANT);
-		store.write.mockRejectedValue(
-			new AppError('EMERGENCY_UNAVAILABLE', 'Storage unavailable.', 503)
-		);
-		await expect(issueEmergencySessionForGoogle(FIRST_SUBJECT)).rejects.toThrow();
-	});
+	it.each(['read', 'write'] as const)(
+		'does not classify an unavailable identity/session store %s as missing setup',
+		async (operation) => {
+			await saveEmergencyGoogleIdentity(FIRST_SUBJECT, FIRST_TENANT);
+			store[operation].mockRejectedValue(
+				new AppError('EMERGENCY_UNAVAILABLE', 'Storage unavailable.', 503)
+			);
+			await expect(issueEmergencySessionForGoogle(FIRST_SUBJECT)).rejects.toMatchObject({
+				code: 'EMERGENCY_UNAVAILABLE',
+				status: 503
+			});
+			expect([...store.objects.keys()].some((key) => key.startsWith('auth/session/'))).toBe(false);
+		}
+	);
 
 	it('does not reuse an authenticated tenant when the session store becomes unavailable', async () => {
 		const token = await knownSession();
