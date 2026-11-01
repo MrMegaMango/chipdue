@@ -41,11 +41,6 @@
 				{link.label}
 			</a>
 		{/each}
-		{#if mode === 'cloud' || current === 'emergency'}
-			<a href={resolve('/emergency')} aria-current={current === 'emergency' ? 'page' : undefined}
-				>Saved finances</a
-			>
-		{/if}
 	</nav>
 
 	<div class="header-controls">
