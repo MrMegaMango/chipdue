@@ -54,7 +54,7 @@ type TestRow = PrivateRecordRow & { tenant_ref: string };
 
 class DashboardAdapter implements CloudDatabaseAdapter {
 	readonly rows = new Map<string, TestRow>();
-	readonly reads: Array<{ text: string; params: unknown[] }> = [];
+	readonly reads: Array<{ text: string; params: unknown[]; rowIds: string[] }> = [];
 	failReads = false;
 
 	async query<T extends CloudRow>(text: string, params: unknown[] = []): Promise<T[]> {
@@ -87,12 +87,22 @@ class DashboardAdapter implements CloudDatabaseAdapter {
 			return [];
 		}
 		if (text.includes('FROM public.carddue_cards')) {
-			this.reads.push({ text, params });
+			const read = { text, params, rowIds: [] as string[] };
+			this.reads.push(read);
 			if (this.failReads) throw new Error('private database diagnostic');
-			const [tenantRef, id] = params;
-			return [...this.rows.values()]
-				.filter((row) => row.tenant_ref === tenantRef && (id === undefined || row.id === id))
-				.map((row) => ({ ...row })) as unknown as T[];
+			const tenantRef = params[0];
+			const id = text.includes('AND id = $2') ? params[1] : undefined;
+			const source = text.includes('AND source = $2') ? params[1] : undefined;
+			const selected = [...this.rows.values()]
+				.filter(
+					(row) =>
+						row.tenant_ref === tenantRef &&
+						(id === undefined || row.id === id) &&
+						(source === undefined || row.source === source)
+				)
+				.map((row) => ({ ...row }));
+			read.rowIds = selected.map((row) => row.id);
+			return selected as unknown as T[];
 		}
 		if (
 			text.includes('FROM public.carddue_metadata') ||
@@ -180,7 +190,7 @@ async function fixture(adapter: DashboardAdapter) {
 			currentBalanceCents: 120_000
 		})
 	);
-	await createBonus(
+	const bonus = await createBonus(
 		createBonusSchema.parse({
 			accountId: account.id,
 			name: 'Opening bonus',
@@ -188,7 +198,7 @@ async function fixture(adapter: DashboardAdapter) {
 		})
 	);
 	const connected = connectedCard(adapter, '40000000-0000-4000-8000-000000000001');
-	return { manual, account, connected };
+	return { manual, account, bonus, connected };
 }
 
 describe.sequential('dashboard shared encrypted record reads', () => {
@@ -258,6 +268,43 @@ describe.sequential('dashboard shared encrypted record reads', () => {
 				'tenant_ref'
 			])
 				expect(serialized).not.toContain(privateField);
+		});
+	});
+
+	it('lists bonuses without transferring connected history and preserves the complete dashboard', async () => {
+		const foreign = await runAsTenant(SECOND_TENANT, () =>
+			createBonus(createBonusSchema.parse({ name: 'Other tenant bonus' }))
+		);
+		await runAsTenant(FIRST_TENANT, async () => {
+			const { manual, account, bonus, connected } = await fixture(adapter);
+			const linkedBonus = await createBonus(
+				createBonusSchema.parse({
+					name: 'Connected card bonus',
+					cardId: connected.id,
+					requirementDeadline: '2026-10-31'
+				})
+			);
+			adapter.reads.length = 0;
+			const bonuses = await listBonuses();
+			expect(bonuses).toEqual([linkedBonus, bonus]);
+			expect(adapter.reads).toHaveLength(1);
+			expect(adapter.reads[0].text).toContain('WHERE tenant_ref = $1 AND source = $2');
+			expect(adapter.reads[0].params).toEqual([tenantReference(), 'manual']);
+			expect(adapter.reads[0].rowIds.toSorted()).toEqual(
+				[manual.id, account.id, bonus.id, linkedBonus.id].toSorted()
+			);
+			expect(adapter.reads[0].rowIds).not.toContain(connected.id);
+			expect(adapter.reads[0].rowIds).not.toContain(foreign.id);
+
+			adapter.reads.length = 0;
+			const dashboard = await loadDashboard({ includeActivity: true });
+			expect(dashboard.workspace).toMatchObject({ ok: true, data: { bonuses } });
+			expect(dashboard.cards.ok && dashboard.cards.data.cards).toHaveLength(2);
+			expect(dashboard.recentActivity[connected.id]).toMatchObject({ ok: true });
+			expect(adapter.reads).toHaveLength(1);
+			expect(adapter.reads[0].params).toEqual([tenantReference()]);
+			expect(adapter.reads[0].rowIds).toContain(connected.id);
+			expect(adapter.reads[0].rowIds).not.toContain(foreign.id);
 		});
 	});
 

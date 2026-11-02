@@ -1241,7 +1241,7 @@ export function financialAccountTransactionsFromRow(
 }
 
 export async function listBonuses(): Promise<AccountBonus[]> {
-	return bonusesFromRows(await listRecordRows());
+	return bonusesFromRows(await listRecordRows('manual'));
 }
 
 export function bonusesFromRows(rows: PrivateRecordRow[]): AccountBonus[] {

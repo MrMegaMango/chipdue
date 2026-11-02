@@ -203,8 +203,12 @@ class CardMemoryAdapter implements CloudDatabaseAdapter {
 		if (text.includes('FROM public.carddue_cards')) {
 			const tenantRef = String(params[0]);
 			const id = text.includes('AND id = $2') ? String(params[1]) : undefined;
+			const source = text.includes('AND source = $2') ? params[1] : undefined;
 			return [...this.cards.values()].filter(
-				(row) => row.tenant_ref === tenantRef && (id === undefined || row.id === id)
+				(row) =>
+					row.tenant_ref === tenantRef &&
+					(id === undefined || row.id === id) &&
+					(source === undefined || row.source === source)
 			) as T[];
 		}
 		if (text.includes('INSERT INTO') && text.includes('carddue_plaid_items')) {

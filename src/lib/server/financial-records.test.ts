@@ -19,6 +19,7 @@ import {
 } from './financial-records';
 import { decryptJson, encryptJson, resetCryptoStateForTests } from './crypto';
 import { savePlaidItem } from './plaid-store';
+import { listRecordRows } from './record-rows';
 import { createBonusSchema, createFinancialAccountSchema } from './schemas';
 
 describe.sequential('encrypted financial records', () => {
@@ -90,6 +91,38 @@ describe.sequential('encrypted financial records', () => {
 		expect(durableText).not.toContain('Operating account');
 		expect(durableText).not.toContain('Business checking bonus');
 		expect(durableText).not.toContain('Example Bank');
+	});
+
+	it('reads local bonuses without loading connected account rows', async () => {
+		const connectionId = await savePlaidItem('synthetic-item', 'synthetic-token', 'Example Bank');
+		await replaceConnectedFinancialAccounts(
+			'plaid',
+			connectionId,
+			[
+				{
+					accountId: 'synthetic-checking',
+					nickname: 'Connected checking',
+					institution: 'Example Bank',
+					institutionLogoBase64: null,
+					accountType: 'checking',
+					last4: '1234',
+					currency: 'USD',
+					currentBalanceCents: 100_000,
+					costBasisCents: null,
+					holdings: null
+				}
+			],
+			'2026-09-01T12:00:00.000Z'
+		);
+		const [account] = await listFinancialAccounts();
+		const bonus = await createBonus(
+			createBonusSchema.parse({ name: 'Connected account bonus', accountId: account.id })
+		);
+
+		expect((await listRecordRows('manual')).map((row) => row.id)).toEqual([bonus.id]);
+		expect(await listRecordRows()).toHaveLength(2);
+		expect(await listBonuses()).toEqual([bonus]);
+		expect(await listFinancialAccounts()).toEqual([account]);
 	});
 
 	it('updates progress and removes only the requested record type', async () => {

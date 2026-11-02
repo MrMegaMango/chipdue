@@ -40,19 +40,19 @@ export async function recordRowsRevision(): Promise<string> {
 	return privateFingerprint(JSON.stringify([tenantRef, rows]), 'record-rows-revision');
 }
 
-export async function listRecordRows(): Promise<PrivateRecordRow[]> {
+export async function listRecordRows(source?: StoredRecordSource): Promise<PrivateRecordRow[]> {
 	return getRuntimeMode() === 'cloud'
 		? await cloudQuery<PrivateRecordRow>(
 				`SELECT id::text, source, plaid_item_id::text, external_account_ref, payload_enc,
 				        last_synced_at, created_at, updated_at
-				 FROM public.carddue_cards WHERE tenant_ref = $1`,
-				[tenantReference()]
+				 FROM public.carddue_cards WHERE tenant_ref = $1${source ? ' AND source = $2' : ''}`,
+				source ? [tenantReference(), source] : [tenantReference()]
 			)
 		: (getDatabase()
 				.prepare(
 					`SELECT id, source, plaid_item_id, external_account_ref, payload_enc,
 					        last_synced_at, created_at, updated_at
-					 FROM cards`
+					 FROM cards${source ? ' WHERE source = ?' : ''}`
 				)
-				.all() as PrivateRecordRow[]);
+				.all(...(source ? [source] : [])) as PrivateRecordRow[]);
 }
