@@ -1,10 +1,14 @@
 import { createHash, scryptSync } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { POST as loginEndpoint } from '../../routes/api/auth/login/+server';
 import { POST as logoutEndpoint } from '../../routes/api/auth/logout/+server';
 import { GET as sessionEndpoint } from '../../routes/api/auth/session/+server';
 import {
 	authenticateSession,
+	issueGoogleOidcSession,
 	loginWithPassword,
 	resetAuthStateForTests,
 	setSessionCookie
@@ -20,6 +24,7 @@ import {
 	type CloudStatement
 } from './cloud-database';
 import { resetCryptoStateForTests } from './crypto';
+import { closeDatabaseForTests } from './database';
 import {
 	createBonus,
 	createFinancialAccount,
@@ -29,10 +34,11 @@ import {
 import { listPlaidConnections, savePlaidItem } from './plaid-store';
 import { getCloudRuntimeConfig, getRuntimeMode } from './runtime';
 import { createBonusSchema, createFinancialAccountSchema, createManualCardSchema } from './schemas';
-import { runAsTenant } from './tenant';
+import { runAsTenant, tenantReference } from './tenant';
 
 const CLOUD_ENV_KEYS = [
 	'CARDDUE_MODE',
+	'CARDDUE_DATA_DIR',
 	'DATABASE_URL',
 	'CARDDUE_MASTER_KEY',
 	'CARDDUE_OWNER_PASSWORD_HASH',
@@ -75,6 +81,9 @@ function setValidCloudEnvironment(): void {
 
 class AuthMemoryAdapter implements CloudDatabaseAdapter {
 	readonly observed: unknown[][] = [];
+	readonly revisionRequests: unknown[][] = [];
+	recordRevision = 'initial';
+	failRevision = false;
 	readonly sessions = new Map<
 		string,
 		{ password_config_ref: string; expires_at: number; last_seen_at: number }
@@ -86,6 +95,11 @@ class AuthMemoryAdapter implements CloudDatabaseAdapter {
 
 	async query<T extends CloudRow>(text: string, params: unknown[] = []): Promise<T[]> {
 		this.observed.push(params);
+		if (text.includes('SELECT md5(') && text.includes('FROM public.carddue_cards')) {
+			this.revisionRequests.push(params);
+			if (this.failRevision) throw new Error('synthetic revision read failure');
+			return [{ revision: this.recordRevision }] as unknown as T[];
+		}
 		if (text.includes('INSERT INTO') && text.includes('carddue_auth_rate_limits')) {
 			const [bucket, nowValue, windowValue, maxValue, blockValue] = params as [
 				string,
@@ -298,13 +312,22 @@ describe.sequential('cloud mode privacy and authentication', () => {
 	it('preserves the unauthenticated-free local session contract', async () => {
 		process.env.CARDDUE_MODE = 'local';
 		delete process.env.DATABASE_URL;
-		const response = await sessionEndpoint({ cookies: { get: () => undefined } } as never);
-		expect(await response.json()).toEqual({
-			mode: 'local',
-			authMode: 'local',
-			authenticated: true,
-			google: { configured: false, linked: false, bootstrapAvailable: false }
-		});
+		const temporaryDirectory = mkdtempSync(join(tmpdir(), 'chipdue-session-test-'));
+		process.env.CARDDUE_DATA_DIR = temporaryDirectory;
+		closeDatabaseForTests();
+		try {
+			const response = await sessionEndpoint({ cookies: { get: () => undefined } } as never);
+			expect(await response.json()).toEqual({
+				mode: 'local',
+				authMode: 'local',
+				authenticated: true,
+				dataRevision: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
+				google: { configured: false, linked: false, bootstrapAvailable: false }
+			});
+		} finally {
+			closeDatabaseForTests();
+			rmSync(temporaryDirectory, { recursive: true, force: true });
+		}
 	});
 
 	it('keeps cloud schema free of plaintext financial fields and runtime DDL', () => {
@@ -455,6 +478,55 @@ describe.sequential('cloud mode privacy and authentication', () => {
 		expect(observed?.options).not.toHaveProperty('domain');
 	});
 
+	it('reads session data revisions only for the authenticated tenant and detects changes', async () => {
+		const adapter = new AuthMemoryAdapter();
+		setCloudDatabaseAdapterForTests(adapter);
+		const tenantId = '11111111-1111-4111-8111-111111111111';
+		const unrelatedTenantId = '22222222-2222-4222-8222-222222222222';
+		const token = await issueGoogleOidcSession(tenantId);
+		const cookies = { get: () => token };
+
+		const first = await runAsTenant(unrelatedTenantId, () => sessionEndpoint({ cookies } as never));
+		expect(first.status).toBe(200);
+		expect(first.headers.get('cache-control')).toContain('no-store');
+		const firstPayload = await first.json();
+		expect(firstPayload.authenticated).toBe(true);
+		expect(firstPayload.dataRevision).toMatch(/^[A-Za-z0-9_-]{43}$/);
+		expect(adapter.revisionRequests).toEqual([[tenantReference(tenantId)]]);
+
+		const unchanged = await sessionEndpoint({ cookies } as never);
+		expect((await unchanged.json()).dataRevision).toBe(firstPayload.dataRevision);
+		adapter.recordRevision = 'updated';
+		const updated = await sessionEndpoint({ cookies } as never);
+		expect((await updated.json()).dataRevision).not.toBe(firstPayload.dataRevision);
+	});
+
+	it('does not read data revisions for missing or invalid sessions', async () => {
+		const adapter = new AuthMemoryAdapter();
+		setCloudDatabaseAdapterForTests(adapter);
+		for (const token of [undefined, Buffer.alloc(32, 17).toString('base64url')]) {
+			const response = await sessionEndpoint({ cookies: { get: () => token } } as never);
+			expect(response.status).toBe(200);
+			expect(await response.json()).toMatchObject({ authenticated: false, dataRevision: null });
+		}
+		expect(adapter.revisionRequests).toEqual([]);
+	});
+
+	it('returns the existing database error when an authenticated revision cannot be read', async () => {
+		const adapter = new AuthMemoryAdapter();
+		setCloudDatabaseAdapterForTests(adapter);
+		const token = await loginWithPassword(
+			new Request('https://cards.example.test/api/auth/login'),
+			'correct horse'
+		);
+		adapter.failRevision = true;
+		const response = await sessionEndpoint({ cookies: { get: () => token } } as never);
+		expect(response.status).toBe(503);
+		expect(await response.json()).toEqual({
+			error: { code: 'DATABASE_UNAVAILABLE', message: 'Encrypted cloud storage is unavailable.' }
+		});
+	});
+
 	it('exposes the documented login and session API contract', async () => {
 		const adapter = new AuthMemoryAdapter();
 		setCloudDatabaseAdapterForTests(adapter);
@@ -507,6 +579,7 @@ describe.sequential('cloud mode privacy and authentication', () => {
 			mode: 'cloud',
 			authMode: 'password',
 			authenticated: true,
+			dataRevision: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
 			google: { configured: false, linked: false, bootstrapAvailable: false }
 		});
 
@@ -526,6 +599,7 @@ describe.sequential('cloud mode privacy and authentication', () => {
 			mode: 'cloud',
 			authMode: 'password',
 			authenticated: false,
+			dataRevision: null,
 			google: { configured: false, linked: null, bootstrapAvailable: false }
 		});
 	});

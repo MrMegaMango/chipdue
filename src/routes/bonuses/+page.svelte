@@ -44,6 +44,7 @@
 	import {
 		clearPrivateApiCache,
 		PrivateApiError,
+		rememberPrivateDataRevision,
 		reusePrivateApiGet,
 		revalidatePrivateApiGet
 	} from '$lib/private-api-cache';
@@ -56,7 +57,7 @@
 	import '$lib/finance-pages.css';
 
 	type RuntimeMode = 'local' | 'cloud';
-	type SessionResponse = { mode: RuntimeMode; authenticated: boolean };
+	type SessionResponse = { mode: RuntimeMode; authenticated: boolean; dataRevision: string | null };
 	type AccountActivity = {
 		transactions: FinancialAccountTransaction[];
 		status: TransactionHistoryStatus;
@@ -122,7 +123,7 @@
 	let automaticTrackingLoading = $state(false);
 	let automaticTrackingError = $state('');
 	let trackingGeneration = 0;
-	let trackingReady = false;
+	let sessionCheckInFlight = false;
 	let mounted = false;
 	let loggingOut = $state(false);
 	let toast = $state('');
@@ -185,23 +186,35 @@
 	onMount(() => {
 		mounted = true;
 		void initialize();
-		const refreshVisibleTracking = () => {
-			if (trackingReady && !document.hidden && !automaticTrackingLoading) {
-				void loadAutomaticTracking();
-			}
-		};
-		window.addEventListener('focus', refreshVisibleTracking);
-		document.addEventListener('visibilitychange', refreshVisibleTracking);
-		const interval = setInterval(refreshVisibleTracking, 60_000);
+		window.addEventListener('focus', checkSavedData);
+		document.addEventListener('visibilitychange', checkSavedData);
 		return () => {
 			mounted = false;
 			trackingGeneration += 1;
-			window.removeEventListener('focus', refreshVisibleTracking);
-			document.removeEventListener('visibilitychange', refreshVisibleTracking);
-			clearInterval(interval);
+			window.removeEventListener('focus', checkSavedData);
+			document.removeEventListener('visibilitychange', checkSavedData);
 			if (toastTimer) clearTimeout(toastTimer);
 		};
 	});
+
+	async function checkSavedData(): Promise<void> {
+		if (!mounted || document.hidden || loading || sessionCheckInFlight) return;
+		sessionCheckInFlight = true;
+		try {
+			const session = await requestJson<SessionResponse>(resolve('/api/auth/session'));
+			if (!mounted) return;
+			if (!session.authenticated) {
+				clearPrivateApiCache();
+				window.location.assign(resolve('/'));
+			} else if (rememberPrivateDataRevision(session.dataRevision)) {
+				await initialize();
+			}
+		} catch {
+			// Keep the current view on a transient session-check failure.
+		} finally {
+			sessionCheckInFlight = false;
+		}
+	}
 
 	function blankForm(): BonusForm {
 		return {
@@ -231,11 +244,14 @@
 		pageError = '';
 		try {
 			const session = await requestJson<SessionResponse>(resolve('/api/auth/session'));
+			if (!mounted) return;
 			mode = session.mode;
 			if (!session.authenticated) {
+				clearPrivateApiCache();
 				window.location.assign(resolve('/'));
 				return;
 			}
+			rememberPrivateDataRevision(session.dataRevision);
 			const [bonusResponse, accountResponse, cardResponse] = await Promise.all([
 				requestJson<{ bonuses: AccountBonus[] }>(resolve('/api/bonuses')),
 				requestJson<{ accounts: FinancialAccount[] }>(resolve('/api/accounts')),
@@ -244,7 +260,6 @@
 			bonuses = bonusResponse.bonuses;
 			accounts = accountResponse.accounts;
 			cards = cardResponse.cards;
-			trackingReady = true;
 			void loadAutomaticTracking();
 			void loadLinkedAccountActivity(bonusResponse.bonuses, accountResponse.accounts);
 			if (!queryPrefillHandled) {

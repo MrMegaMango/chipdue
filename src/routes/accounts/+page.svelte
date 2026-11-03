@@ -11,7 +11,11 @@
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
 	import { financialProviderName } from '$lib/financial-data';
 	import { cashSweepAction, isCashSweepSecurity } from '$lib/investment-display';
-	import { clearPrivateApiCache, reusePrivateApiGet } from '$lib/private-api-cache';
+	import {
+		clearPrivateApiCache,
+		rememberPrivateDataRevision,
+		reusePrivateApiGet
+	} from '$lib/private-api-cache';
 	import type {
 		BrokerageOrder,
 		BrokerageHistoryEstimateResponse,
@@ -28,7 +32,7 @@
 	import '$lib/finance-pages.css';
 
 	type RuntimeMode = 'local' | 'cloud';
-	type SessionResponse = { mode: RuntimeMode; authenticated: boolean };
+	type SessionResponse = { mode: RuntimeMode; authenticated: boolean; dataRevision: string | null };
 	type ConnectionsStatusResponse = {
 		providers: FinancialProviderStatus[];
 		connections: FinancialConnection[];
@@ -209,13 +213,40 @@
 		).length
 	);
 
+	let mounted = false;
+	let sessionCheckInFlight = false;
 	onMount(() => {
+		mounted = true;
 		void initialize();
+		window.addEventListener('focus', checkSavedData);
+		document.addEventListener('visibilitychange', checkSavedData);
 		return () => {
+			mounted = false;
+			window.removeEventListener('focus', checkSavedData);
+			document.removeEventListener('visibilitychange', checkSavedData);
 			activePlaidHandler?.destroy();
 			activePlaidHandler = null;
 		};
 	});
+
+	async function checkSavedData(): Promise<void> {
+		if (!mounted || document.hidden || loading || sessionCheckInFlight) return;
+		sessionCheckInFlight = true;
+		try {
+			const session = await requestJson<SessionResponse>(resolve('/api/auth/session'));
+			if (!mounted) return;
+			if (!session.authenticated) {
+				clearPrivateApiCache();
+				window.location.assign(resolve('/'));
+			} else if (rememberPrivateDataRevision(session.dataRevision)) {
+				await initialize();
+			}
+		} catch {
+			// Keep the current view on a transient session-check failure.
+		} finally {
+			sessionCheckInFlight = false;
+		}
+	}
 
 	function blankForm(): AccountForm {
 		return {
@@ -283,11 +314,14 @@
 		pageError = '';
 		try {
 			const session = await requestJson<SessionResponse>(resolve('/api/auth/session'));
+			if (!mounted) return;
 			mode = session.mode;
 			if (!session.authenticated) {
+				clearPrivateApiCache();
 				window.location.assign(resolve('/'));
 				return;
 			}
+			rememberPrivateDataRevision(session.dataRevision);
 			const [accountResponse, connectionsResponse, bonusResponse] = await Promise.all([
 				requestJson<{ accounts: FinancialAccount[] }>(resolve('/api/accounts')),
 				requestJson<ConnectionsStatusResponse>(resolve('/api/connections')),

@@ -6,6 +6,11 @@
 		BuyTimingSchedule,
 		BuyTimingWindow
 	} from '$lib/buy-timing';
+	import {
+		clearPrivateApiCache,
+		PrivateApiError,
+		reusePrivateApiGet
+	} from '$lib/private-api-cache';
 	import type { FinancialAccount } from '$lib/types';
 
 	let { accounts }: { accounts: FinancialAccount[] } = $props();
@@ -50,26 +55,29 @@
 			loading = false;
 			return;
 		}
-		const [id, requestedRange, requestedSchedule, requestedWindow] = key.split('/');
-		const controller = new AbortController();
+		const [id, requestedRange, requestedSchedule, requestedWindow, lastSyncedAt] = key.split('/');
+		const url = `${resolve('/api/accounts/[id]/buy-timing', { id })}?range=${requestedRange}&schedule=${requestedSchedule}&window=${requestedWindow}`;
+		let active = true;
 		loading = true;
-		void fetch(
-			`${resolve('/api/accounts/[id]/buy-timing', { id })}?range=${requestedRange}&schedule=${requestedSchedule}&window=${requestedWindow}`,
-			{ signal: controller.signal }
-		)
-			.then(async (result) => {
-				if (!result.ok) throw new Error('Comparison unavailable');
-				const data = (await result.json()) as BuyTimingResponse;
-				if (!controller.signal.aborted) response = data;
+		void reusePrivateApiGet(`${url}#${lastSyncedAt}`, async () => {
+			const result = await fetch(url);
+			if (!result.ok) throw new PrivateApiError(result.status, 'Comparison unavailable');
+			return (await result.json()) as BuyTimingResponse;
+		})
+			.then((data) => {
+				if (active) response = data;
 			})
-			.catch(() => {
-				if (!controller.signal.aborted)
-					error = 'The buy-timing comparison is temporarily unavailable. Try again in a moment.';
+			.catch((failure) => {
+				if (!active || (failure instanceof DOMException && failure.name === 'AbortError')) return;
+				if (failure instanceof PrivateApiError && failure.status === 401) clearPrivateApiCache();
+				error = 'The buy-timing comparison is temporarily unavailable. Try again in a moment.';
 			})
 			.finally(() => {
-				if (!controller.signal.aborted) loading = false;
+				if (active) loading = false;
 			});
-		return () => controller.abort();
+		return () => {
+			active = false;
+		};
 	});
 
 	const available = $derived(

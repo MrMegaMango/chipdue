@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	createConditionalRequestCache,
 	createMemoryRequestCache,
@@ -43,6 +43,254 @@ describe('memory-only private API cache', () => {
 		await expect(cache.get('/api/bonuses', load)).rejects.toThrow('temporary failure');
 		await expect(cache.get('/api/bonuses', load)).resolves.toBe('recovered');
 		expect(load).toHaveBeenCalledTimes(2);
+	});
+
+	it('shares dashboard sections without extending the original snapshot expiry', async () => {
+		let now = 0;
+		const cache = createMemoryRequestCache(() => now);
+		const snapshot = { cards: ['saved card'] };
+		await cache.get('/api/dashboard', async () => snapshot, 1_000);
+		now = 600;
+		cache.alias<typeof snapshot>('/api/dashboard', '/api/cards', (value) => value.cards);
+		const loadCards = vi.fn(async () => ['fresh card']);
+		expect(await cache.get('/api/cards', loadCards)).toEqual(['saved card']);
+		expect(loadCards).not.toHaveBeenCalled();
+
+		now = 999;
+		cache.alias<typeof snapshot>('/api/dashboard', '/api/cards', (value) => value.cards);
+		now = 1_000;
+		expect(await cache.get('/api/cards', loadCards)).toEqual(['fresh card']);
+		expect(loadCards).toHaveBeenCalledOnce();
+	});
+
+	it('does not replace a current page response with an older dashboard alias', async () => {
+		const cache = createMemoryRequestCache();
+		const snapshot = { cards: ['older dashboard card'] };
+		await cache.get('/api/dashboard', async () => snapshot);
+		await cache.get('/api/cards', async () => ['current card']);
+		cache.alias<typeof snapshot>('/api/dashboard', '/api/cards', (value) => value.cards);
+		const loadCards = vi.fn(async () => ['unneeded request']);
+		expect(await cache.get('/api/cards', loadCards)).toEqual(['current card']);
+		expect(loadCards).not.toHaveBeenCalled();
+	});
+
+	it('discards in-flight responses and their aliases after clearing private data', async () => {
+		const cache = createMemoryRequestCache();
+		const response = Promise.withResolvers<{ cards: string[] }>();
+		const oldRequest = cache.get('/api/dashboard', () => response.promise);
+		cache.alias<{ cards: string[] }>('/api/dashboard', '/api/cards', (value) => value.cards);
+		const oldAlias = cache.get('/api/cards', async () => ['unexpected']);
+		const rejected = Promise.all([
+			expect(oldRequest).rejects.toMatchObject({ name: 'AbortError' }),
+			expect(oldAlias).rejects.toMatchObject({ name: 'AbortError' })
+		]);
+
+		cache.clear();
+		const freshLoad = vi.fn(async () => ['new session card']);
+		await cache.get('/api/cards', freshLoad);
+		response.resolve({ cards: ['old session card'] });
+		await rejected;
+		cache.alias<{ cards: string[] }>('/api/dashboard', '/api/cards', (value) => value.cards);
+		expect(await cache.get('/api/cards', freshLoad)).toEqual(['new session card']);
+		expect(freshLoad).toHaveBeenCalledOnce();
+	});
+
+	it('suppresses a late unauthorized error without evicting a newer session result', async () => {
+		const cache = createMemoryRequestCache();
+		const response = Promise.withResolvers<string>();
+		const oldRequest = cache.get('/api/accounts', () => response.promise);
+		const rejected = expect(oldRequest).rejects.toMatchObject({ name: 'AbortError' });
+		cache.clear();
+		const freshLoad = vi.fn(async () => 'new session');
+		await cache.get('/api/accounts', freshLoad);
+		response.reject(new PrivateApiError(401, 'Expired old session'));
+		await rejected;
+		expect(await cache.get('/api/accounts', freshLoad)).toBe('new session');
+		expect(freshLoad).toHaveBeenCalledOnce();
+	});
+
+	it('forgets one failed dashboard snapshot without discarding other page data', async () => {
+		const cache = createMemoryRequestCache();
+		const loadAccounts = vi.fn(async () => ['account']);
+		const loadDashboard = vi
+			.fn<() => Promise<{ ok: boolean }>>()
+			.mockResolvedValueOnce({ ok: false })
+			.mockResolvedValueOnce({ ok: true });
+		await cache.get('/api/accounts', loadAccounts);
+		await cache.get('/api/dashboard', loadDashboard);
+		cache.delete('/api/dashboard');
+		expect(await cache.get('/api/dashboard', loadDashboard)).toEqual({ ok: true });
+		await cache.get('/api/accounts', loadAccounts);
+		expect(loadDashboard).toHaveBeenCalledTimes(2);
+		expect(loadAccounts).toHaveBeenCalledOnce();
+	});
+});
+
+describe('browser private API reuse', () => {
+	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-11-03T18:00:00Z'));
+		vi.stubGlobal('window', {});
+		vi.resetModules();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+		vi.resetModules();
+	});
+
+	it('reuses financial data across navigation beyond five minutes, with a daily safety expiry', async () => {
+		// This Pacific date lasts 25 hours, so the 24-hour cap expires before midnight.
+		vi.setSystemTime(new Date('2026-11-01T07:00:00Z'));
+		const { reusePrivateApiGet } = await import('./private-api-cache');
+		const load = vi.fn(async () => ({ version: load.mock.calls.length }));
+		const initial = await reusePrivateApiGet('/api/accounts', load);
+		vi.advanceTimersByTime(6 * 60 * 1000);
+		expect(await reusePrivateApiGet('/api/accounts', load)).toBe(initial);
+		vi.advanceTimersByTime(23 * 60 * 60 * 1000);
+		expect(await reusePrivateApiGet('/api/accounts', load)).toBe(initial);
+		expect(load).toHaveBeenCalledOnce();
+		vi.advanceTimersByTime(54 * 60 * 1000);
+		expect(await reusePrivateApiGet('/api/accounts', load)).toEqual({ version: 2 });
+	});
+
+	it.each(['2026-11-04T07:59:00Z', '2026-07-04T06:59:00Z'])(
+		'refreshes finances and date-dependent tracking at Pacific midnight after %s',
+		async (beforeMidnight) => {
+			vi.setSystemTime(new Date(beforeMidnight));
+			const { reusePrivateApiGet, revalidatePrivateApiGet, rememberPrivateDataRevision } =
+				await import('./private-api-cache');
+			const accounts = vi.fn(async () => ({ version: accounts.mock.calls.length }));
+			const tracking = vi.fn<(etag: string | null) => Promise<Response>>(
+				async (): Promise<Response> =>
+					Response.json(
+						{ version: tracking.mock.calls.length },
+						{ headers: { etag: `W/"tracking-day-${tracking.mock.calls.length}"` } }
+					)
+			);
+			rememberPrivateDataRevision('unchanged-records');
+			await reusePrivateApiGet('/api/accounts', accounts);
+			await revalidatePrivateApiGet('/api/bonuses/tracking', tracking);
+			vi.advanceTimersByTime(30_000);
+			await reusePrivateApiGet('/api/accounts', accounts);
+			await revalidatePrivateApiGet('/api/bonuses/tracking', tracking);
+			expect(accounts).toHaveBeenCalledOnce();
+			expect(tracking).toHaveBeenCalledOnce();
+
+			vi.advanceTimersByTime(30_000);
+			expect(await reusePrivateApiGet('/api/accounts', accounts)).toEqual({ version: 2 });
+			expect(await revalidatePrivateApiGet('/api/bonuses/tracking', tracking)).toEqual({
+				version: 2
+			});
+			expect(tracking.mock.calls).toEqual([[null], ['W/"tracking-day-1"']]);
+		}
+	);
+
+	it('notifies mounted pages at Pacific midnight even when their saved records are unchanged', async () => {
+		vi.setSystemTime(new Date('2026-11-04T07:59:00Z'));
+		const { rememberPrivateDataRevision, reusePrivateApiGet } = await import('./private-api-cache');
+		const load = vi.fn(async () => 'current finances');
+		expect(rememberPrivateDataRevision('same-records')).toBe(false);
+		await reusePrivateApiGet('/api/accounts', load);
+		vi.advanceTimersByTime(30_000);
+		expect(rememberPrivateDataRevision('same-records')).toBe(false);
+		vi.advanceTimersByTime(30_000);
+		expect(rememberPrivateDataRevision('same-records')).toBe(true);
+		expect(rememberPrivateDataRevision('same-records')).toBe(false);
+		await reusePrivateApiGet('/api/accounts', load);
+		expect(load).toHaveBeenCalledTimes(2);
+	});
+
+	it.each([
+		'/api/auth/session',
+		'/api/connections',
+		'/api/plaid/status',
+		'/api/etrade/status',
+		'/api/accounts/account-id/orders'
+	])('keeps the five-minute lifetime for %s', async (url) => {
+		const { reusePrivateApiGet } = await import('./private-api-cache');
+		const load = vi.fn(async () => ({ version: load.mock.calls.length }));
+		const initial = await reusePrivateApiGet(url, load);
+		vi.advanceTimersByTime(5 * 60 * 1000 - 1);
+		expect(await reusePrivateApiGet(url, load)).toBe(initial);
+		vi.advanceTimersByTime(1);
+		expect(await reusePrivateApiGet(url, load)).toEqual({ version: 2 });
+		expect(load).toHaveBeenCalledTimes(2);
+	});
+
+	it('checks tracking once across repeated page visits until its memory entry expires', async () => {
+		const { revalidatePrivateApiGet } = await import('./private-api-cache');
+		const load = vi
+			.fn<(etag: string | null) => Promise<Response>>()
+			.mockResolvedValueOnce(
+				Response.json({ paid: true }, { headers: { etag: 'W/"saved-revision"' } })
+			)
+			.mockResolvedValueOnce(new Response(null, { status: 304 }));
+		const first = revalidatePrivateApiGet('/api/bonuses/tracking', load);
+		const duplicate = revalidatePrivateApiGet('/api/bonuses/tracking', load);
+		const initial = await first;
+		expect(await duplicate).toBe(initial);
+		vi.advanceTimersByTime(6 * 60 * 1000);
+		expect(await revalidatePrivateApiGet('/api/bonuses/tracking', load)).toBe(initial);
+		expect(load.mock.calls).toEqual([[null]]);
+		vi.advanceTimersByTime((24 * 60 - 6) * 60 * 1000);
+		expect(await revalidatePrivateApiGet('/api/bonuses/tracking', load)).toBe(initial);
+		expect(load.mock.calls).toEqual([[null], ['W/"saved-revision"']]);
+	});
+
+	it('invalidates both financial and tracking results only when the saved revision changes', async () => {
+		const { reusePrivateApiGet, revalidatePrivateApiGet, rememberPrivateDataRevision } =
+			await import('./private-api-cache');
+		const accounts = vi.fn(async () => ({ version: accounts.mock.calls.length }));
+		const tracking = vi.fn<(etag: string | null) => Promise<Response>>(
+			async (): Promise<Response> =>
+				Response.json(
+					{ version: tracking.mock.calls.length },
+					{ headers: { etag: 'W/"tracking"' } }
+				)
+		);
+		expect(rememberPrivateDataRevision('records-1')).toBe(false);
+		await reusePrivateApiGet('/api/accounts', accounts);
+		await revalidatePrivateApiGet('/api/bonuses/tracking', tracking);
+		vi.advanceTimersByTime(6 * 60 * 1000);
+		expect(rememberPrivateDataRevision(null)).toBe(false);
+		expect(rememberPrivateDataRevision('records-1')).toBe(false);
+		expect(await reusePrivateApiGet('/api/accounts', accounts)).toEqual({ version: 1 });
+		expect(await revalidatePrivateApiGet('/api/bonuses/tracking', tracking)).toEqual({
+			version: 1
+		});
+		expect(accounts).toHaveBeenCalledOnce();
+		expect(tracking).toHaveBeenCalledOnce();
+
+		expect(rememberPrivateDataRevision('records-2')).toBe(true);
+		expect(await reusePrivateApiGet('/api/accounts', accounts)).toEqual({ version: 2 });
+		expect(await revalidatePrivateApiGet('/api/bonuses/tracking', tracking)).toEqual({
+			version: 2
+		});
+		expect(tracking.mock.calls).toEqual([[null], [null]]);
+		expect(rememberPrivateDataRevision('records-2')).toBe(false);
+	});
+
+	it('invalidates an in-flight tracking request when a completed bank pull changes the revision', async () => {
+		const { revalidatePrivateApiGet, rememberPrivateDataRevision } =
+			await import('./private-api-cache');
+		rememberPrivateDataRevision('records-1');
+		const response = Promise.withResolvers<Response>();
+		const oldRequest = revalidatePrivateApiGet('/api/bonuses/tracking', () => response.promise);
+		const rejected = expect(oldRequest).rejects.toMatchObject({ name: 'AbortError' });
+		rememberPrivateDataRevision('records-2');
+		const freshLoad = vi.fn<(etag: string | null) => Promise<Response>>(async () =>
+			Response.json({ paid: true }, { headers: { etag: 'W/"new-tracking"' } })
+		);
+		await revalidatePrivateApiGet('/api/bonuses/tracking', freshLoad);
+		response.resolve(Response.json({ paid: false }, { headers: { etag: 'W/"old-tracking"' } }));
+		await rejected;
+		expect(await revalidatePrivateApiGet('/api/bonuses/tracking', freshLoad)).toEqual({
+			paid: true
+		});
+		expect(freshLoad).toHaveBeenCalledOnce();
+		expect(freshLoad).toHaveBeenCalledWith(null);
 	});
 });
 

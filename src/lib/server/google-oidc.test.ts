@@ -133,6 +133,9 @@ class GoogleMemoryAdapter implements CloudDatabaseAdapter {
 
 	async query<T extends CloudRow>(text: string, params: unknown[] = []): Promise<T[]> {
 		this.observedParameters.push(params);
+		if (text.includes('SELECT md5(') && text.includes('FROM public.carddue_cards')) {
+			return [{ revision: 'initial' }] as unknown as T[];
+		}
 		if (text.includes('INSERT INTO public.carddue_metadata AS bootstrap_claim')) {
 			const [key, value, linkedKey] = params.map(String);
 			if (this.metadata.has(linkedKey)) return [];
@@ -892,6 +895,7 @@ describe.sequential('Google OIDC account isolation', () => {
 			mode: 'cloud',
 			authMode: 'google',
 			authenticated: false,
+			dataRevision: null,
 			google: { configured: true, linked: null, bootstrapAvailable: true }
 		});
 		expect(adapter.observedParameters).toEqual([]);
@@ -1195,6 +1199,7 @@ describe.sequential('Google OIDC account isolation', () => {
 			mode: 'cloud',
 			authMode: 'password',
 			authenticated: false,
+			dataRevision: null,
 			google: { configured: true, linked: null, bootstrapAvailable: false }
 		});
 		expect(adapter.observedParameters).toEqual([]);
@@ -1213,6 +1218,7 @@ describe.sequential('Google OIDC account isolation', () => {
 			mode: 'cloud',
 			authMode: 'password',
 			authenticated: true,
+			dataRevision: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/),
 			google: { configured: true, linked: true, bootstrapAvailable: false }
 		});
 	});

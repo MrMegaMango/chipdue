@@ -2,8 +2,8 @@ import { timingSafeEqual } from 'node:crypto';
 import { cloudQuery } from './cloud-database';
 import { AppError } from './errors';
 
-export type ScheduledSyncPeriod = 'morning' | 'evening';
-export type ScheduledSyncCandidate = 'morning-pdt' | 'morning-pst' | 'evening-pdt' | 'evening-pst';
+export type ScheduledSyncPeriod = 'morning';
+export type ScheduledSyncCandidate = 'morning-pdt' | 'morning-pst';
 
 export type ScheduledSyncWindow = {
 	period: ScheduledSyncPeriod;
@@ -17,10 +17,8 @@ const CANDIDATES: Record<
 	ScheduledSyncCandidate,
 	{ period: ScheduledSyncPeriod; localHour: number }
 > = {
-	'morning-pdt': { period: 'morning', localHour: 8 },
-	'morning-pst': { period: 'morning', localHour: 8 },
-	'evening-pdt': { period: 'evening', localHour: 17 },
-	'evening-pst': { period: 'evening', localHour: 17 }
+	'morning-pdt': { period: 'morning', localHour: 9 },
+	'morning-pst': { period: 'morning', localHour: 9 }
 };
 
 const pacificParts = new Intl.DateTimeFormat('en-US', {

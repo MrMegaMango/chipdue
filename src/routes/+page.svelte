@@ -302,8 +302,11 @@
 	import type { DashboardResponse } from '$lib/dashboard';
 	import { createDashboardLoader } from '$lib/dashboard-loader';
 	import {
+		aliasPrivateApiGet,
 		clearPrivateApiCache,
+		forgetPrivateApiGet,
 		PrivateApiError,
+		rememberPrivateDataRevision,
 		reusePrivateApiGet,
 		revalidatePrivateApiGet
 	} from '$lib/private-api-cache';
@@ -334,6 +337,7 @@
 		mode: AuthMode;
 		authMode: AuthenticationMode;
 		authenticated: boolean;
+		dataRevision: string | null;
 		google: GoogleAuthStatus;
 	};
 	type RequestOptions = {
@@ -910,6 +914,7 @@
 				{},
 				{ handleUnauthorized: false }
 			);
+			if (!pageMounted) return;
 			authMode = session.mode;
 			authenticationMode = session.authMode;
 			googleConfigured = session.google.configured;
@@ -917,11 +922,13 @@
 			googleBootstrapAvailable = session.google.bootstrapAvailable;
 			authenticated = session.mode === 'local' || session.authenticated;
 			if (session.mode === 'cloud' && !session.authenticated) {
+				clearPrivateApiCache();
 				void tick().then(() => {
 					if (googleLoginAvailable) googleLoginLink?.focus();
 					else if (passwordLoginAvailable) passwordInput?.focus();
 				});
 			} else {
+				rememberPrivateDataRevision(session.dataRevision);
 				loadDashboardData();
 			}
 			showGoogleCallbackResult();
@@ -944,13 +951,15 @@
 				{},
 				{ memoryCache: 'bypass', privateEpoch: epoch }
 			);
-			if (!isPrivateEpochCurrent(epoch)) return;
+			if (!pageMounted || !isPrivateEpochCurrent(epoch)) return;
 			googleConfigured = session.google.configured;
 			googleLinked = session.google.linked;
 			googleBootstrapAvailable = session.google.bootstrapAvailable;
 			authenticationMode = session.authMode;
 			if (session.mode === 'cloud' && !session.authenticated) {
 				lockCloudSession('Your session expired. Sign in to continue.');
+			} else if (rememberPrivateDataRevision(session.dataRevision)) {
+				loadDashboardData();
 			}
 		} catch {
 			// A 401 locks the UI in requestJson. Transient network errors leave the current view intact.
@@ -1067,6 +1076,7 @@
 					{ handleUnauthorized: false }
 				);
 				if (session.mode === 'cloud' && session.authenticated) {
+					rememberPrivateDataRevision(session.dataRevision);
 					authenticationMode = session.authMode;
 					googleConfigured = session.google.configured;
 					googleLinked = session.google.linked;
@@ -1265,12 +1275,29 @@
 
 	const dashboardLoader = createDashboardLoader({
 		isCurrent: isPrivateEpochCurrent,
-		request: (epoch) =>
-			requestJson<DashboardResponse>(
-				`${resolve('/api/dashboard')}${currentSection === 'cards' ? '?includeActivity=1' : ''}`,
-				{},
-				{ memoryCache: 'bypass', privateEpoch: epoch }
-			),
+		request: async (epoch) => {
+			const url = `${resolve('/api/dashboard')}?includeActivity=1`;
+			const payload = await requestJson<DashboardResponse>(url, {}, { privateEpoch: epoch });
+			if (payload.cards.ok) {
+				aliasPrivateApiGet<DashboardResponse>(url, resolve('/api/cards'), (value) =>
+					value.cards.ok ? value.cards.data : undefined
+				);
+			}
+			if (payload.workspace.ok) {
+				aliasPrivateApiGet<DashboardResponse>(url, resolve('/api/bonuses'), (value) =>
+					value.workspace.ok ? { bonuses: value.workspace.data.bonuses } : undefined
+				);
+			}
+			// Failed sections must be retryable; aliases retain only successful sections.
+			if (
+				!payload.cards.ok ||
+				!payload.workspace.ok ||
+				Object.values(payload.recentActivity).some((activity) => !activity.ok)
+			) {
+				forgetPrivateApiGet(url);
+			}
+			return payload;
+		},
 		start: (quiet) => {
 			if (!quiet) loading = true;
 			loadError = '';

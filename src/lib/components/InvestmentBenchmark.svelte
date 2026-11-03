@@ -6,6 +6,11 @@
 		type BenchmarkPrice,
 		type BenchmarkRange
 	} from '$lib/investment-benchmark';
+	import {
+		clearPrivateApiCache,
+		PrivateApiError,
+		reusePrivateApiGet
+	} from '$lib/private-api-cache';
 	import type { FinancialAccount } from '$lib/types';
 
 	let {
@@ -83,27 +88,31 @@
 			prices = [];
 			return;
 		}
-		const controller = new AbortController();
 		const [start, end] = key.split('/');
+		const url = `${resolve('/api/investments/benchmark')}?start=${start}&end=${end}`;
+		let active = true;
 		loading = true;
 		error = '';
 		prices = [];
-		void fetch(`${resolve('/api/investments/benchmark')}?start=${start}&end=${end}`, {
-			signal: controller.signal
+		void reusePrivateApiGet(url, async () => {
+			const response = await fetch(url);
+			if (!response.ok) throw new PrivateApiError(response.status, 'Benchmark unavailable');
+			return (await response.json()) as { prices: BenchmarkPrice[] };
 		})
-			.then(async (response) => {
-				if (!response.ok) throw new Error('Benchmark unavailable');
-				const data = (await response.json()) as { prices: BenchmarkPrice[] };
-				if (!controller.signal.aborted) prices = data.prices;
+			.then((data) => {
+				if (active) prices = data.prices;
 			})
-			.catch(() => {
-				if (!controller.signal.aborted)
-					error = 'SPY prices are temporarily unavailable. Your account data is unchanged.';
+			.catch((failure) => {
+				if (!active || (failure instanceof DOMException && failure.name === 'AbortError')) return;
+				if (failure instanceof PrivateApiError && failure.status === 401) clearPrivateApiCache();
+				error = 'SPY prices are temporarily unavailable. Your account data is unchanged.';
 			})
 			.finally(() => {
-				if (!controller.signal.aborted) loading = false;
+				if (active) loading = false;
 			});
-		return () => controller.abort();
+		return () => {
+			active = false;
+		};
 	});
 
 	const usesAutomaticPeriodBasis = $derived(

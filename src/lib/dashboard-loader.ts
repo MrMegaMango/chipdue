@@ -18,7 +18,7 @@ export function createDashboardLoader(options: DashboardLoaderOptions) {
 		const isCurrent = () => version === loadVersion && options.isCurrent(epoch);
 		options.start(quiet);
 		try {
-			// Each load requests a fresh snapshot, including a refresh after a mutation.
+			// Navigation may reuse a snapshot; writes invalidate it before requesting again.
 			const response = await options.request(epoch);
 			if (!isCurrent()) return false;
 			return options.apply(response);
