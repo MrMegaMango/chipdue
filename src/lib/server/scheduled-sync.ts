@@ -17,8 +17,8 @@ const CANDIDATES: Record<
 	ScheduledSyncCandidate,
 	{ period: ScheduledSyncPeriod; localHour: number }
 > = {
-	'morning-pdt': { period: 'morning', localHour: 9 },
-	'morning-pst': { period: 'morning', localHour: 9 }
+	'morning-pdt': { period: 'morning', localHour: 8 },
+	'morning-pst': { period: 'morning', localHour: 8 }
 };
 
 const pacificParts = new Intl.DateTimeFormat('en-US', {
