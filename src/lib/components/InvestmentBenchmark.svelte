@@ -123,7 +123,12 @@
 				if (active) prices = data.prices;
 			})
 			.catch((failure) => {
-				if (!active || (failure instanceof DOMException && failure.name === 'AbortError')) return;
+				if (!active) return;
+				if (failure instanceof DOMException && failure.name === 'AbortError') {
+					// A completed account-history refresh can invalidate this in-flight request.
+					retry += 1;
+					return;
+				}
 				if (failure instanceof PrivateApiError && failure.status === 401) clearPrivateApiCache();
 				error = 'SPY prices are temporarily unavailable.';
 			})
