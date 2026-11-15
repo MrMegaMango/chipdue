@@ -9,7 +9,7 @@
 	import SyncedTime from '$lib/components/SyncedTime.svelte';
 	import { connectionSyncSummary, type ConnectionSyncSummary } from '$lib/connection-sync';
 	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
-	import { financialProviderName } from '$lib/financial-data';
+	import { financialProviderName, sumMoneyByCurrency } from '$lib/financial-data';
 	import { cashSweepAction, isCashSweepSecurity } from '$lib/investment-display';
 	import {
 		clearPrivateApiCache,
@@ -54,6 +54,7 @@
 		ownerType: FinancialAccountOwner;
 		status: FinancialAccountStatus;
 		last4: string;
+		currency: string;
 		currentBalance: number | undefined;
 		apyPercent: number | undefined;
 		costBasis: number | undefined;
@@ -81,11 +82,6 @@
 		}) => PlaidHandler;
 	};
 
-	const money = new Intl.NumberFormat('en-US', {
-		style: 'currency',
-		currency: 'USD',
-		maximumFractionDigits: 2
-	});
 	const fullDate = new Intl.DateTimeFormat('en-US', {
 		month: 'short',
 		day: 'numeric',
@@ -184,33 +180,21 @@
 	const dialogAccount = $derived(
 		editingId ? accounts.find((account) => account.id === editingId) : undefined
 	);
-	const knownBalances = $derived(
-		activeAccounts.filter((account) => account.currentBalanceCents !== null)
+	const trackedBalances = $derived(
+		sumMoneyByCurrency(
+			activeAccounts.map((account) => ({
+				currency: account.currency,
+				amountCents: account.currentBalanceCents
+			}))
+		)
 	);
-	const trackedBalanceCents = $derived(
-		knownBalances.reduce((total, account) => total + (account.currentBalanceCents ?? 0), 0)
-	);
-	const brokerageReturnCents = $derived(
-		activeAccounts
-			.filter(
-				(account) =>
-					account.accountType === 'brokerage' &&
-					account.currentBalanceCents !== null &&
-					effectiveNetContributions(account) !== null
-			)
-			.reduce(
-				(total, account) =>
-					total + (account.currentBalanceCents ?? 0) - (effectiveNetContributions(account) ?? 0),
-				0
-			)
-	);
-	const brokeragePerformanceCount = $derived(
-		activeAccounts.filter(
-			(account) =>
-				account.accountType === 'brokerage' &&
-				account.currentBalanceCents !== null &&
-				effectiveNetContributions(account) !== null
-		).length
+	const investmentReturns = $derived(
+		sumMoneyByCurrency(
+			activeAccounts.map((account) => ({
+				currency: account.currency,
+				amountCents: investmentReturn(account)
+			}))
+		)
 	);
 
 	let mounted = false;
@@ -256,6 +240,7 @@
 			ownerType: 'personal',
 			status: 'active',
 			last4: '',
+			currency: 'USD',
 			currentBalance: undefined,
 			apyPercent: undefined,
 			costBasis: undefined,
@@ -292,6 +277,11 @@
 
 	function sortAccountsByValue(groupAccounts: FinancialAccount[]): FinancialAccount[] {
 		return [...groupAccounts].sort((left, right) => {
+			if (left.currency !== right.currency) {
+				if (left.currency === 'USD') return -1;
+				if (right.currency === 'USD') return 1;
+				return left.currency.localeCompare(right.currency);
+			}
 			if (left.currentBalanceCents === null) return right.currentBalanceCents === null ? 0 : 1;
 			if (right.currentBalanceCents === null) return -1;
 			return right.currentBalanceCents - left.currentBalanceCents;
@@ -397,8 +387,8 @@
 		return value === undefined || !Number.isFinite(value) ? null : Math.round(value * 100);
 	}
 
-	function formatMoney(value: number | null): string {
-		return value === null ? 'Not entered' : money.format(value / 100);
+	function formatMoney(value: number | null, currency: string): string {
+		return value === null ? 'Not entered' : formatHoldingMoney(value / 100, currency);
 	}
 
 	function formatApy(value: number): string {
@@ -627,10 +617,10 @@
 		}
 		const periodLabel = account.netContributionsCents === null ? ' · since history began' : '';
 		if (contributions === 0) {
-			return `${gain >= 0 ? '+' : ''}${money.format(gain / 100)}${periodLabel}`;
+			return `${gain >= 0 ? '+' : ''}${formatMoney(gain, account.currency)}${periodLabel}`;
 		}
 		const percent = (gain / Math.abs(contributions)) * 100;
-		return `${gain >= 0 ? '+' : ''}${money.format(gain / 100)} · ${percent >= 0 ? '+' : ''}${percent.toFixed(1)}%${periodLabel}`;
+		return `${gain >= 0 ? '+' : ''}${formatMoney(gain, account.currency)} · ${percent >= 0 ? '+' : ''}${percent.toFixed(1)}%${periodLabel}`;
 	}
 
 	function availableBonusOffers(account: FinancialAccount) {
@@ -658,6 +648,7 @@
 			ownerType: account.ownerType,
 			status: account.status,
 			last4: account.last4 ?? '',
+			currency: account.currency,
 			currentBalance:
 				account.currentBalanceCents === null ? undefined : account.currentBalanceCents / 100,
 			apyPercent: account.apyBasisPoints === null ? undefined : account.apyBasisPoints / 100,
@@ -713,7 +704,7 @@
 						accountType: form.accountType,
 						status: form.status,
 						last4: form.last4.trim() || null,
-						currency: 'USD',
+						currency: form.currency.trim().toUpperCase(),
 						currentBalanceCents: cents(form.currentBalance)
 					};
 		try {
@@ -1351,9 +1342,15 @@
 			</article>
 			<article>
 				<span>Tracked balances</span>
-				<strong
-					>{loading ? '—' : formatMoney(knownBalances.length ? trackedBalanceCents : null)}</strong
-				>
+				{#if loading}
+					<strong>—</strong>
+				{:else}
+					{#each trackedBalances as total (total.currency)}
+						<strong>{formatMoney(total.amountCents, total.currency)}</strong>
+					{:else}
+						<strong>Not entered</strong>
+					{/each}
+				{/if}
 			</article>
 			<article>
 				<span>Provider-synced</span>
@@ -1361,11 +1358,15 @@
 			</article>
 			<article>
 				<span>Investment return</span>
-				<strong
-					>{loading
-						? '—'
-						: formatMoney(brokeragePerformanceCount ? brokerageReturnCents : null)}</strong
-				>
+				{#if loading}
+					<strong>—</strong>
+				{:else}
+					{#each investmentReturns as total (total.currency)}
+						<strong>{formatMoney(total.amountCents, total.currency)}</strong>
+					{:else}
+						<strong>Not entered</strong>
+					{/each}
+				{/if}
 			</article>
 		</section>
 
@@ -1531,7 +1532,12 @@
 																	? 'Synced balance'
 																	: 'Current balance'}</span
 															>
-															<strong>{formatMoney(account.currentBalanceCents)}</strong>
+															<strong
+																>{formatMoney(
+																	account.currentBalanceCents,
+																	account.currency
+																)}</strong
+															>
 														</div>
 														<dl class="finance-details">
 															<div>
@@ -1896,6 +1902,9 @@
 																</section>
 															{/if}
 														{/if}
+														{#if account.notes}
+															<p class="account-notes">{account.notes}</p>
+														{/if}
 														<footer>
 															<span class="account-footer-meta">
 																{account.hidden
@@ -2013,7 +2022,20 @@
 						</div>
 					{/if}
 					<div class="finance-field">
-						<label for="account-balance">Current balance</label>
+						<label for="account-currency">Currency</label>
+						<input
+							id="account-currency"
+							bind:value={form.currency}
+							minlength="3"
+							maxlength="3"
+							pattern={'[A-Za-z]{3}'}
+							placeholder="USD"
+							disabled={Boolean(dialogAccount)}
+							required
+						/>
+					</div>
+					<div class="finance-field">
+						<label for="account-balance">Current balance ({form.currency.toUpperCase()})</label>
 						<input
 							id="account-balance"
 							type="number"
@@ -2146,6 +2168,15 @@
 {/if}
 
 <style>
+	.account-notes {
+		margin: 0.75rem 0;
+		color: var(--muted);
+		font-size: 0.7rem;
+		line-height: 1.5;
+		white-space: pre-line;
+		overflow-wrap: anywhere;
+	}
+
 	.skip-link {
 		position: fixed;
 		top: 0.75rem;

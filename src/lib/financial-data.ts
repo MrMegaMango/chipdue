@@ -1,5 +1,23 @@
 import type { FinancialDataProvider, TransactionHistoryStatus } from '$lib/types';
 
+export function sumMoneyByCurrency(
+	values: ReadonlyArray<{ currency: string; amountCents: number | null }>
+): Array<{ currency: string; amountCents: number }> {
+	const totals = new Map<string, number>();
+	for (const { currency, amountCents } of values) {
+		if (amountCents === null) continue;
+		totals.set(currency, (totals.get(currency) ?? 0) + amountCents);
+	}
+	return [...totals]
+		.map(([currency, amountCents]) => ({ currency, amountCents }))
+		.sort((a, b) => {
+			if (a.currency === b.currency) return 0;
+			if (a.currency === 'USD') return -1;
+			if (b.currency === 'USD') return 1;
+			return a.currency.localeCompare(b.currency);
+		});
+}
+
 export const FINANCIAL_PROVIDER_NAMES = Object.freeze({
 	plaid: 'Plaid'
 } satisfies Record<FinancialDataProvider, string>);
