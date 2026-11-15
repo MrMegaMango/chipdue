@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { AccountBalanceHistoryPoint } from './types';
 import {
 	buildInvestmentComparison,
+	buildPortfolioInvestmentComparison,
+	getInvestmentComparisonHistory,
 	needsBrokerageHistoryRefresh,
 	type BenchmarkPrice
 } from './investment-benchmark';
@@ -18,6 +20,280 @@ function point(
 function prices(...entries: Array<[string, number]>): BenchmarkPrice[] {
 	return entries.map(([date, adjustedClose]) => ({ date, adjustedClose }));
 }
+
+type PortfolioAccount = Parameters<typeof buildPortfolioInvestmentComparison>[0][number];
+
+function portfolioAccount(
+	balanceHistory: AccountBalanceHistoryPoint[],
+	other: Partial<PortfolioAccount> = {}
+): PortfolioAccount {
+	return {
+		balanceHistory,
+		netContributionsCents: 10_000,
+		source: 'manual',
+		currency: 'USD',
+		...other
+	};
+}
+
+describe('combined investment comparison with SPY', () => {
+	const benchmark = prices(
+		['2026-09-01', 100],
+		['2026-09-02', 102],
+		['2026-09-03', 104],
+		['2026-09-04', 106]
+	);
+
+	it('weights accounts by their combined value instead of averaging their returns', () => {
+		const result = buildPortfolioInvestmentComparison(
+			[
+				portfolioAccount([
+					point('2026-09-01', 10_000, 10_000),
+					point('2026-09-02', 11_000, 10_000)
+				]),
+				portfolioAccount([point('2026-09-01', 90_000, 90_000), point('2026-09-02', 90_000, 90_000)])
+			],
+			benchmark,
+			'ALL'
+		);
+		expect(result).toMatchObject({
+			status: 'available',
+			trimmedHistory: false,
+			summary: { accountValueCents: 101_000, benchmarkValueCents: 102_000, differenceCents: -1_000 }
+		});
+		if (result.status === 'available') expect(result.summary.accountReturnPercent).toBeCloseTo(1);
+	});
+
+	it('removes an external deposit from the combined return and adds it to SPY', () => {
+		const result = buildPortfolioInvestmentComparison(
+			[
+				portfolioAccount([
+					point('2026-09-01', 10_000, 10_000),
+					point('2026-09-02', 21_000, 20_000)
+				]),
+				portfolioAccount([point('2026-09-01', 90_000, 90_000), point('2026-09-02', 90_000, 90_000)])
+			],
+			benchmark,
+			'ALL'
+		);
+		expect(result).toMatchObject({
+			status: 'available',
+			summary: { accountValueCents: 111_000, benchmarkValueCents: 112_000, differenceCents: -1_000 }
+		});
+		if (result.status === 'available') expect(result.summary.accountReturnPercent).toBeCloseTo(1);
+	});
+
+	it('nets transfers between accounts without treating them as gains', () => {
+		const result = buildPortfolioInvestmentComparison(
+			[
+				portfolioAccount([point('2026-09-01', 10_000, 10_000), point('2026-09-02', 5_000, 5_000)]),
+				portfolioAccount([point('2026-09-01', 90_000, 90_000), point('2026-09-02', 95_000, 95_000)])
+			],
+			benchmark,
+			'ALL'
+		);
+		expect(result).toMatchObject({
+			status: 'available',
+			summary: { accountReturnPercent: 0, accountValueCents: 100_000, benchmarkValueCents: 102_000 }
+		});
+	});
+
+	it('uses only overlapping dates and discloses shorter account coverage', () => {
+		const result = buildPortfolioInvestmentComparison(
+			[
+				portfolioAccount([
+					point('2026-09-01', 10_000, 10_000),
+					point('2026-09-02', 11_000, 10_000),
+					point('2026-09-03', 12_100, 10_000),
+					point('2026-09-04', 13_310, 10_000)
+				]),
+				portfolioAccount([point('2026-09-02', 90_000, 90_000), point('2026-09-03', 90_000, 90_000)])
+			],
+			benchmark,
+			'ALL'
+		);
+		expect(result).toMatchObject({
+			status: 'available',
+			startDate: '2026-09-02',
+			endDate: '2026-09-03',
+			trimmedHistory: true,
+			summary: { accountValueCents: 102_100 }
+		});
+		if (result.status === 'available') {
+			expect(result.points).toHaveLength(2);
+			expect(result.summary.accountReturnPercent).toBeCloseTo((102_100 / 101_000 - 1) * 100);
+		}
+	});
+
+	it('includes zero and negative account balances when the portfolio stays positive', () => {
+		for (const smallerBalance of [0, -1_000]) {
+			const result = buildPortfolioInvestmentComparison(
+				[
+					portfolioAccount([
+						point('2026-09-01', 10_000, 10_000),
+						point('2026-09-02', 11_000, 10_000)
+					]),
+					portfolioAccount([
+						point('2026-09-01', smallerBalance, smallerBalance),
+						point('2026-09-02', smallerBalance, smallerBalance)
+					])
+				],
+				benchmark,
+				'ALL'
+			);
+			expect(result.status).toBe('available');
+			if (result.status === 'available') {
+				expect(result.summary.accountValueCents).toBe(11_000 + smallerBalance);
+				expect(result.summary.accountReturnPercent).toBeCloseTo(
+					100_000 / (10_000 + smallerBalance)
+				);
+			}
+		}
+	});
+
+	it('uses shared endpoints for sparse history without filling missing account balances', () => {
+		const result = buildPortfolioInvestmentComparison(
+			[
+				portfolioAccount([
+					point('2026-09-01', 20_000, 20_000),
+					point('2026-09-02', 30_000, 30_000),
+					point('2026-09-03', 30_000, 30_000)
+				]),
+				portfolioAccount([point('2026-09-01', 80_000, 80_000), point('2026-09-03', 80_000, 80_000)])
+			],
+			benchmark,
+			'ALL'
+		);
+		expect(result).toMatchObject({
+			status: 'available',
+			summary: { accountReturnPercent: 0, accountValueCents: 110_000 }
+		});
+		if (result.status === 'available') {
+			expect(result.points.map((point) => point.date)).toEqual(['2026-09-01', '2026-09-03']);
+		}
+	});
+
+	it('does not silently drop an account with missing history or unsupported currency', () => {
+		const complete = portfolioAccount([
+			point('2026-09-01', 10_000, 10_000),
+			point('2026-09-02', 11_000, 10_000)
+		]);
+		expect(
+			buildPortfolioInvestmentComparison([complete, portfolioAccount([])], benchmark, 'ALL')
+		).toEqual({
+			status: 'unavailable',
+			reason: 'insufficient_history'
+		});
+		expect(
+			buildPortfolioInvestmentComparison(
+				[complete, { ...complete, currency: 'CAD' }],
+				benchmark,
+				'ALL'
+			)
+		).toEqual({ status: 'unavailable', reason: 'unsupported_currency' });
+	});
+
+	it('preserves unknown contributions and invalid values on non-shared dates as breaks', () => {
+		for (const invalid of [
+			point('2026-09-02', 10_000, null),
+			point('2026-09-02', 10_000.5, 10_000)
+		]) {
+			const result = buildPortfolioInvestmentComparison(
+				[
+					portfolioAccount([
+						point('2026-09-01', 10_000, 10_000),
+						invalid,
+						point('2026-09-03', 11_000, 10_000),
+						point('2026-09-04', 12_100, 10_000)
+					]),
+					portfolioAccount([
+						point('2026-09-01', 90_000, 90_000),
+						point('2026-09-03', 90_000, 90_000),
+						point('2026-09-04', 90_000, 90_000)
+					])
+				],
+				benchmark,
+				'ALL'
+			);
+			expect(result).toMatchObject({
+				status: 'available',
+				startDate: '2026-09-03',
+				endDate: '2026-09-04',
+				trimmedHistory: true
+			});
+		}
+	});
+
+	it('keeps each account’s automatic or manual contribution basis before combining', () => {
+		const accounts = [
+			portfolioAccount(
+				[
+					point('2026-09-01', 10_000, 10_000),
+					point('2026-09-02', 11_000, 10_000),
+					{
+						...point('2026-09-02', 11_000, 25_000, 'observed'),
+						recordedAt: '2026-09-02T22:00:00Z'
+					}
+				],
+				{ source: 'connected', netContributionsCents: null }
+			),
+			portfolioAccount([
+				point('2026-09-01', 90_000, 80_000, 'observed'),
+				point('2026-09-02', 100_000, 90_000, 'observed')
+			])
+		];
+		const original = structuredClone(accounts);
+		const result = buildPortfolioInvestmentComparison(accounts, benchmark, 'ALL');
+		expect(result).toMatchObject({
+			status: 'available',
+			estimatedHistory: true,
+			summary: { accountValueCents: 111_000, benchmarkValueCents: 112_000 }
+		});
+		if (result.status === 'available') expect(result.summary.accountReturnPercent).toBeCloseTo(1);
+		expect(accounts).toEqual(original);
+	});
+
+	it('preserves single-account market-day and reconstructed-close precedence', () => {
+		const history = [
+			point('2026-09-01', 10_000, 10_000),
+			point('2026-09-02', 11_000, 10_000),
+			{ ...point('2026-09-02', 12_000, 10_000, 'observed'), recordedAt: '2026-09-02T19:00:00Z' },
+			{ ...point('2026-09-03', 13_000, 10_000, 'observed'), recordedAt: '2026-09-04T01:00:00Z' }
+		];
+		const account = portfolioAccount(history);
+		expect(
+			getInvestmentComparisonHistory(account).map((point) => [point.date, point.balanceCents])
+		).toEqual([
+			['2026-09-01', 10_000],
+			['2026-09-02', 11_000],
+			['2026-09-03', 13_000]
+		]);
+		expect(buildPortfolioInvestmentComparison([account], benchmark, 'ALL')).toEqual(
+			buildInvestmentComparison(history, benchmark, 'ALL')
+		);
+	});
+
+	it('rejects combined balances beyond safe integer precision', () => {
+		const large = portfolioAccount([
+			point('2026-09-01', Number.MAX_SAFE_INTEGER, 10_000),
+			point('2026-09-02', Number.MAX_SAFE_INTEGER, 10_000)
+		]);
+		expect(buildPortfolioInvestmentComparison([large, large], benchmark, 'ALL').status).toBe(
+			'unavailable'
+		);
+	});
+
+	it('preserves the existing weekend treatment for a single account', () => {
+		const history = [
+			point('2026-09-03', 10_000, 10_000),
+			point('2026-09-04', 11_000, 10_000),
+			point('2026-09-05', 11_000, 10_000, 'observed')
+		];
+		expect(
+			buildPortfolioInvestmentComparison([portfolioAccount(history)], benchmark, 'ALL')
+		).toEqual(buildInvestmentComparison(history, benchmark, 'ALL'));
+	});
+});
 
 describe('automatic comparison history refresh', () => {
 	it('extends stale estimates after a scheduled sync without treating unknown snapshots as returns', () => {

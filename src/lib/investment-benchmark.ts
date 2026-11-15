@@ -152,6 +152,83 @@ function historyForRange(history: DatedHistoryPoint[], range: BenchmarkRange): D
 	return history.slice(priorAge <= 7 * DAY_MS ? firstInRange - 1 : firstInRange);
 }
 
+export function getInvestmentComparisonHistory(
+	account: Pick<FinancialAccount, 'balanceHistory' | 'netContributionsCents' | 'source'>
+): DatedHistoryPoint[] {
+	const automaticBasis =
+		account.netContributionsCents === null &&
+		(account.source === 'connected' ||
+			account.balanceHistory.some((point) => point.source === 'estimated'));
+	return historyByDay(
+		automaticBasis
+			? account.balanceHistory.filter((point) => point.source === 'estimated')
+			: account.balanceHistory
+	);
+}
+
+export function buildPortfolioInvestmentComparison(
+	accounts: Pick<
+		FinancialAccount,
+		'balanceHistory' | 'netContributionsCents' | 'source' | 'currency'
+	>[],
+	prices: BenchmarkPrice[],
+	range: BenchmarkRange
+): InvestmentComparison {
+	if (accounts.some((account) => account.currency !== 'USD')) {
+		return { status: 'unavailable', reason: 'unsupported_currency' };
+	}
+	const histories = accounts.map(getInvestmentComparisonHistory);
+	if (histories.length === 0 || histories.some((history) => history.length === 0)) {
+		return { status: 'unavailable', reason: 'insufficient_history' };
+	}
+	const byAccount = histories.map(
+		(history) => new Map(history.map((point) => [point.date, point]))
+	);
+	const dates = [
+		...new Set(histories.flatMap((history) => history.map((point) => point.date)))
+	].sort();
+	const sharedDates = dates.filter((date) => byAccount.every((history) => history.has(date)));
+	if (sharedDates.length < 2) return { status: 'unavailable', reason: 'insufficient_history' };
+	const combined: AccountBalanceHistoryPoint[] = [];
+	for (const date of dates) {
+		if (date < sharedDates[0] || date > sharedDates.at(-1)!) continue;
+		const points = byAccount
+			.map((history) => history.get(date))
+			.filter((point) => point !== undefined);
+		const invalid = points.find(
+			(point) =>
+				!Number.isSafeInteger(point.balanceCents) ||
+				!Number.isSafeInteger(point.netContributionsCents)
+		);
+		// Sparse observations can share an interval, but an explicit unknown value
+		// inside it must still break that interval, even on a non-shared date.
+		if (invalid) {
+			combined.push({ ...invalid, recordedAt: `${date}T20:00:00.000Z` });
+		} else if (points.length === accounts.length) {
+			combined.push({
+				recordedAt: `${date}T20:00:00.000Z`,
+				balanceCents: points.reduce((total, point) => total + point.balanceCents, 0),
+				netContributionsCents: points.reduce(
+					(total, point) => total + point.netContributionsCents!,
+					0
+				),
+				source: points.some((point) => point.source === 'estimated') ? 'estimated' : 'observed'
+			});
+		}
+	}
+	// Aggregate dollars before calculating returns: this weights each account by
+	// its value and nets transfers between included accounts out of cash flows.
+	const comparison = buildInvestmentComparison(combined, prices, range);
+	if (comparison.status === 'available') {
+		comparison.trimmedHistory ||= histories.some((history) =>
+			historyForRange(history, range).some(
+				(point) => point.date < sharedDates[0] || point.date > sharedDates.at(-1)!
+			)
+		);
+	}
+	return comparison;
+}
+
 /**
  * Approximate time-weighted returns, with each change in cumulative external
  * contributions applied at the end of its valuation interval. Matching SPY

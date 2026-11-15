@@ -2,7 +2,8 @@
 	import { resolve } from '$app/paths';
 	import { SvelteDate } from 'svelte/reactivity';
 	import {
-		buildInvestmentComparison,
+		buildPortfolioInvestmentComparison,
+		getInvestmentComparisonHistory,
 		type BenchmarkPrice,
 		type BenchmarkRange
 	} from '$lib/investment-benchmark';
@@ -20,7 +21,6 @@
 		accounts: FinancialAccount[];
 		historyLoadingByAccount?: Record<string, boolean>;
 	} = $props();
-	let selectedId = $state('');
 	let range = $state<BenchmarkRange>('1Y');
 	let prices = $state<BenchmarkPrice[]>([]);
 	let loading = $state(false);
@@ -46,16 +46,36 @@
 		timeZone: 'America/Los_Angeles'
 	});
 	const eligible = $derived(
-		accounts
-			.filter(
-				(account) =>
-					account.accountType === 'brokerage' && account.status === 'active' && !account.hidden
-			)
-			.sort((a, b) => (b.currentBalanceCents ?? 0) - (a.currentBalanceCents ?? 0))
+		accounts.filter(
+			(account) =>
+				account.accountType === 'brokerage' && account.status === 'active' && !account.hidden
+		)
 	);
-	const selected = $derived(eligible.find((account) => account.id === selectedId) ?? eligible[0]);
+	const coverage = $derived(
+		eligible.map((account) => {
+			const history = getInvestmentComparisonHistory(account);
+			const complete = history.filter(
+				(point) =>
+					Number.isSafeInteger(point.balanceCents) &&
+					Number.isSafeInteger(point.netContributionsCents)
+			);
+			const reason =
+				account.currency !== 'USD'
+					? `${account.currency} conversion unavailable`
+					: history.length < 2
+						? 'needs more balance history'
+						: complete.length < 2
+							? 'needs contribution history'
+							: null;
+			return { account, reason };
+		})
+	);
+	const included = $derived(
+		coverage.filter((entry) => !entry.reason).map((entry) => entry.account)
+	);
+	const excluded = $derived(coverage.filter((entry) => entry.reason));
 	const requestDates = $derived.by(() => {
-		const days = eligible
+		const days = included
 			.flatMap((account) => account.balanceHistory.map((point) => point.recordedAt.slice(0, 10)))
 			.filter((day) => /^\d{4}-\d{2}-\d{2}$/.test(day))
 			.sort();
@@ -105,7 +125,7 @@
 			.catch((failure) => {
 				if (!active || (failure instanceof DOMException && failure.name === 'AbortError')) return;
 				if (failure instanceof PrivateApiError && failure.status === 401) clearPrivateApiCache();
-				error = 'SPY prices are temporarily unavailable. Your account data is unchanged.';
+				error = 'SPY prices are temporarily unavailable.';
 			})
 			.finally(() => {
 				if (active) loading = false;
@@ -116,17 +136,14 @@
 	});
 
 	const usesAutomaticPeriodBasis = $derived(
-		selected?.netContributionsCents === null &&
-			(selected.source === 'connected' ||
-				selected.balanceHistory.some((point) => point.source === 'estimated'))
+		included.some(
+			(account) =>
+				account.netContributionsCents === null &&
+				(account.source === 'connected' ||
+					account.balanceHistory.some((point) => point.source === 'estimated'))
+		)
 	);
-	const comparison = $derived(
-		selected
-			? buildInvestmentComparison(selected.balanceHistory, prices, range, selected.currency, {
-					contributionBasis: usesAutomaticPeriodBasis ? 'estimated_period' : 'account'
-				})
-			: null
-	);
+	const comparison = $derived(buildPortfolioInvestmentComparison(included, prices, range));
 	const available = $derived(comparison?.status === 'available' ? comparison : null);
 	const chart = $derived.by(() => {
 		if (!available) return null;
@@ -167,7 +184,7 @@
 		if (comparison?.status !== 'unavailable') return '';
 		switch (comparison.reason) {
 			case 'unsupported_currency':
-				return 'SPY is quoted in USD. A currency-adjusted comparison is not available for this account.';
+				return 'SPY is quoted in USD. A combined comparison needs USD history for every included account.';
 			case 'missing_contributions':
 				return 'A fair comparison needs contribution history to separate deposits and withdrawals from investment gains. Connected history is calculated automatically when available.';
 			case 'nonpositive_balance':
@@ -175,9 +192,9 @@
 			case 'invalid_values':
 				return 'Some history values cannot support a reliable comparison.';
 			case 'market_data_unavailable':
-				return 'No matching SPY closing prices are available for this account’s recorded dates.';
+				return 'No matching SPY closing prices are available for the portfolio’s shared dates.';
 			default:
-				return 'At least two matching market days of balances and contribution history are needed. Connected accounts build estimated history automatically when available.';
+				return 'At least two shared market days of balances and contribution history are needed across the included accounts. Connected accounts build estimated history automatically when available.';
 		}
 	});
 	function percent(value: number): string {
@@ -211,27 +228,17 @@
 			<div>
 				<p class="eyebrow">Investment performance</p>
 				<h2 id="investment-benchmark-title">Your investments vs. S&amp;P 500</h2>
-				<p class="subtitle">Compare investment returns with SPY over the same dates.</p>
+				<p class="subtitle">
+					Compare your combined investment returns with SPY over the same dates.
+				</p>
 			</div>
 			<span class="estimate-label">Estimated returns</span>
 		</div>
 		<div class="controls">
-			<label
-				>Investment account
-				<select
-					value={selected?.id}
-					onchange={(event) => {
-						selectedId = event.currentTarget.value;
-						selectedPoint = null;
-					}}
-				>
-					{#each eligible as account (account.id)}
-						<option value={account.id}
-							>{account.nickname}{account.last4 ? ` · ${account.last4}` : ''}</option
-						>
-					{/each}
-				</select>
-			</label>
+			<p class="portfolio-scope">
+				{#if excluded.length > 0}{included.length} of {eligible.length}{:else}All {included.length}{/if}
+				investment accounts combined
+			</p>
 			<div class="ranges" aria-label="Investment comparison range">
 				{#each ranges as value (value)}
 					<button
@@ -245,7 +252,19 @@
 				{/each}
 			</div>
 		</div>
-		{#if selected && historyLoadingByAccount[selected.id] && !available}
+		{#if excluded.length > 0}
+			<p class="coverage-note" role="status">
+				Not included:
+				{#each excluded as entry, index (entry.account.id)}
+					{index > 0 ? '; ' : ''}{entry.account.nickname} —
+					{historyLoadingByAccount[entry.account.id] ? 'building history' : entry.reason}{index ===
+					excluded.length - 1
+						? '.'
+						: ''}
+				{/each}
+			</p>
+		{/if}
+		{#if eligible.some((account) => historyLoadingByAccount[account.id]) && !available}
 			<p class="empty" role="status">
 				Building comparison history from your connected investment activity…
 			</p>
@@ -279,7 +298,7 @@
 			</div>
 			<div class="chart-header">
 				<div class="legend">
-					<span><i></i>Your account</span><span><i class="spy-line"></i>S&amp;P 500 (SPY)</span>
+					<span><i></i>Your portfolio</span><span><i class="spy-line"></i>S&amp;P 500 (SPY)</span>
 				</div>
 				<span>{date(available.startDate)} – {date(available.endDate)}</span>
 			</div>
@@ -287,7 +306,7 @@
 				class="chart"
 				viewBox={`0 0 ${width} ${height}`}
 				role="img"
-				aria-label={`${selected?.nickname} estimated return ${percent(available.summary.accountReturnPercent)}, compared with SPY ${percent(available.summary.benchmarkReturnPercent)}, from ${date(available.startDate)} to ${date(available.endDate)}`}
+				aria-label={`Combined portfolio estimated return ${percent(available.summary.accountReturnPercent)}, compared with SPY ${percent(available.summary.benchmarkReturnPercent)}, from ${date(available.startDate)} to ${date(available.endDate)}`}
 				onpointermove={pointAtPointer}
 				onpointerleave={() => (selectedPoint = null)}
 			>
@@ -317,7 +336,7 @@
 			{#if focusedPoint}
 				<div class="point-detail" aria-live="off">
 					<span>{date(focusedPoint.date)}</span><span
-						>Your account <b>{percent(focusedPoint.accountReturnPercent)}</b></span
+						>Your portfolio <b>{percent(focusedPoint.accountReturnPercent)}</b></span
 					><span>SPY <b>{percent(focusedPoint.benchmarkReturnPercent)}</b></span>
 				</div>
 				<label class="scrubber"
@@ -328,15 +347,15 @@
 						max={chart.points.length - 1}
 						value={selectedPoint ?? chart.points.length - 1}
 						oninput={(event) => (selectedPoint = Number(event.currentTarget.value))}
-						aria-valuetext={`${date(focusedPoint.date)}: account ${percent(focusedPoint.accountReturnPercent)}, SPY ${percent(focusedPoint.benchmarkReturnPercent)}`}
+						aria-valuetext={`${date(focusedPoint.date)}: portfolio ${percent(focusedPoint.accountReturnPercent)}, SPY ${percent(focusedPoint.benchmarkReturnPercent)}`}
 					/>
 				</label>
 			{/if}
 			{#if available.summary.benchmarkValueCents !== null && available.summary.differenceCents !== null}
 				<p class="dollar-comparison">
-					With the same starting balance and recorded cash flows, SPY would be worth <strong
+					With the same combined starting balance and recorded cash flows, SPY would be worth <strong
 						>{money(available.summary.benchmarkValueCents)}</strong
-					>. Your account is
+					>. Your portfolio is
 					<strong
 						>{money(Math.abs(available.summary.differenceCents))}
 						{available.summary.differenceCents >= 0 ? 'ahead' : 'behind'}</strong
@@ -344,16 +363,17 @@
 				</p>
 			{/if}
 			{#if available.trimmedHistory}<p class="coverage-note">
-					Showing the available continuous history within this range. Dates without contribution
-					data or matching market closes are excluded.
+					Showing the shared continuous history within this range. Each date needs balances and
+					contributions from every included account and a matching market close.
 				</p>{/if}
 			<details>
 				<summary>How this comparison works</summary>
 				<p>
-					Estimated time-weighted returns remove recorded net deposits and withdrawals before
-					calculating each interval’s growth. Cash flows are treated as arriving at the end of each
-					interval; sparse snapshots and missing provider activity can affect accuracy. Both lines
-					start at 0% on the first displayed date.
+					Balances and contributions are combined across active, visible investment accounts on the
+					same dates. Estimated time-weighted returns remove recorded net deposits and withdrawals
+					before calculating each interval’s growth. Cash flows are treated as arriving at the end
+					of each interval; sparse snapshots and missing provider activity can affect accuracy. Both
+					lines start at 0% on the first displayed date.
 				</p>
 				{#if usesAutomaticPeriodBasis}
 					<p>
@@ -364,8 +384,8 @@
 				{/if}
 				<p>
 					{available.estimatedHistory
-						? 'This account includes reconstructed balance history; it is not broker-reported performance. Unpriced positions and incomplete transactions can affect the estimate.'
-						: 'This account uses saved balance snapshots; their timing may differ from market closes.'}
+						? 'This portfolio includes reconstructed balance history; it is not broker-reported performance. Unpriced positions and incomplete transactions can affect the estimate.'
+						: 'This portfolio uses saved balance snapshots; their timing may differ from market closes.'}
 					SPY uses dividend-adjusted closing prices from Yahoo Finance as a proxy for the S&amp;P 500.
 					Returns are cumulative, not annualized.
 				</p>
@@ -431,16 +451,10 @@
 		font-size: 0.65rem;
 		color: var(--muted);
 	}
-	select {
-		min-width: 220px;
-		max-width: 100%;
-		padding: 0.6rem 2rem 0.6rem 0.75rem;
-		border: 1px solid var(--line);
-		border-radius: 8px;
-		background: var(--paper);
-		font: inherit;
-		font-size: 0.8rem;
-		color: var(--ink);
+	.portfolio-scope {
+		margin: 0;
+		font-size: 0.78rem;
+		color: var(--muted);
 	}
 	.ranges {
 		display: flex;
