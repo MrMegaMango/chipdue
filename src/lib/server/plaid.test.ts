@@ -905,6 +905,49 @@ describe.sequential('Plaid transaction history', () => {
 		);
 	});
 
+	it.each([
+		['Synthetic business checking', null, 'business'],
+		['Reserve account', 'Synthetic BUSINESS Savings', 'business'],
+		['Everyday checking', null, 'personal'],
+		['Businesslike checking', null, 'personal'],
+		['Non-business checking', null, 'personal'],
+		['Reserve account', 'Synthetic Non Business Savings', 'personal']
+	] as const)(
+		'classifies %s / %s as %s on import and preserves ownership corrections',
+		async (name, officialName, ownerType) => {
+			const itemId = await savePlaidItem(
+				'provider-item-ownership',
+				'test-access-value',
+				'Synthetic Business Bank'
+			);
+			plaidMocks.accountsGet.mockResolvedValue({
+				data: {
+					accounts: [
+						{
+							account_id: 'account-ownership',
+							name,
+							official_name: officialName,
+							mask: '1212',
+							type: 'depository',
+							subtype: 'checking',
+							balances: { current: 50, iso_currency_code: 'USD' }
+						}
+					]
+				}
+			});
+
+			await syncPlaidItem(itemId, { afterLink: true });
+			const [account] = await listFinancialAccounts();
+			expect(account.ownerType).toBe(ownerType);
+
+			const correctedOwnerType = ownerType === 'business' ? 'personal' : 'business';
+			await updateFinancialAccount(account.id, { ownerType: correctedOwnerType });
+			await syncPlaidItem(itemId);
+			const [refreshed] = await listFinancialAccounts();
+			expect(refreshed).toMatchObject({ id: account.id, ownerType: correctedOwnerType });
+		}
+	);
+
 	it('imports bank and brokerage accounts and refreshes balances automatically', async () => {
 		const itemId = await savePlaidItem(
 			'provider-item-accounts',
@@ -964,6 +1007,7 @@ describe.sequential('Plaid transaction history', () => {
 				expect.objectContaining({
 					source: 'connected',
 					accountType: 'checking',
+					ownerType: 'business',
 					currentBalanceCents: 125_000,
 					connectionId: itemId,
 					connectionProvider: 'plaid'
@@ -971,6 +1015,7 @@ describe.sequential('Plaid transaction history', () => {
 				expect.objectContaining({
 					source: 'connected',
 					accountType: 'savings',
+					ownerType: 'personal',
 					apyBasisPoints: 425,
 					apySource: 'provider',
 					apyUpdatedAt: firstSync.syncedAt
@@ -978,6 +1023,7 @@ describe.sequential('Plaid transaction history', () => {
 				expect.objectContaining({
 					source: 'connected',
 					accountType: 'brokerage',
+					ownerType: 'personal',
 					currentBalanceCents: 840_000,
 					costBasisCents: 700_000,
 					holdings: [

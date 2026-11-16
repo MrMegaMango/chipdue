@@ -55,6 +55,7 @@ export interface ConnectedFinancialAccountSnapshot {
 	institution: string | null;
 	institutionLogoBase64: string | null;
 	accountType: 'checking' | 'savings' | 'brokerage' | 'cash_management' | 'other';
+	ownerType?: FinancialAccount['ownerType'];
 	last4: string | null;
 	currency: string;
 	currentBalanceCents: number | null;
@@ -821,7 +822,7 @@ function connectedAccountPayload(
 		institutionLogoBase64:
 			snapshot.institutionLogoBase64 ?? existingPayload?.institutionLogoBase64 ?? null,
 		accountType: snapshot.accountType,
-		ownerType: existingPayload?.ownerType ?? 'personal',
+		ownerType: existingPayload?.ownerType ?? snapshot.ownerType ?? 'personal',
 		status: existingPayload?.status ?? 'active',
 		hidden: existingPayload?.hidden ?? false,
 		last4: snapshot.last4,

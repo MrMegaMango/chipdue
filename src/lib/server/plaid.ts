@@ -1065,6 +1065,11 @@ export async function syncPlaidItem(
 				institution: brand.name,
 				institutionLogoBase64: brand.logoBase64,
 				accountType,
+				ownerType: [account.name, account.official_name].some(
+					(name) => name && /\bbusiness\b/i.test(name.replace(/\bnon[\s-]*business\b/gi, ''))
+				)
+					? 'business'
+					: 'personal',
 				last4: safeLast4(account.mask),
 				currency: safeCurrency(
 					account.balances.iso_currency_code ?? account.balances.unofficial_currency_code
