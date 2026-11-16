@@ -25,7 +25,7 @@
 </script>
 
 <script lang="ts">
-	import { resolve } from '$app/paths';
+	import { asset, resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import {
 		resolveBonusPayment,
@@ -135,6 +135,7 @@
 	let toast = $state('');
 	let toastTimer: ReturnType<typeof setTimeout> | undefined;
 	let queryPrefillHandled = false;
+	let failedLogoUrls = $state<string[]>([]);
 
 	const pipelineBonuses = $derived(bonuses.filter((bonus) => !bonus.trackingOnly));
 	const activeBonuses = $derived(
@@ -435,6 +436,28 @@
 
 	function linkedCard(bonus: AccountBonus): Card | null {
 		return cards.find((card) => card.id === bonus.cardId) ?? null;
+	}
+
+	function bonusLogoUrl(bonus: AccountBonus): string | null {
+		const account = linkedAccount(bonus);
+		const card = linkedCard(bonus);
+		if (account?.institutionLogoUrl) return account.institutionLogoUrl;
+		if (card?.issuerLogoUrl) return card.issuerLogoUrl;
+		const institution =
+			account?.institution ??
+			card?.issuer ??
+			bonus.institution ??
+			getBonusOfferTemplate(bonus.offerTemplateId)?.institution ??
+			bonus.name;
+		if (/\b(?:american\s+express|amex)\b/i.test(institution)) {
+			return asset('brands/american-express.svg');
+		}
+		if (/\bone\s?pay\b/i.test(institution)) return asset('brands/onepay.svg');
+		if (/\bvenmo\b/i.test(institution)) return asset('brands/venmo.svg');
+		if (/\bvio\s+bank\b/i.test(institution)) return asset('brands/vio-bank.svg');
+		if (/\bwells\s+fargo\b/i.test(institution)) return asset('brands/wells-fargo.svg');
+		if (/\bchase\b/i.test(institution)) return asset('brands/chase.svg');
+		return null;
 	}
 
 	function paymentFor(bonus: AccountBonus) {
@@ -820,6 +843,9 @@
 	<div class="finance-grid bonus-grid">
 		{#each groupBonuses as bonus (bonus.id)}
 			{@const bonusAccount = linkedAccount(bonus)}
+			{@const bonusCard = linkedCard(bonus)}
+			{@const logoUrl = bonusLogoUrl(bonus)}
+			{@const showLogo = logoUrl && !failedLogoUrls.includes(logoUrl)}
 			{@const payment = paymentFor(bonus)}
 			{@const tracker = trackerFor(bonus)}
 			{@const retentionReviewDate =
@@ -833,11 +859,26 @@
 					: null}
 			{@const trackerSetupOffers = trackerSetupOffersFor(bonus)}
 			<article class="finance-card bonus-card" class:has-tracker={tracker !== null}>
-				<header>
-					<div>
+				<header class="bonus-heading">
+					<span class="institution-mark" class:institution-logo={showLogo}>
+						{#if showLogo}
+							<img
+								src={logoUrl}
+								alt={`${bonusAccount?.institution ?? bonusCard?.issuer ?? bonus.institution ?? bonus.name} logo`}
+								width="40"
+								height="40"
+								onerror={() => (failedLogoUrls = [...failedLogoUrls, logoUrl])}
+							/>
+						{:else}
+							<svg viewBox="0 0 24 24" aria-hidden="true">
+								<path d="m3 9 9-5 9 5M4 10h16M6 10v8m6-8v8m6-8v8M3 20h18" />
+							</svg>
+						{/if}
+					</span>
+					<div class="bonus-title">
 						<h3>{bonus.name}</h3>
 						<p>
-							{linkedCard(bonus)?.nickname ??
+							{bonusCard?.nickname ??
 								bonusAccount?.nickname ??
 								bonus.institution ??
 								'No account linked'}
@@ -1667,6 +1708,57 @@
 
 	.bonus-card.has-tracker {
 		grid-column: span 2;
+	}
+
+	.bonus-heading {
+		display: grid;
+		grid-template-columns: 40px minmax(0, 1fr);
+		column-gap: 0.7rem;
+		row-gap: 0.5rem;
+	}
+
+	.bonus-title {
+		min-width: 0;
+		overflow-wrap: anywhere;
+	}
+
+	.bonus-heading > .finance-pill {
+		grid-column: 2;
+		justify-self: start;
+	}
+
+	.institution-mark {
+		display: grid;
+		width: 40px;
+		height: 40px;
+		padding: 4px;
+		border: 1px solid var(--line);
+		border-radius: 10px;
+		color: var(--accent-dark);
+		background: var(--accent-soft);
+		place-items: center;
+	}
+
+	.institution-mark.institution-logo {
+		background: white;
+	}
+
+	.institution-mark img {
+		display: block;
+		width: 100%;
+		height: 100%;
+		border-radius: 6px;
+		object-fit: contain;
+	}
+
+	.institution-mark svg {
+		width: 22px;
+		height: 22px;
+		fill: none;
+		stroke: currentColor;
+		stroke-width: 1.7;
+		stroke-linecap: round;
+		stroke-linejoin: round;
 	}
 
 	.bonus-live-metrics {
