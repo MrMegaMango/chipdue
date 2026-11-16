@@ -9,7 +9,6 @@
 		"node": "22.x"
 	},
 	"overrides": {
-		"cookie": "^0.7.2",
 		"zod": "$zod"
 	},
 	"scripts": {
@@ -19,8 +18,8 @@
 		"start": "node --env-file-if-exists=.env.local scripts/start-local.mjs",
 		"preview": "vite preview --host 127.0.0.1",
 		"prepare": "svelte-kit sync || echo ''",
-		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"check": "node scripts/generate-app-icons.mjs && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"check:watch": "node scripts/generate-app-icons.mjs && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"lint": "prettier --check . && eslint .",
 		"format": "prettier --write .",
 		"test:unit": "vitest run",
@@ -35,9 +34,9 @@
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
-		"@sveltejs/adapter-node": "^5.5.4",
-		"@sveltejs/adapter-vercel": "^6.3.4",
-		"@sveltejs/kit": "^2.63.0",
+		"@sveltejs/adapter-node": "^6.0.2",
+		"@sveltejs/adapter-vercel": "^7.0.3",
+		"@sveltejs/kit": "^3.2.0",
 		"@sveltejs/vite-plugin-svelte": "^7.1.2",
 		"@types/better-sqlite3": "^9.6.0",
 		"@types/node": "^22",
@@ -47,8 +46,8 @@
 		"globals": "^17.6.0",
 		"prettier": "^3.8.3",
 		"prettier-plugin-svelte": "^4.1.0",
-		"svelte": "^5.56.1",
-		"svelte-check": "^4.6.0",
+		"svelte": "^5.57.3",
+		"svelte-check": "^4.7.5",
 		"typescript": "^6.0.3",
 		"typescript-eslint": "^8.60.1",
 		"vite": "^8.0.16",
@@ -62,5 +61,9 @@
 		"jose": "^6.2.10",
 		"plaid": "^46.0.0",
 		"zod": "^4.6.6"
+	},
+	"imports": {
+		"#lib": "./src/lib/index.js",
+		"#lib/*": "./src/lib/*"
 	}
 }

@@ -81,7 +81,7 @@ describe('financial workspace navigation', () => {
 		expect(dashboardSource).toContain('Account and data connections');
 		expect(dashboardSource).toContain('Manage sign-in, privacy, and data connections.');
 		expect(accountsSource).toContain('onclick={connectPlaid}');
-		expect(dashboardSource).toContain("resolve('/settings#plaid-setup')");
+		expect(dashboardSource).toContain("`${resolve('/settings')}#plaid-setup`");
 	});
 
 	it('makes accounts and bonuses first-class parts of the dashboard', () => {
@@ -147,8 +147,8 @@ describe('financial workspace navigation', () => {
 
 	it('shows institution branding on account cards', () => {
 		expect(accountsSource).toContain('account.institutionLogoUrl');
-		expect(accountsSource).toContain("asset('/brands/vio-bank.svg')");
-		expect(accountsSource).toContain("asset('/brands/wells-fargo.svg')");
+		expect(accountsSource).toContain("asset('brands/vio-bank.svg')");
+		expect(accountsSource).toContain("asset('brands/wells-fargo.svg')");
 		expect(accountsSource).toContain('class="institution-mark"');
 		expect(accountsSource).toContain('alt={`${account.institution ?? account.nickname} logo`}');
 	});
@@ -267,7 +267,7 @@ describe('financial workspace navigation', () => {
 		expect(syncSource).not.toContain('pageError =');
 		expect(accountsSource).toContain("connection.status === 'needs_update'");
 		expect(accountsSource).toContain('One institution needs to be reconnected');
-		expect(accountsSource).toContain("resolve('/settings#plaid-connections')");
+		expect(accountsSource).toContain("`${resolve('/settings')}#plaid-connections`");
 		expect(accountsSource).toContain('and balances remain available below.');
 	});
 

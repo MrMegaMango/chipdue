@@ -3,8 +3,8 @@ import type {
 	FinancialAccount,
 	FinancialAccountTransaction,
 	InvestmentHolding
-} from '$lib/types';
-import { isCashSweepSecurity } from '$lib/investment-display';
+} from '#lib/types.ts';
+import { isCashSweepSecurity } from '#lib/investment-display.ts';
 import {
 	reconstructBrokerageHistory,
 	type BrokeragePositionInput,

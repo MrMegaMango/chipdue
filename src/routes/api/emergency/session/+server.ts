@@ -1,10 +1,10 @@
 import type { RequestHandler } from './$types';
-import type { EmergencySession } from '$lib/emergency';
-import { privateFingerprint } from '$lib/server/crypto';
-import { EMERGENCY_SESSION_COOKIE_NAME, getEmergencyTenant } from '$lib/server/emergency-auth';
-import { emergencyStorageConfigured } from '$lib/server/emergency-store';
-import { apiError, apiJson } from '$lib/server/http';
-import { getCloudRuntimeConfig, getRuntimeMode } from '$lib/server/runtime';
+import type { EmergencySession } from '#lib/emergency.ts';
+import { privateFingerprint } from '#lib/server/crypto.ts';
+import { EMERGENCY_SESSION_COOKIE_NAME, getEmergencyTenant } from '#lib/server/emergency-auth.ts';
+import { emergencyStorageConfigured } from '#lib/server/emergency-store.ts';
+import { apiError, apiJson } from '#lib/server/http.ts';
+import { getCloudRuntimeConfig, getRuntimeMode } from '#lib/server/runtime.ts';
 
 export const GET: RequestHandler = async ({ cookies }) => {
 	try {

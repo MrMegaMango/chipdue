@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { handle } from './hooks.server';
+import { handle, handleError } from './hooks.server';
 
 const previousAllowRemote = process.env.CARDDUE_ALLOW_REMOTE;
 
@@ -37,5 +37,32 @@ describe('loopback host enforcement', () => {
 		const response = await requestWithHost(host);
 		expect(response.status).toBe(403);
 		expect(await response.text()).toBe('ChipDue accepts local connections only.');
+	});
+});
+
+describe('server error privacy', () => {
+	it('hides unknown error details and ignores an untrusted status property', async () => {
+		const error = Object.assign(new Error('Synthetic private account data failed to load'), {
+			status: 401
+		});
+		const result = await handleError({ kind: 'unknown', error, event: {} as never });
+		expect(result).toEqual({
+			status: 500,
+			message: 'An unexpected error occurred.',
+			code: 'INTERNAL_ERROR'
+		});
+	});
+
+	it('preserves a framework 404 without returning its internal message', async () => {
+		const result = await handleError({
+			kind: 'framework',
+			error: { status: 404, message: 'Synthetic private route was not found' },
+			event: {} as never
+		});
+		expect(result).toEqual({
+			status: 404,
+			message: 'The request could not be completed.',
+			code: 'REQUEST_ERROR'
+		});
 	});
 });

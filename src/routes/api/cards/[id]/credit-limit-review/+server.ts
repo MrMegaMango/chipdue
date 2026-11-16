@@ -1,7 +1,7 @@
 import type { RequestHandler } from './$types';
-import { updateCardCreditLimitReview } from '$lib/server/cards';
-import { apiError, apiJson, assertSameOrigin, parseId, readJson } from '$lib/server/http';
-import { updateCardCreditLimitReviewSchema } from '$lib/server/schemas';
+import { updateCardCreditLimitReview } from '#lib/server/cards.ts';
+import { apiError, apiJson, assertSameOrigin, parseId, readJson } from '#lib/server/http.ts';
+import { updateCardCreditLimitReviewSchema } from '#lib/server/schemas.ts';
 
 export const PATCH: RequestHandler = async ({ params, request, url }) => {
 	try {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CreditScoreEntry } from '$lib/credit-score-types';
+import type { CreditScoreEntry } from '#lib/credit-score-types.ts';
 import {
 	creditBureauLabel,
 	creditScoreChange,

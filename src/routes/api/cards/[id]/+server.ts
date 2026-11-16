@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types';
-import { deleteManualCard, getCard, updateManualCard } from '$lib/server/cards';
+import { deleteManualCard, getCard, updateManualCard } from '#lib/server/cards.ts';
 import {
 	apiError,
 	apiJson,
@@ -7,8 +7,8 @@ import {
 	noContent,
 	parseId,
 	readJson
-} from '$lib/server/http';
-import { updateManualCardSchema } from '$lib/server/schemas';
+} from '#lib/server/http.ts';
+import { updateManualCardSchema } from '#lib/server/schemas.ts';
 
 export const GET: RequestHandler = async ({ params }) => {
 	try {

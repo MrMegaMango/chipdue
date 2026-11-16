@@ -1,7 +1,7 @@
 import type { RequestHandler } from './$types';
-import { createBonus, listBonuses } from '$lib/server/financial-records';
-import { apiError, apiJson, assertSameOrigin, readJson } from '$lib/server/http';
-import { createBonusSchema } from '$lib/server/schemas';
+import { createBonus, listBonuses } from '#lib/server/financial-records.ts';
+import { apiError, apiJson, assertSameOrigin, readJson } from '#lib/server/http.ts';
+import { createBonusSchema } from '#lib/server/schemas.ts';
 
 export const GET: RequestHandler = async () => {
 	try {

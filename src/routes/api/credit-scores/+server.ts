@@ -1,8 +1,8 @@
 import type { RequestHandler } from './$types';
-import { createCreditScoreSchema } from '$lib/server/credit-score-schemas';
-import { createCreditScore, listCreditScores } from '$lib/server/credit-scores';
-import { apiError, apiJson, assertSameOrigin, readJson } from '$lib/server/http';
-import { methodCreditScoreStatus } from '$lib/server/method-credit-score';
+import { createCreditScoreSchema } from '#lib/server/credit-score-schemas.ts';
+import { createCreditScore, listCreditScores } from '#lib/server/credit-scores.ts';
+import { apiError, apiJson, assertSameOrigin, readJson } from '#lib/server/http.ts';
+import { methodCreditScoreStatus } from '#lib/server/method-credit-score.ts';
 
 export const GET: RequestHandler = async () => {
 	try {

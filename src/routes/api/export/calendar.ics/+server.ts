@@ -1,7 +1,7 @@
 import type { RequestHandler } from './$types';
-import { listCards } from '$lib/server/cards';
-import { apiError, privateResponseHeaders } from '$lib/server/http';
-import { createCalendar } from '$lib/server/ics';
+import { listCards } from '#lib/server/cards.ts';
+import { apiError, privateResponseHeaders } from '#lib/server/http.ts';
+import { createCalendar } from '#lib/server/ics.ts';
 
 export const GET: RequestHandler = async ({ url }) => {
 	try {

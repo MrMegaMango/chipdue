@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Card } from '$lib/types';
+import type { Card } from '#lib/types.ts';
 import { createCalendar, hasUpcomingPaymentDueDate } from './ics';
 
 const card: Card = {

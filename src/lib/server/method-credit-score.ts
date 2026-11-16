@@ -3,7 +3,7 @@ import type {
 	CreditBureau,
 	CreditScoreConnectionStatus,
 	CreditScoreFactor
-} from '$lib/credit-score-types';
+} from '#lib/credit-score-types.ts';
 import { upsertConnectedCreditScore } from './credit-scores';
 import { AppError } from './errors';
 import {

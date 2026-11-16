@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { getBonusChurnToday } from '$lib/bonus-churn';
-	import { currentTime } from '$lib/sync-time';
-	import { cardDowngradeTiming, type CardDowngradeDates } from '$lib/card-downgrade';
-	import type { AccountBonus } from '$lib/types';
+	import { getBonusChurnToday } from '#lib/bonus-churn.ts';
+	import { currentTime } from '#lib/sync-time.ts';
+	import { cardDowngradeTiming, type CardDowngradeDates } from '#lib/card-downgrade.ts';
+	import type { AccountBonus } from '#lib/types.ts';
 	type BonusContext = CardDowngradeDates &
 		Partial<
 			Pick<

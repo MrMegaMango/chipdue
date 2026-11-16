@@ -3,7 +3,7 @@ import { z } from 'zod';
 import {
 	normalizeTransactionHistoryStatus,
 	type StoredTransactionHistoryStatus
-} from '$lib/financial-data';
+} from '#lib/financial-data.ts';
 import type {
 	AccountBonus,
 	AccountBalanceHistoryPoint,
@@ -13,7 +13,7 @@ import type {
 	FinancialAccountTransaction,
 	InvestmentHolding,
 	TransactionHistoryStatus
-} from '$lib/types';
+} from '#lib/types.ts';
 import type { StoredTransactionHistory } from './cards';
 import { cloudQuery, cloudTransaction, type CloudStatement } from './cloud-database';
 import { decryptJson, encryptJson } from './crypto';

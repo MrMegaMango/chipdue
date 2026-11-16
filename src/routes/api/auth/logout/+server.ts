@@ -1,11 +1,11 @@
 import type { RequestHandler } from './$types';
-import { clearSessionCookie, revokeSession, SESSION_COOKIE_NAME } from '$lib/server/auth';
+import { clearSessionCookie, revokeSession, SESSION_COOKIE_NAME } from '#lib/server/auth.ts';
 import {
 	clearEmergencySessionCookie,
 	EMERGENCY_SESSION_COOKIE_NAME,
 	revokeEmergencySession
-} from '$lib/server/emergency-auth';
-import { apiError, assertSameOrigin, noContent } from '$lib/server/http';
+} from '#lib/server/emergency-auth.ts';
+import { apiError, assertSameOrigin, noContent } from '#lib/server/http.ts';
 
 export const POST: RequestHandler = async ({ cookies, request, url }) => {
 	try {

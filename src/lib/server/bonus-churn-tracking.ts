@@ -2,7 +2,7 @@ import {
 	resolveAutomaticBonusChurn,
 	type BonusChurnActivity,
 	type BonusChurnAutomationResult
-} from '$lib/bonus-churn-automatic';
+} from '#lib/bonus-churn-automatic.ts';
 import { cardsFromRows, cardTransactionsFromRow } from './cards';
 import {
 	bonusesFromRows,

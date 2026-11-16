@@ -1,9 +1,9 @@
-import { FINANCIAL_PROVIDER_NAMES } from '$lib/financial-data';
+import { FINANCIAL_PROVIDER_NAMES } from '#lib/financial-data.ts';
 import type {
 	FinancialConnection,
 	FinancialDataProvider,
 	FinancialProviderStatus
-} from '$lib/types';
+} from '#lib/types.ts';
 import { AppError, asAppError } from './errors';
 import {
 	disconnectPlaidItem,

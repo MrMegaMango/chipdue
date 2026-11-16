@@ -1,7 +1,7 @@
 import type { RequestHandler } from './$types';
 import { z } from 'zod';
-import { apiError, apiJson, assertSameOrigin, readJson } from '$lib/server/http';
-import { configurePersonalPlaid } from '$lib/server/plaid';
+import { apiError, apiJson, assertSameOrigin, readJson } from '#lib/server/http.ts';
+import { configurePersonalPlaid } from '#lib/server/plaid.ts';
 
 const plaidConfigurationSchema = z
 	.object({

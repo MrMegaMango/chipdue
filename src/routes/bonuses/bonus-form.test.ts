@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { preservesDisconnectedOffer } from '$lib/components/BonusWorkspace.svelte';
+import { preservesDisconnectedOffer } from '#lib/components/BonusWorkspace.svelte';
 
 const acceptedOffer = {
 	offerTemplateId: 'capital-one-business-checking-sboffer500-2026',

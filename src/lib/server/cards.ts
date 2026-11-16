@@ -4,11 +4,11 @@ import {
 	matchAutomaticCardRewardProfile,
 	type AutomaticCardRewardProfile,
 	type CardRewardCalculation
-} from '$lib/card-reward-profiles';
+} from '#lib/card-reward-profiles.ts';
 import {
 	normalizeTransactionHistoryStatus,
 	type StoredTransactionHistoryStatus
-} from '$lib/financial-data';
+} from '#lib/financial-data.ts';
 import type {
 	Card,
 	CardCreditLimitReview,
@@ -20,7 +20,7 @@ import type {
 	CardTransactionRewardEstimate,
 	FinancialDataProvider,
 	TransactionHistoryStatus
-} from '$lib/types';
+} from '#lib/types.ts';
 import { cloudQuery, cloudTransaction, type CloudStatement } from './cloud-database';
 import { decryptJson, encryptJson, privateUuid } from './crypto';
 import { getDatabase } from './database';

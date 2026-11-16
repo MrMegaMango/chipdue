@@ -1,9 +1,9 @@
 import type { RequestHandler } from './$types';
-import { getBonusChurnToday } from '$lib/bonus-churn';
-import { listAutomaticBonusTracking } from '$lib/server/bonus-churn-tracking';
-import { privateFingerprint } from '$lib/server/crypto';
-import { apiError, apiJson, privateResponseHeaders } from '$lib/server/http';
-import { recordRowsRevision } from '$lib/server/record-rows';
+import { getBonusChurnToday } from '#lib/bonus-churn.ts';
+import { listAutomaticBonusTracking } from '#lib/server/bonus-churn-tracking.ts';
+import { privateFingerprint } from '#lib/server/crypto.ts';
+import { apiError, apiJson, privateResponseHeaders } from '#lib/server/http.ts';
+import { recordRowsRevision } from '#lib/server/record-rows.ts';
 
 export const GET: RequestHandler = async ({ request }) => {
 	try {

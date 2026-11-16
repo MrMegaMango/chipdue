@@ -1,10 +1,10 @@
 import type { RequestHandler } from './$types';
-import { authenticatedTenantId, SESSION_COOKIE_NAME } from '$lib/server/auth';
-import { apiError, apiJson } from '$lib/server/http';
-import { getGoogleAuthStatus } from '$lib/server/google-oidc';
-import { recordRowsRevision } from '$lib/server/record-rows';
-import { getRuntimeAuthMode, getRuntimeMode } from '$lib/server/runtime';
-import { LEGACY_TENANT_ID, runAsTenant } from '$lib/server/tenant';
+import { authenticatedTenantId, SESSION_COOKIE_NAME } from '#lib/server/auth.ts';
+import { apiError, apiJson } from '#lib/server/http.ts';
+import { getGoogleAuthStatus } from '#lib/server/google-oidc.ts';
+import { recordRowsRevision } from '#lib/server/record-rows.ts';
+import { getRuntimeAuthMode, getRuntimeMode } from '#lib/server/runtime.ts';
+import { LEGACY_TENANT_ID, runAsTenant } from '#lib/server/tenant.ts';
 
 export const GET: RequestHandler = async ({ cookies }) => {
 	try {

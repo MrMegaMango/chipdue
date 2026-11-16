@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types';
-import { deleteCreditScore, getCreditScore, updateCreditScore } from '$lib/server/credit-scores';
+import { deleteCreditScore, getCreditScore, updateCreditScore } from '#lib/server/credit-scores.ts';
 import {
 	apiError,
 	apiJson,
@@ -7,8 +7,8 @@ import {
 	noContent,
 	parseId,
 	readJson
-} from '$lib/server/http';
-import { updateCreditScoreSchema } from '$lib/server/credit-score-schemas';
+} from '#lib/server/http.ts';
+import { updateCreditScoreSchema } from '#lib/server/credit-score-schemas.ts';
 
 export const GET: RequestHandler = async ({ params }) => {
 	try {

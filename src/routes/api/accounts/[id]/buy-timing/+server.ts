@@ -1,8 +1,8 @@
 import type { RequestHandler } from './$types';
-import type { BuyTimingRange, BuyTimingSchedule, BuyTimingWindow } from '$lib/buy-timing';
-import { accountBuyTiming } from '$lib/server/buy-timing-service';
-import { AppError } from '$lib/server/errors';
-import { apiError, apiJson, parseId } from '$lib/server/http';
+import type { BuyTimingRange, BuyTimingSchedule, BuyTimingWindow } from '#lib/buy-timing.ts';
+import { accountBuyTiming } from '#lib/server/buy-timing-service.ts';
+import { AppError } from '#lib/server/errors.ts';
+import { apiError, apiJson, parseId } from '#lib/server/http.ts';
 
 const RANGES = new Set<BuyTimingRange>(['1M', '3M', 'YTD', '1Y', 'ALL']);
 const WINDOWS = new Set(['2', '3', '6']);

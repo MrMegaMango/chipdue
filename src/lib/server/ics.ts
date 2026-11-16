@@ -1,4 +1,4 @@
-import type { Card } from '$lib/types';
+import type { Card } from '#lib/types.ts';
 
 function escapeText(value: string): string {
 	return value

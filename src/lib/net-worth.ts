@@ -1,4 +1,4 @@
-import type { AccountBalanceHistoryPoint, FinancialAccount } from '$lib/types';
+import type { AccountBalanceHistoryPoint, FinancialAccount } from '#lib/types.ts';
 
 export type NetWorthAccount = Pick<
 	FinancialAccount,

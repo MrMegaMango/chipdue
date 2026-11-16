@@ -1,7 +1,7 @@
 import type { RequestHandler } from './$types';
 import { z } from 'zod';
-import { disconnectFinancialConnection } from '$lib/server/financial-connections';
-import { setPlaidConnectionSyncPaused } from '$lib/server/plaid-store';
+import { disconnectFinancialConnection } from '#lib/server/financial-connections.ts';
+import { setPlaidConnectionSyncPaused } from '#lib/server/plaid-store.ts';
 import {
 	apiError,
 	apiJson,
@@ -9,7 +9,7 @@ import {
 	noContent,
 	parseId,
 	readJson
-} from '$lib/server/http';
+} from '#lib/server/http.ts';
 
 const syncPreferenceSchema = z.strictObject({ syncPaused: z.boolean() });
 

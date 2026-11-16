@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import type { EmergencySnapshot } from '$lib/emergency';
-import type { AccountBonus, Card } from '$lib/types';
+import type { EmergencySnapshot } from '#lib/emergency.ts';
+import type { AccountBonus, Card } from '#lib/types.ts';
 import { savedDeadlines, savedSessionChanged } from './+page.svelte';
 
 function snapshot(

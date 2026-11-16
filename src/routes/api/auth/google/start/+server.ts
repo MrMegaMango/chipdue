@@ -1,11 +1,11 @@
 import type { RequestHandler } from './$types';
-import { privateResponseHeaders } from '$lib/server/http';
+import { privateResponseHeaders } from '#lib/server/http.ts';
 import {
 	beginGoogleOidc,
 	clearGoogleTransactionCookie,
 	type GoogleOidcIntent
-} from '$lib/server/google-oidc';
-import { AppError } from '$lib/server/errors';
+} from '#lib/server/google-oidc.ts';
+import { AppError } from '#lib/server/errors.ts';
 
 function parseIntent(url: URL): GoogleOidcIntent {
 	const values = url.searchParams.getAll('intent');

@@ -110,7 +110,7 @@
 
 	function fallbackInstitutionLogoUrl(issuer: string | null): string | null {
 		const brand = cardBrandForIssuer(issuer);
-		return brand ? asset(`/brands/${brand}.svg`) : null;
+		return brand ? asset(`brands/${brand}.svg`) : null;
 	}
 
 	export type PayInFullTarget = {
@@ -285,22 +285,25 @@
 
 <script lang="ts">
 	import { asset, resolve } from '$app/paths';
-	import { replaceState } from '$app/navigation';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { onMount, tick } from 'svelte';
-	import { resolveBonusPayment, type BonusChurnAutomationResult } from '$lib/bonus-churn-automatic';
+	import {
+		resolveBonusPayment,
+		type BonusChurnAutomationResult
+	} from '#lib/bonus-churn-automatic.ts';
 	import {
 		AUTOMATIC_CARD_REWARD_PROFILES,
 		type AutomaticCardRewardProfile
-	} from '$lib/card-reward-profiles';
-	import NetWorthChart from '$lib/components/NetWorthChart.svelte';
-	import SyncedTime from '$lib/components/SyncedTime.svelte';
-	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
-	import ThemePicker from '$lib/components/ThemePicker.svelte';
-	import { connectionSyncSummary, type ConnectionSyncSummary } from '$lib/connection-sync';
-	import { financialProviderName } from '$lib/financial-data';
-	import type { DashboardResponse } from '$lib/dashboard';
-	import { createDashboardLoader } from '$lib/dashboard-loader';
+	} from '#lib/card-reward-profiles.ts';
+	import NetWorthChart from '#lib/components/NetWorthChart.svelte';
+	import SyncedTime from '#lib/components/SyncedTime.svelte';
+	import WorkspaceHeader from '#lib/components/WorkspaceHeader.svelte';
+	import ThemePicker from '#lib/components/ThemePicker.svelte';
+	import { connectionSyncSummary, type ConnectionSyncSummary } from '#lib/connection-sync.ts';
+	import { financialProviderName } from '#lib/financial-data.ts';
+	import type { DashboardResponse } from '#lib/dashboard.ts';
+	import { createDashboardLoader } from '#lib/dashboard-loader.ts';
 	import {
 		aliasPrivateApiGet,
 		clearPrivateApiCache,
@@ -309,14 +312,14 @@
 		rememberPrivateDataRevision,
 		reusePrivateApiGet,
 		revalidatePrivateApiGet
-	} from '$lib/private-api-cache';
+	} from '#lib/private-api-cache.ts';
 	import type {
 		AccountBonus,
 		FinancialAccount,
 		CardCreditLimitReview as CreditLimitReviewData
-	} from '$lib/types';
-	import CardCreditLimitReview from '$lib/components/CardCreditLimitReview.svelte';
-	import CardDowngradeTiming from '$lib/components/CardDowngradeTiming.svelte';
+	} from '#lib/types.ts';
+	import CardCreditLimitReview from '#lib/components/CardCreditLimitReview.svelte';
+	import CardDowngradeTiming from '#lib/components/CardDowngradeTiming.svelte';
 
 	type PageSection = 'overview' | 'cards' | 'settings';
 	const currentSection: PageSection = $derived(
@@ -753,7 +756,9 @@
 		void initializeAuth().finally(async () => {
 			// SvelteKit's root is not assigned when onMount begins. Shallow routing is safe
 			// after the asynchronous session initialization yields back to the router.
-			if (pageMounted && shouldCleanCallbackUrl) replaceState(resolve('/'), {});
+			if (pageMounted && shouldCleanCallbackUrl) {
+				await goto(resolve('/'), { shallow: true, replace: true, state: {}, reset: false });
+			}
 			if (pageMounted && sectionAnchor) {
 				await tick();
 				document.getElementById(sectionAnchor)?.scrollIntoView({ block: 'start' });
@@ -2138,7 +2143,7 @@
 		if (!isPrivateEpochCurrent(epoch)) return;
 		if (!plaid.configured) {
 			if (currentSection !== 'settings') {
-				window.location.assign(resolve('/settings#plaid-setup'));
+				window.location.assign(`${resolve('/settings')}#plaid-setup`);
 				return;
 			}
 			document
@@ -2685,7 +2690,7 @@
 	<main class="auth-shell auth-loading" aria-busy="true">
 		<div class="auth-brand" aria-label="ChipDue">
 			<span class="brand-mark" aria-hidden="true">
-				<img src={asset('/logo-mark.svg')} alt="" />
+				<img src={asset('logo-mark.svg')} alt="" />
 			</span>
 			<span>ChipDue</span>
 		</div>
@@ -2697,7 +2702,7 @@
 		<section class="auth-card auth-error-card" aria-labelledby="session-error-title">
 			<div class="auth-brand">
 				<span class="brand-mark" aria-hidden="true">
-					<img src={asset('/logo-mark.svg')} alt="" />
+					<img src={asset('logo-mark.svg')} alt="" />
 				</span>
 				<span>ChipDue</span>
 			</div>
@@ -2714,7 +2719,7 @@
 		<section class="auth-card" aria-labelledby="login-title">
 			<div class="auth-brand">
 				<span class="brand-mark" aria-hidden="true">
-					<img src={asset('/logo-mark.svg')} alt="" />
+					<img src={asset('logo-mark.svg')} alt="" />
 				</span>
 				<span>ChipDue</span>
 			</div>
@@ -2746,7 +2751,7 @@
 				<a
 					bind:this={googleLoginLink}
 					class="button google-button"
-					href={resolve('/api/auth/google/start?intent=login')}
+					href={`${resolve('/api/auth/google/start')}?intent=login`}
 					onclick={(event) => beginGoogleNavigation(event, 'login')}
 					aria-busy={googleNavigationPending === 'login'}
 					aria-disabled={googleNavigationPending !== null || setupBusy ? 'true' : undefined}
@@ -2754,7 +2759,7 @@
 					data-sveltekit-reload
 				>
 					<img
-						src={asset('/google-sign-in.svg')}
+						src={asset('google-sign-in.svg')}
 						alt={googleNavigationPending === 'login' ? '' : 'Sign in with Google'}
 						width="180"
 						height="40"
@@ -3716,7 +3721,7 @@
 									{:else if googleLinked === false && authenticationMode === 'password'}
 										<a
 											class="button google-link-button"
-											href={resolve('/api/auth/google/start?intent=link')}
+											href={`${resolve('/api/auth/google/start')}?intent=link`}
 											onclick={(event) => beginGoogleNavigation(event, 'link')}
 											aria-busy={googleNavigationPending === 'link'}
 											aria-disabled={googleNavigationPending !== null ? 'true' : undefined}
@@ -4091,7 +4096,11 @@
 								>
 								Add to Google Calendar
 							</button>
-							<a class="text-link" href={resolve('/api/export/calendar.ics?amounts=0')} download>
+							<a
+								class="text-link"
+								href={`${resolve('/api/export/calendar.ics')}?amounts=0`}
+								download
+							>
 								Download .ics instead
 								<svg aria-hidden="true" viewBox="0 0 16 16"><path d="m6 3 5 5-5 5"></path></svg>
 							</a>
@@ -4189,7 +4198,7 @@
 						<!-- eslint-enable svelte/no-navigation-without-resolve -->
 					</ul>
 					<footer class="dialog-actions calendar-dialog-actions">
-						<a class="text-link" href={resolve('/api/export/calendar.ics?amounts=0')} download>
+						<a class="text-link" href={`${resolve('/api/export/calendar.ics')}?amounts=0`} download>
 							Download all as .ics
 						</a>
 						<button class="button button-quiet" type="button" onclick={closeCalendarDialog}

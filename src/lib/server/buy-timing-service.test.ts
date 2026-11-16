@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { FinancialAccount, FinancialAccountTransaction } from '$lib/types';
+import type { FinancialAccount, FinancialAccountTransaction } from '#lib/types.ts';
 import { accountBuyTiming } from './buy-timing-service';
 import { adjustedMarketSeries, type AdjustedMarketSeries } from './adjusted-market-history';
 import { AppError } from './errors';

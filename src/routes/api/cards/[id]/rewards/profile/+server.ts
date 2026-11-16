@@ -1,7 +1,7 @@
 import type { RequestHandler } from './$types';
-import { applyAutomaticCardRewardProfile } from '$lib/server/cards';
-import { apiError, apiJson, assertSameOrigin, parseId, readJson } from '$lib/server/http';
-import { applyCardRewardProfileSchema } from '$lib/server/schemas';
+import { applyAutomaticCardRewardProfile } from '#lib/server/cards.ts';
+import { apiError, apiJson, assertSameOrigin, parseId, readJson } from '#lib/server/http.ts';
+import { applyCardRewardProfileSchema } from '#lib/server/schemas.ts';
 
 export const PUT: RequestHandler = async ({ params, request, url }) => {
 	try {

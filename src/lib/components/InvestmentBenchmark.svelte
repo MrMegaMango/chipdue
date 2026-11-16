@@ -6,13 +6,13 @@
 		getInvestmentComparisonHistory,
 		type BenchmarkPrice,
 		type BenchmarkRange
-	} from '$lib/investment-benchmark';
+	} from '#lib/investment-benchmark.ts';
 	import {
 		clearPrivateApiCache,
 		PrivateApiError,
 		reusePrivateApiGet
-	} from '$lib/private-api-cache';
-	import type { FinancialAccount } from '$lib/types';
+	} from '#lib/private-api-cache.ts';
+	import type { FinancialAccount } from '#lib/types.ts';
 
 	let {
 		accounts,

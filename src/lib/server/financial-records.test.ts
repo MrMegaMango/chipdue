@@ -2,7 +2,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildInvestmentComparison, needsBrokerageHistoryRefresh } from '$lib/investment-benchmark';
+import {
+	buildInvestmentComparison,
+	needsBrokerageHistoryRefresh
+} from '#lib/investment-benchmark.ts';
 import { listCards } from './cards';
 import { closeDatabaseForTests, getDatabase } from './database';
 import {

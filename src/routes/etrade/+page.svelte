@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
-	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
-	import '$lib/finance-pages.css';
+	import WorkspaceHeader from '#lib/components/WorkspaceHeader.svelte';
+	import '#lib/finance-pages.css';
 
 	type RuntimeMode = 'local' | 'cloud';
 	type EtradeStatus = {

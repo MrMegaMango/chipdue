@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { FinancialAccount } from '$lib/types';
+import type { FinancialAccount } from '#lib/types.ts';
 import { reconstructBrokerageHistory } from './brokerage-history';
 
 describe('brokerage history reconstruction', () => {

@@ -1,4 +1,4 @@
-import type { FinancialAccount } from '$lib/types';
+import type { FinancialAccount } from '#lib/types.ts';
 
 const RATE_CACHE_MS = 6 * 60 * 60 * 1_000;
 const MAX_SOURCE_BYTES = 1_000_000;

@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
-import { etradeStatus } from '$lib/server/etrade';
-import { apiError, apiJson } from '$lib/server/http';
+import { etradeStatus } from '#lib/server/etrade.ts';
+import { apiError, apiJson } from '#lib/server/http.ts';
 
 export const GET: RequestHandler = async () => {
 	try {

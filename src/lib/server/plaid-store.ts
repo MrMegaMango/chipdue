@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { FinancialConnection } from '$lib/types';
+import type { FinancialConnection } from '#lib/types.ts';
 import { cloudQuery } from './cloud-database';
 import { decryptJson, decryptSecret, encryptJson, encryptSecret, privateUuid } from './crypto';
 import { getDatabase } from './database';

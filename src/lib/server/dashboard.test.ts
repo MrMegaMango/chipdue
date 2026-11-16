@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DASHBOARD_ACTIVITY_LIMIT } from '$lib/dashboard';
+import { DASHBOARD_ACTIVITY_LIMIT } from '#lib/dashboard.ts';
 import { GET as dashboardEndpoint } from '../../routes/api/dashboard/+server';
 import { GET as cardsEndpoint } from '../../routes/api/cards/+server';
 import { DELETE as deleteCardEndpoint } from '../../routes/api/cards/[id]/+server';

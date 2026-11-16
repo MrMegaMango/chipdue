@@ -1,13 +1,13 @@
 import type { RequestHandler } from './$types';
-import { setSessionCookie } from '$lib/server/auth';
-import { setEmergencySessionCookie } from '$lib/server/emergency-auth';
-import { AppError } from '$lib/server/errors';
+import { setSessionCookie } from '#lib/server/auth.ts';
+import { setEmergencySessionCookie } from '#lib/server/emergency-auth.ts';
+import { AppError } from '#lib/server/errors.ts';
 import {
 	clearGoogleTransactionCookie,
 	completeGoogleOidc,
 	googleOidcReturnPath
-} from '$lib/server/google-oidc';
-import { privateResponseHeaders } from '$lib/server/http';
+} from '#lib/server/google-oidc.ts';
+import { privateResponseHeaders } from '#lib/server/http.ts';
 
 export const GET: RequestHandler = async ({ cookies, request, url }) => {
 	const returnPath = googleOidcReturnPath(cookies);

@@ -1,7 +1,7 @@
 import type { RequestHandler } from './$types';
-import { AppError } from '$lib/server/errors';
-import { apiError, apiJson } from '$lib/server/http';
-import { spyBenchmarkSeries } from '$lib/server/market-history';
+import { AppError } from '#lib/server/errors.ts';
+import { apiError, apiJson } from '#lib/server/http.ts';
+import { spyBenchmarkSeries } from '#lib/server/market-history.ts';
 
 export const GET: RequestHandler = async ({ url }) => {
 	try {

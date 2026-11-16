@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { FinancialConnection } from '$lib/types';
+import type { FinancialConnection } from '#lib/types.ts';
 import { POST as syncConnection } from '../../routes/api/connections/[id]/sync/+server';
 import { POST as syncConnectionTransactions } from '../../routes/api/connections/[id]/transactions/sync/+server';
 import { POST as syncTransactions } from '../../routes/api/connections/transactions/sync/+server';

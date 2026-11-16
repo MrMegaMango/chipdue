@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
-import { disconnectFinancialConnection } from '$lib/server/financial-connections';
-import { apiError, assertSameOrigin, noContent, parseId } from '$lib/server/http';
+import { disconnectFinancialConnection } from '#lib/server/financial-connections.ts';
+import { apiError, assertSameOrigin, noContent, parseId } from '#lib/server/http.ts';
 
 export const DELETE: RequestHandler = async ({ params, request, url }) => {
 	try {

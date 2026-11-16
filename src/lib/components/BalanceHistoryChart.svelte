@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { AccountBalanceHistoryPoint } from '$lib/types';
+	import type { AccountBalanceHistoryPoint } from '#lib/types.ts';
 
 	type HistoryRange = '1M' | '3M' | '1Y' | 'ALL';
 	type ChartPoint = AccountBalanceHistoryPoint & {

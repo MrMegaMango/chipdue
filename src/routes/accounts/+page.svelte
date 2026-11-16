@@ -1,21 +1,21 @@
 <script lang="ts">
 	import { asset, resolve } from '$app/paths';
 	import { onMount } from 'svelte';
-	import { getCompatibleBonusOffers } from '$lib/bonus-offers';
-	import BalanceHistoryChart from '$lib/components/BalanceHistoryChart.svelte';
-	import InvestmentBenchmark from '$lib/components/InvestmentBenchmark.svelte';
-	import BuyTimingComparison from '$lib/components/BuyTimingComparison.svelte';
-	import { needsBrokerageHistoryRefresh } from '$lib/investment-benchmark';
-	import SyncedTime from '$lib/components/SyncedTime.svelte';
-	import { connectionSyncSummary, type ConnectionSyncSummary } from '$lib/connection-sync';
-	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
-	import { financialProviderName, sumMoneyByCurrency } from '$lib/financial-data';
-	import { cashSweepAction, isCashSweepSecurity } from '$lib/investment-display';
+	import { getCompatibleBonusOffers } from '#lib/bonus-offers.ts';
+	import BalanceHistoryChart from '#lib/components/BalanceHistoryChart.svelte';
+	import InvestmentBenchmark from '#lib/components/InvestmentBenchmark.svelte';
+	import BuyTimingComparison from '#lib/components/BuyTimingComparison.svelte';
+	import { needsBrokerageHistoryRefresh } from '#lib/investment-benchmark.ts';
+	import SyncedTime from '#lib/components/SyncedTime.svelte';
+	import { connectionSyncSummary, type ConnectionSyncSummary } from '#lib/connection-sync.ts';
+	import WorkspaceHeader from '#lib/components/WorkspaceHeader.svelte';
+	import { financialProviderName, sumMoneyByCurrency } from '#lib/financial-data.ts';
+	import { cashSweepAction, isCashSweepSecurity } from '#lib/investment-display.ts';
 	import {
 		clearPrivateApiCache,
 		rememberPrivateDataRevision,
 		reusePrivateApiGet
-	} from '$lib/private-api-cache';
+	} from '#lib/private-api-cache.ts';
 	import type {
 		BrokerageOrder,
 		BrokerageHistoryEstimateResponse,
@@ -28,8 +28,8 @@
 		FinancialAccountType,
 		FinancialProviderStatus,
 		InvestmentHolding
-	} from '$lib/types';
-	import '$lib/finance-pages.css';
+	} from '#lib/types.ts';
+	import '#lib/finance-pages.css';
 
 	type RuntimeMode = 'local' | 'cloud';
 	type SessionResponse = { mode: RuntimeMode; authenticated: boolean; dataRevision: string | null };
@@ -290,12 +290,12 @@
 
 	function institutionLogoUrl(account: FinancialAccount): string | null {
 		if (account.institutionLogoUrl) return account.institutionLogoUrl;
-		if (/\bvenmo\b/i.test(account.institution ?? '')) return asset('/brands/venmo.svg');
-		if (/\bvio\s+bank\b/i.test(account.institution ?? '')) return asset('/brands/vio-bank.svg');
+		if (/\bvenmo\b/i.test(account.institution ?? '')) return asset('brands/venmo.svg');
+		if (/\bvio\s+bank\b/i.test(account.institution ?? '')) return asset('brands/vio-bank.svg');
 		if (/\bwells\s+fargo\b/i.test(account.institution ?? '')) {
-			return asset('/brands/wells-fargo.svg');
+			return asset('brands/wells-fargo.svg');
 		}
-		if (/\bchase\b/i.test(account.institution ?? '')) return asset('/brands/chase.svg');
+		if (/\bchase\b/i.test(account.institution ?? '')) return asset('brands/chase.svg');
 		return null;
 	}
 
@@ -1027,7 +1027,7 @@
 	async function connectPlaid(): Promise<void> {
 		if (connecting || syncing) return;
 		if (!plaidConfigured) {
-			window.location.assign(resolve('/settings#plaid-setup'));
+			window.location.assign(`${resolve('/settings')}#plaid-setup`);
 			return;
 		}
 
@@ -1314,7 +1314,7 @@
 						and balances remain available below.
 					</p>
 				</div>
-				<a class="finance-button secondary" href={resolve('/settings#plaid-connections')}>
+				<a class="finance-button secondary" href={`${resolve('/settings')}#plaid-connections`}>
 					Repair {connectionsNeedingAttention.length === 1 ? 'connection' : 'connections'}
 				</a>
 			</section>
@@ -1329,7 +1329,7 @@
 						remain available.
 					</p>
 				</div>
-				<a class="finance-button secondary" href={resolve('/settings#plaid-connections')}
+				<a class="finance-button secondary" href={`${resolve('/settings')}#plaid-connections`}
 					>Manage sync</a
 				>
 			</section>

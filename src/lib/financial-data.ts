@@ -1,4 +1,4 @@
-import type { FinancialDataProvider, TransactionHistoryStatus } from '$lib/types';
+import type { FinancialDataProvider, TransactionHistoryStatus } from '#lib/types.ts';
 
 export function sumMoneyByCurrency(
 	values: ReadonlyArray<{ currency: string; amountCents: number | null }>

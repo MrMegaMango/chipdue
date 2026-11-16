@@ -1,7 +1,7 @@
 import type { RequestHandler } from './$types';
-import { installationFinancialConnectionsStatus } from '$lib/server/financial-connections';
-import { apiError, apiJson } from '$lib/server/http';
-import { getRuntimeMode } from '$lib/server/runtime';
+import { installationFinancialConnectionsStatus } from '#lib/server/financial-connections.ts';
+import { apiError, apiJson } from '#lib/server/http.ts';
+import { getRuntimeMode } from '#lib/server/runtime.ts';
 
 export const GET: RequestHandler = async () => {
 	try {

@@ -1,15 +1,15 @@
-import type { Handle, HandleServerError } from '@sveltejs/kit';
-import { authenticatedTenantId, SESSION_COOKIE_NAME } from '$lib/server/auth';
-import { changesSavedFinances, refreshEmergencySnapshot } from '$lib/server/emergency-refresh';
-import { apiError, apiJson } from '$lib/server/http';
+import type { Handle, HandleServerError } from '@sveltejs/kit/hooks';
+import { authenticatedTenantId, SESSION_COOKIE_NAME } from '#lib/server/auth.ts';
+import { changesSavedFinances, refreshEmergencySnapshot } from '#lib/server/emergency-refresh.ts';
+import { apiError, apiJson } from '#lib/server/http.ts';
 import {
 	assertSecureCloudRequest,
 	assertSecureCloudTransport,
 	isLocalAuthority
-} from '$lib/server/request-security';
-import { getRuntimeAuthMode, getRuntimeMode } from '$lib/server/runtime';
-import { assertScheduledSyncRequest } from '$lib/server/scheduled-sync';
-import { LEGACY_TENANT_ID, runAsTenant } from '$lib/server/tenant';
+} from '#lib/server/request-security.ts';
+import { getRuntimeAuthMode, getRuntimeMode } from '#lib/server/runtime.ts';
+import { assertScheduledSyncRequest } from '#lib/server/scheduled-sync.ts';
+import { LEGACY_TENANT_ID, runAsTenant } from '#lib/server/tenant.ts';
 
 function secureHeaders(response: Response): Response {
 	response.headers.set('cache-control', 'no-store, max-age=0');
@@ -121,7 +121,12 @@ export const handle: Handle = async ({ event, resolve }) => {
 	return secureHeaders(await resolve(event));
 };
 
-export const handleError: HandleServerError = ({ status }) => ({
-	message: status >= 500 ? 'An unexpected error occurred.' : 'The request could not be completed.',
-	code: status >= 500 ? 'INTERNAL_ERROR' : 'REQUEST_ERROR'
-});
+export const handleError: HandleServerError = ({ kind, error }) => {
+	const status = kind === 'unknown' ? 500 : error.status;
+	return {
+		status,
+		message:
+			status >= 500 ? 'An unexpected error occurred.' : 'The request could not be completed.',
+		code: status >= 500 ? 'INTERNAL_ERROR' : 'REQUEST_ERROR'
+	};
+};

@@ -1,4 +1,4 @@
-import type { CreditBureau, CreditScoreEntry } from '$lib/credit-score-types';
+import type { CreditBureau, CreditScoreEntry } from '#lib/credit-score-types.ts';
 
 export type CreditScoreRange = 'Poor' | 'Fair' | 'Good' | 'Very good' | 'Exceptional';
 

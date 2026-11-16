@@ -1,7 +1,7 @@
 import type { RequestHandler } from './$types';
-import { apiError, apiJson, assertSameOrigin, readJson } from '$lib/server/http';
-import { exchangePlaidPublicToken } from '$lib/server/plaid';
-import { exchangeTokenSchema } from '$lib/server/schemas';
+import { apiError, apiJson, assertSameOrigin, readJson } from '#lib/server/http.ts';
+import { exchangePlaidPublicToken } from '#lib/server/plaid.ts';
+import { exchangeTokenSchema } from '#lib/server/schemas.ts';
 
 export const POST: RequestHandler = async ({ request, url }) => {
 	try {

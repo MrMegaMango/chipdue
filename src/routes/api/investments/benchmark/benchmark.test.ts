@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { setMarketHistoryFetchForTests } from '$lib/server/market-history';
+import { setMarketHistoryFetchForTests } from '#lib/server/market-history.ts';
 import { GET } from './+server';
 
 afterEach(() => setMarketHistoryFetchForTests());

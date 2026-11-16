@@ -5,8 +5,8 @@ import {
 	completeEtradeAuthorization,
 	disconnectEtrade,
 	etradeStatus
-} from '$lib/server/etrade';
-import { apiError, apiJson, assertSameOrigin, readJson } from '$lib/server/http';
+} from '#lib/server/etrade.ts';
+import { apiError, apiJson, assertSameOrigin, readJson } from '#lib/server/http.ts';
 
 const verifierSchema = z
 	.object({

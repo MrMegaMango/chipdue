@@ -3,7 +3,7 @@ import {
 	deleteFinancialAccount,
 	getFinancialAccount,
 	updateFinancialAccount
-} from '$lib/server/financial-records';
+} from '#lib/server/financial-records.ts';
 import {
 	apiError,
 	apiJson,
@@ -11,8 +11,8 @@ import {
 	noContent,
 	parseId,
 	readJson
-} from '$lib/server/http';
-import { updateFinancialAccountSchema } from '$lib/server/schemas';
+} from '#lib/server/http.ts';
+import { updateFinancialAccountSchema } from '#lib/server/schemas.ts';
 
 export const GET: RequestHandler = async ({ params }) => {
 	try {

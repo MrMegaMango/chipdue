@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AccountBonus, BonusChurn, BonusChurnCondition } from '$lib/types';
+import type { AccountBonus, BonusChurn, BonusChurnCondition } from '#lib/types.ts';
 import {
 	BONUS_CHURN_PRESETS,
 	bonusChurnOpenedDate,

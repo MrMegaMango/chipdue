@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
-import { loadDashboard } from '$lib/server/dashboard';
-import { apiError, apiJson } from '$lib/server/http';
+import { loadDashboard } from '#lib/server/dashboard.ts';
+import { apiError, apiJson } from '#lib/server/http.ts';
 
 export const GET: RequestHandler = async ({ url }) => {
 	try {

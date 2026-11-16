@@ -1,6 +1,9 @@
 import type { RequestHandler } from './$types';
-import { apiError, apiJson, assertSameOrigin } from '$lib/server/http';
-import { methodCreditScoreStatus, syncMethodCreditScores } from '$lib/server/method-credit-score';
+import { apiError, apiJson, assertSameOrigin } from '#lib/server/http.ts';
+import {
+	methodCreditScoreStatus,
+	syncMethodCreditScores
+} from '#lib/server/method-credit-score.ts';
 
 export const POST: RequestHandler = async ({ request, url }) => {
 	try {

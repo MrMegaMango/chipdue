@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import type { CreditBureau, CreditScoreEntry, CreditScoreFactor } from '$lib/credit-score-types';
+import type { CreditBureau, CreditScoreEntry, CreditScoreFactor } from '#lib/credit-score-types.ts';
 import { cloudQuery } from './cloud-database';
 import {
 	creditBureauSchema,

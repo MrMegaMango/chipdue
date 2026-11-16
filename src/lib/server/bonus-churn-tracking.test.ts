@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { TransactionHistoryStatus } from '$lib/types';
+import type { TransactionHistoryStatus } from '#lib/types.ts';
 import { GET } from '../../routes/api/bonuses/tracking/+server';
 import { listAutomaticBonusTracking } from './bonus-churn-tracking';
 import { listCards, replaceConnectedCards, type StoredFinancialTransaction } from './cards';

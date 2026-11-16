@@ -5,13 +5,13 @@
 		BuyTimingResponse,
 		BuyTimingSchedule,
 		BuyTimingWindow
-	} from '$lib/buy-timing';
+	} from '#lib/buy-timing.ts';
 	import {
 		clearPrivateApiCache,
 		PrivateApiError,
 		reusePrivateApiGet
-	} from '$lib/private-api-cache';
-	import type { FinancialAccount } from '$lib/types';
+	} from '#lib/private-api-cache.ts';
+	import type { FinancialAccount } from '#lib/types.ts';
 
 	let { accounts }: { accounts: FinancialAccount[] } = $props();
 	let selectedId = $state('');

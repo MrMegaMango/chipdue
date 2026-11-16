@@ -1,7 +1,7 @@
 import type { RequestHandler } from './$types';
-import { listFinancialAccountTransactions } from '$lib/server/financial-records';
-import { AppError } from '$lib/server/errors';
-import { apiError, apiJson, parseId } from '$lib/server/http';
+import { listFinancialAccountTransactions } from '#lib/server/financial-records.ts';
+import { AppError } from '#lib/server/errors.ts';
+import { apiError, apiJson, parseId } from '#lib/server/http.ts';
 
 function transactionLimit(url: URL): number {
 	if ([...url.searchParams.keys()].some((name) => name !== 'limit')) {

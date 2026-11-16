@@ -1,4 +1,4 @@
-import type { FinancialDataProvider, FinancialRecordSource } from '$lib/types';
+import type { FinancialDataProvider, FinancialRecordSource } from '#lib/types.ts';
 import { privateFingerprint, privateUuid } from './crypto';
 
 // The deployed schema predates provider adapters, so its synced source value and

@@ -1,5 +1,5 @@
 <script module lang="ts">
-	import type { AccountBonus, FinancialAccount } from '$lib/types';
+	import type { AccountBonus, FinancialAccount } from '#lib/types.ts';
 
 	type AcceptedOfferContext = Pick<
 		AccountBonus,
@@ -27,7 +27,10 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
-	import { resolveBonusPayment, type BonusChurnAutomationResult } from '$lib/bonus-churn-automatic';
+	import {
+		resolveBonusPayment,
+		type BonusChurnAutomationResult
+	} from '#lib/bonus-churn-automatic.ts';
 	import {
 		buildBonusOfferDraft,
 		buildBonusTracker,
@@ -36,25 +39,25 @@
 		isOfferDateEligible,
 		resolveBonusOffer,
 		type BonusTracker
-	} from '$lib/bonus-offers';
-	import SyncedTime from '$lib/components/SyncedTime.svelte';
-	import BonusChurnPanel from '$lib/components/BonusChurnPanel.svelte';
-	import CardDowngradeTiming from '$lib/components/CardDowngradeTiming.svelte';
-	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
+	} from '#lib/bonus-offers.ts';
+	import SyncedTime from '#lib/components/SyncedTime.svelte';
+	import BonusChurnPanel from '#lib/components/BonusChurnPanel.svelte';
+	import CardDowngradeTiming from '#lib/components/CardDowngradeTiming.svelte';
+	import WorkspaceHeader from '#lib/components/WorkspaceHeader.svelte';
 	import {
 		clearPrivateApiCache,
 		PrivateApiError,
 		rememberPrivateDataRevision,
 		reusePrivateApiGet,
 		revalidatePrivateApiGet
-	} from '$lib/private-api-cache';
+	} from '#lib/private-api-cache.ts';
 	import type {
 		BonusStatus,
 		Card,
 		FinancialAccountTransaction,
 		TransactionHistoryStatus
-	} from '$lib/types';
-	import '$lib/finance-pages.css';
+	} from '#lib/types.ts';
+	import '#lib/finance-pages.css';
 
 	let { view = 'bonuses' }: { view?: 'bonuses' | 'churns' } = $props();
 

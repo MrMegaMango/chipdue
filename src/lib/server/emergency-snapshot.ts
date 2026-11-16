@@ -4,7 +4,7 @@ import {
 	EMERGENCY_TRANSACTION_LIMIT,
 	type EmergencyActivity,
 	type EmergencySnapshot
-} from '$lib/emergency';
+} from '#lib/emergency.ts';
 import { cardsFromRows, cardTransactionsFromRow } from './cards';
 import {
 	bonusesFromRows,

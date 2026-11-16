@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { FinancialAccount } from '$lib/types';
+import type { FinancialAccount } from '#lib/types.ts';
 import { addPublishedAccountApys, resetPublishedApyCacheForTests } from './published-apy';
 
 function connectedAccount(

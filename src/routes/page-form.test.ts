@@ -168,7 +168,7 @@ describe('Google-only setup privacy contract', () => {
 	it('defers callback URL cleanup until after SvelteKit hydration', () => {
 		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
 		expect(source).toMatch(
-			/initializeAuth\(\)\.finally\(async \(\) => \{[\s\S]*replaceState\(resolve\('\/'\), \{\}\);[\s\S]*\}\);/
+			/initializeAuth\(\)\.finally\(async \(\) => \{[\s\S]*await goto\(resolve\('\/'\), \{ shallow: true, replace: true, state: \{\}, reset: false \}\);[\s\S]*\}\);/
 		);
 		expect(source).toContain("searchParams.has('google')");
 		expect(source).not.toContain('Boolean(window.location.search || window.location.hash)');
@@ -400,7 +400,7 @@ describe('issuer branding', () => {
 		const source = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
 		expect(source).toContain('{#if card.issuerLogoUrl}');
 		expect(source).toContain('connectionLogoUrl(connection)');
-		expect(source).toContain('asset(`/brands/${brand}.svg`)');
+		expect(source).toContain('asset(`brands/${brand}.svg`)');
 		expect(source).not.toContain('paypalobjects.com');
 	});
 });

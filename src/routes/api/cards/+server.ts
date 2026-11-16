@@ -1,8 +1,8 @@
 import type { RequestHandler } from './$types';
-import { createManualCard, listCards } from '$lib/server/cards';
-import { financialConnectionsStatus } from '$lib/server/financial-connections';
-import { apiError, apiJson, assertSameOrigin, readJson } from '$lib/server/http';
-import { createManualCardSchema } from '$lib/server/schemas';
+import { createManualCard, listCards } from '#lib/server/cards.ts';
+import { financialConnectionsStatus } from '#lib/server/financial-connections.ts';
+import { apiError, apiJson, assertSameOrigin, readJson } from '#lib/server/http.ts';
+import { createManualCardSchema } from '#lib/server/schemas.ts';
 
 export const GET: RequestHandler = async () => {
 	try {

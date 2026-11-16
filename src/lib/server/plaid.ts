@@ -12,10 +12,10 @@ import {
 	type TransactionsUpdateStatus
 } from 'plaid';
 import { Buffer } from 'node:buffer';
-import { matchAutomaticCardRewardProfile } from '$lib/card-reward-profiles';
-import type { FinancialConnection } from '$lib/types';
-import type { TransactionHistoryStatus } from '$lib/types';
-import type { InvestmentHolding } from '$lib/types';
+import { matchAutomaticCardRewardProfile } from '#lib/card-reward-profiles.ts';
+import type { FinancialConnection } from '#lib/types.ts';
+import type { TransactionHistoryStatus } from '#lib/types.ts';
+import type { InvestmentHolding } from '#lib/types.ts';
 import {
 	readConnectionTransactionState,
 	replaceConnectedCards,

@@ -1,6 +1,6 @@
 <script module lang="ts">
-	import type { EmergencySession, EmergencySnapshot } from '$lib/emergency';
-	import { getBonusChurnToday } from '$lib/bonus-churn';
+	import type { EmergencySession, EmergencySnapshot } from '#lib/emergency.ts';
+	import { getBonusChurnToday } from '#lib/bonus-churn.ts';
 
 	export function savedSessionChanged(previous: EmergencySession | null, next: EmergencySession) {
 		return next.authenticated && previous?.sessionRef !== next.sessionRef;
@@ -51,9 +51,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { asset, resolve } from '$app/paths';
-	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
-	import BalanceHistoryChart from '$lib/components/BalanceHistoryChart.svelte';
-	import '$lib/finance-pages.css';
+	import WorkspaceHeader from '#lib/components/WorkspaceHeader.svelte';
+	import BalanceHistoryChart from '#lib/components/BalanceHistoryChart.svelte';
+	import '#lib/finance-pages.css';
 
 	let session = $state<EmergencySession | null>(null);
 	let snapshot = $state<EmergencySnapshot | null>(null);
@@ -270,7 +270,7 @@
 						>Open live dashboard</a
 					>
 					<p>
-						<a href={resolve('/api/auth/google/start?intent=emergency')} data-sveltekit-reload
+						<a href={`${resolve('/api/auth/google/start')}?intent=emergency`} data-sveltekit-reload
 							>Choose a different Google account</a
 						>
 					</p>
@@ -280,11 +280,11 @@
 					<p>Requires a successful normal sign-in and saved copy before an outage.</p>
 					<a
 						class="google-login"
-						href={resolve('/api/auth/google/start?intent=emergency')}
+						href={`${resolve('/api/auth/google/start')}?intent=emergency`}
 						data-sveltekit-reload
 					>
 						<img
-							src={asset('/google-sign-in.svg')}
+							src={asset('google-sign-in.svg')}
 							alt="Sign in with Google"
 							width="180"
 							height="40"

@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
-import { apiError, apiJson, assertSameOrigin, parseId } from '$lib/server/http';
-import { createPlaidUpdateToken } from '$lib/server/plaid';
+import { apiError, apiJson, assertSameOrigin, parseId } from '#lib/server/http.ts';
+import { createPlaidUpdateToken } from '#lib/server/plaid.ts';
 
 export const POST: RequestHandler = async ({ params, request, url }) => {
 	try {

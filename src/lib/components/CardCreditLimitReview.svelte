@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { tick } from 'svelte';
-	import { formatBonusChurnDate, getBonusChurnToday } from '$lib/bonus-churn';
-	import { creditLimitReviewStatus } from '$lib/credit-limit-review';
-	import { currentTime } from '$lib/sync-time';
-	import type { CardCreditLimitReview } from '$lib/types';
+	import { formatBonusChurnDate, getBonusChurnToday } from '#lib/bonus-churn.ts';
+	import { creditLimitReviewStatus } from '#lib/credit-limit-review.ts';
+	import { currentTime } from '#lib/sync-time.ts';
+	import type { CardCreditLimitReview } from '#lib/types.ts';
 
 	let {
 		nickname,

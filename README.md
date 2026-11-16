@@ -78,7 +78,7 @@ Cloud encryption protects against a database-only disclosure. It is not zero-kno
 
 ## Requirements
 
-- Node.js 22 or newer
+- Node.js 22.17 or newer
 - npm
 - Git
 - Optional account sync: a Plaid account

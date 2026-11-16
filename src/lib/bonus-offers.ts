@@ -1,4 +1,4 @@
-import type { AccountBonus, FinancialAccount, FinancialAccountTransaction } from '$lib/types';
+import type { AccountBonus, FinancialAccount, FinancialAccountTransaction } from '#lib/types.ts';
 
 export type BonusTransactionRule =
 	| 'balance-only'

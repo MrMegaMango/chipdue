@@ -1,7 +1,7 @@
 import type { RequestHandler } from './$types';
-import { syncAllTenantFinancialConnections } from '$lib/server/financial-connections';
-import { apiError, apiJson } from '$lib/server/http';
-import { syncAllTenantMethodCreditScores } from '$lib/server/method-credit-score';
+import { syncAllTenantFinancialConnections } from '#lib/server/financial-connections.ts';
+import { apiError, apiJson } from '#lib/server/http.ts';
+import { syncAllTenantMethodCreditScores } from '#lib/server/method-credit-score.ts';
 import {
 	assertScheduledSyncRequest,
 	claimScheduledSync,
@@ -9,7 +9,7 @@ import {
 	failScheduledSync,
 	scheduledSyncWindow,
 	type ScheduledSyncWindow
-} from '$lib/server/scheduled-sync';
+} from '#lib/server/scheduled-sync.ts';
 
 export const GET: RequestHandler = async ({ request, params }) => {
 	let window: ScheduledSyncWindow | null = null;

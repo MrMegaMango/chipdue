@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AccountBonus, FinancialAccount, FinancialAccountTransaction } from '$lib/types';
+import type { AccountBonus, FinancialAccount, FinancialAccountTransaction } from '#lib/types.ts';
 import {
 	buildBonusOfferDraft,
 	buildBonusTracker,

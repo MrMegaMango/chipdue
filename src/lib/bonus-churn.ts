@@ -1,4 +1,4 @@
-import type { AccountBonus, BonusChurn, BonusChurnCondition } from '$lib/types';
+import type { AccountBonus, BonusChurn, BonusChurnCondition } from '#lib/types.ts';
 import { getBonusOfferTemplate } from './bonus-offers';
 
 export type BonusChurnStatus = 'unconfigured' | 'needs_info' | 'waiting' | 'ready' | 'restricted';

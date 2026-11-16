@@ -2,7 +2,7 @@ import {
 	DASHBOARD_ACTIVITY_LIMIT,
 	type DashboardResponse,
 	type DashboardResult
-} from '$lib/dashboard';
+} from '#lib/dashboard.ts';
 import { cardsFromRows, cardTransactionsFromRow } from './cards';
 import { asAppError } from './errors';
 import { financialConnectionsStatus } from './financial-connections';

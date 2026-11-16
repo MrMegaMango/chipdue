@@ -6,20 +6,20 @@
 		getBonusChurnToday,
 		formatBonusChurnDate,
 		bonusChurnStatusLabel
-	} from '$lib/bonus-churn';
+	} from '#lib/bonus-churn.ts';
 	import {
 		resolveAutomaticBonusChurn,
 		type BonusChurnAutomationResult
-	} from '$lib/bonus-churn-automatic';
-	import { clearPrivateApiCache } from '$lib/private-api-cache';
-	import { currentTime } from '$lib/sync-time';
+	} from '#lib/bonus-churn-automatic.ts';
+	import { clearPrivateApiCache } from '#lib/private-api-cache.ts';
+	import { currentTime } from '#lib/sync-time.ts';
 	import type {
 		AccountBonus,
 		BonusChurn,
 		BonusChurnCondition,
 		FinancialAccount,
 		Card
-	} from '$lib/types';
+	} from '#lib/types.ts';
 
 	let {
 		bonuses,

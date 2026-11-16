@@ -1,4 +1,4 @@
-import type { CardRewardCategoryMatch, CardRewardType } from '$lib/types';
+import type { CardRewardCategoryMatch, CardRewardType } from '#lib/types.ts';
 
 export type CardRewardCalculation = 'static' | 'venmo_spend_ranked';
 

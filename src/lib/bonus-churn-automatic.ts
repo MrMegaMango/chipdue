@@ -5,7 +5,7 @@ import type {
 	Card,
 	FinancialAccount,
 	FinancialAccountTransaction
-} from '$lib/types';
+} from '#lib/types.ts';
 import {
 	BONUS_CHURN_PRESETS,
 	buildBonusChurnTracker,

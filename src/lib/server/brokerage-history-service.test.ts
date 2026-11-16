@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BrokerageHistoryEstimateResponse } from '$lib/types';
+import type { BrokerageHistoryEstimateResponse } from '#lib/types.ts';
 import { rebuildBrokerageHistory } from './brokerage-history-service';
 import { resetCryptoStateForTests } from './crypto';
 import { closeDatabaseForTests } from './database';

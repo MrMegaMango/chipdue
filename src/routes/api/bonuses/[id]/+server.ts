@@ -1,5 +1,5 @@
 import type { RequestHandler } from './$types';
-import { deleteBonus, getBonus, updateBonus } from '$lib/server/financial-records';
+import { deleteBonus, getBonus, updateBonus } from '#lib/server/financial-records.ts';
 import {
 	apiError,
 	apiJson,
@@ -7,8 +7,8 @@ import {
 	noContent,
 	parseId,
 	readJson
-} from '$lib/server/http';
-import { updateBonusSchema } from '$lib/server/schemas';
+} from '#lib/server/http.ts';
+import { updateBonusSchema } from '#lib/server/schemas.ts';
 
 export const GET: RequestHandler = async ({ params }) => {
 	try {

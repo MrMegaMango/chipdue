@@ -1,12 +1,12 @@
 import type { RequestHandler } from './$types';
 import { z } from 'zod';
-import { apiJson, assertSameOrigin, readJson } from '$lib/server/http';
+import { apiJson, assertSameOrigin, readJson } from '#lib/server/http.ts';
 import {
 	beginGoogleOidcBootstrap,
 	clearGoogleTransactionCookie,
 	GOOGLE_BOOTSTRAP_CONTINUE_PATH
-} from '$lib/server/google-oidc';
-import { getRuntimeAuthMode } from '$lib/server/runtime';
+} from '#lib/server/google-oidc.ts';
+import { getRuntimeAuthMode } from '#lib/server/runtime.ts';
 
 const BOOTSTRAP_BODY_LIMIT = 256;
 const bootstrapSchema = z.object({ setupToken: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict();

@@ -4,7 +4,7 @@ import type {
 	BrokerageOrder,
 	BrokerageOrdersResponse,
 	FinancialAccount
-} from '$lib/types';
+} from '#lib/types.ts';
 import { privateUuid } from './crypto';
 import {
 	getEtradeAuthorization,

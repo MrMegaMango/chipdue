@@ -29,7 +29,7 @@
 <header class="workspace-header">
 	<a class="workspace-brand" href={resolve('/')} aria-label="ChipDue overview">
 		<span class="brand-mark" aria-hidden="true">
-			<img src={asset('/logo-mark.svg')} alt="" />
+			<img src={asset('logo-mark.svg')} alt="" />
 		</span>
 		<span class="brand-copy">
 			<strong>ChipDue</strong>

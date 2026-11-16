@@ -1,4 +1,3 @@
-import { json } from '@sveltejs/kit';
 import { z, type ZodType } from 'zod';
 import { AppError, asAppError } from './errors';
 import { expectedRequestOrigin } from './request-security';
@@ -14,7 +13,7 @@ export const privateResponseHeaders = {
 };
 
 export function apiJson(data: unknown, status = 200): Response {
-	return json(data, { status, headers: privateResponseHeaders });
+	return Response.json(data, { status, headers: privateResponseHeaders });
 }
 
 export function apiError(error: unknown): Response {

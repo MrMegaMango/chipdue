@@ -1,8 +1,8 @@
 import type { RequestHandler } from './$types';
-import { createFinancialAccount, listFinancialAccounts } from '$lib/server/financial-records';
-import { addPublishedAccountApys } from '$lib/server/published-apy';
-import { apiError, apiJson, assertSameOrigin, readJson } from '$lib/server/http';
-import { createFinancialAccountSchema } from '$lib/server/schemas';
+import { createFinancialAccount, listFinancialAccounts } from '#lib/server/financial-records.ts';
+import { addPublishedAccountApys } from '#lib/server/published-apy.ts';
+import { apiError, apiJson, assertSameOrigin, readJson } from '#lib/server/http.ts';
+import { createFinancialAccountSchema } from '#lib/server/schemas.ts';
 
 export const GET: RequestHandler = async () => {
 	try {

@@ -8,9 +8,9 @@ import {
 	type BuyTimingSchedule,
 	type BuyTimingWindow,
 	type TimingPurchase
-} from '$lib/buy-timing';
-import { isCashSweepSecurity } from '$lib/investment-display';
-import type { FinancialAccount, FinancialAccountTransaction } from '$lib/types';
+} from '#lib/buy-timing.ts';
+import { isCashSweepSecurity } from '#lib/investment-display.ts';
+import type { FinancialAccount, FinancialAccountTransaction } from '#lib/types.ts';
 import { adjustedMarketSeries, normalizeAdjustedMarketSymbol } from './adjusted-market-history';
 import { AppError } from './errors';
 import { getFinancialAccount, listFinancialAccountTransactions } from './financial-records';

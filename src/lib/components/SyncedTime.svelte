@@ -5,7 +5,7 @@
 		exactTimestampLabel,
 		relativeTimestampLabel,
 		type TimestampAction
-	} from '$lib/sync-time';
+	} from '#lib/sync-time.ts';
 
 	type Props = {
 		value: string | null | undefined;

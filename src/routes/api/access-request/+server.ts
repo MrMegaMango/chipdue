@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
-import { adminAccessRequestLocation } from '$lib/server/access-request';
-import { apiError, privateResponseHeaders } from '$lib/server/http';
+import { adminAccessRequestLocation } from '#lib/server/access-request.ts';
+import { apiError, privateResponseHeaders } from '#lib/server/http.ts';
 
 export const GET: RequestHandler = () => {
 	try {

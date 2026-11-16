@@ -1,7 +1,7 @@
 import type { RequestHandler } from './$types';
 import { z } from 'zod';
-import { configureEtrade, etradeStatus, forgetEtradeConfiguration } from '$lib/server/etrade';
-import { apiError, apiJson, assertSameOrigin, readJson } from '$lib/server/http';
+import { configureEtrade, etradeStatus, forgetEtradeConfiguration } from '#lib/server/etrade.ts';
+import { apiError, apiJson, assertSameOrigin, readJson } from '#lib/server/http.ts';
 
 const etradeConfigurationSchema = z
 	.object({

@@ -1,11 +1,11 @@
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
-import { apiError, apiJson, assertSameOrigin, readJson } from '$lib/server/http';
+import { apiError, apiJson, assertSameOrigin, readJson } from '#lib/server/http.ts';
 import {
 	resumeMethodCreditScoreOnboarding,
 	startMethodCreditScoreOnboarding
-} from '$lib/server/method-credit-score';
-import { startMethodCreditScoreSchema } from '$lib/server/method-credit-score-schemas';
+} from '#lib/server/method-credit-score.ts';
+import { startMethodCreditScoreSchema } from '#lib/server/method-credit-score-schemas.ts';
 
 const requestSchema = z.discriminatedUnion('action', [
 	startMethodCreditScoreSchema.extend({ action: z.literal('start') }),

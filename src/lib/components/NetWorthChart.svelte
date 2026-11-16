@@ -8,7 +8,7 @@
 		type NetWorthAccountBreakdown,
 		type NetWorthHistoryPoint,
 		type NetWorthHistoryRange
-	} from '$lib/net-worth';
+	} from '#lib/net-worth.ts';
 
 	type ChartPoint = NetWorthHistoryPoint & {
 		x: number;

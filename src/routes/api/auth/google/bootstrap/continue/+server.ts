@@ -1,6 +1,9 @@
 import type { RequestHandler } from './$types';
-import { privateResponseHeaders } from '$lib/server/http';
-import { clearGoogleTransactionCookie, continueGoogleOidcBootstrap } from '$lib/server/google-oidc';
+import { privateResponseHeaders } from '#lib/server/http.ts';
+import {
+	clearGoogleTransactionCookie,
+	continueGoogleOidcBootstrap
+} from '#lib/server/google-oidc.ts';
 
 export const GET: RequestHandler = async ({ cookies, request, url }) => {
 	try {

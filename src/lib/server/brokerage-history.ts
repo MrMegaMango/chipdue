@@ -1,4 +1,4 @@
-import type { AccountBalanceHistoryPoint, FinancialAccount } from '$lib/types';
+import type { AccountBalanceHistoryPoint, FinancialAccount } from '#lib/types.ts';
 import type { HistoricalCloseSeries } from './market-history';
 
 const CASH_SECURITY = /cash|money.?market/i;

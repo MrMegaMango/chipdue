@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { accountBuyTiming } from '$lib/server/buy-timing-service';
-import { AppError } from '$lib/server/errors';
+import { accountBuyTiming } from '#lib/server/buy-timing-service.ts';
+import { AppError } from '#lib/server/errors.ts';
 import { GET } from './+server';
 
-vi.mock('$lib/server/buy-timing-service', () => ({ accountBuyTiming: vi.fn() }));
+vi.mock('#lib/server/buy-timing-service.ts', () => ({ accountBuyTiming: vi.fn() }));
 const ACCOUNT_ID = '10000000-0000-4000-8000-000000000001';
 
 beforeEach(() => vi.resetAllMocks());

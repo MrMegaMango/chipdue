@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { creditBureauLabel } from '$lib/credit-scores';
-	import type { CreditBureau, CreditScoreEntry } from '$lib/credit-score-types';
+	import { creditBureauLabel } from '#lib/credit-scores.ts';
+	import type { CreditBureau, CreditScoreEntry } from '#lib/credit-score-types.ts';
 
 	let { entries }: { entries: CreditScoreEntry[] } = $props();
 

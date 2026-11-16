@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { setThemePreference, theme, type ThemePreference } from '$lib/theme.svelte';
+	import { setThemePreference, theme, type ThemePreference } from '#lib/theme.svelte.ts';
 </script>
 
 <label class="theme-picker" title="Color theme">
