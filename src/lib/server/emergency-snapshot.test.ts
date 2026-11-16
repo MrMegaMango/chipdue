@@ -256,6 +256,69 @@ describe.sequential('independent financial snapshots', () => {
 		);
 	});
 
+	it('skips bookkeeping-only changes while saving changed investment history and removals', async () => {
+		const history = [
+			{
+				recordedAt: '2026-10-23T20:00:00.000Z',
+				balanceCents: 145000,
+				netContributionsCents: 140000,
+				source: 'estimated'
+			}
+		];
+		const original = [
+			row(CARD_ID, cardPayload()),
+			row(
+				ACCOUNT_ID,
+				accountPayload({
+					accountType: 'brokerage',
+					balanceHistory: history,
+					estimatedHistoryUpdatedAt: SYNCED_AT
+				}),
+				'plaid'
+			),
+			row(BONUS_ID, bonusPayload())
+		];
+		await publish(original);
+		const firstSnapshot = await readEmergencySnapshot(FIRST_TENANT);
+		const updatedAt = new Date(NOW + 1000).toISOString();
+		const rebuiltAccount = row(
+			ACCOUNT_ID,
+			accountPayload({
+				accountType: 'brokerage',
+				balanceHistory: history,
+				estimatedHistoryUpdatedAt: updatedAt
+			}),
+			'plaid'
+		);
+		const unchanged = [original[0], rebuiltAccount, original[2]].map((record) => ({
+			...record,
+			updated_at: updatedAt
+		}));
+		await publish(unchanged, NOW + 2000);
+		expect(store.write).toHaveBeenCalledTimes(1);
+		expect(await readEmergencySnapshot(FIRST_TENANT)).toEqual(firstSnapshot);
+
+		const changedHistory = [{ ...history[0], balanceCents: 146000 }];
+		const changed = row(
+			ACCOUNT_ID,
+			accountPayload({
+				accountType: 'brokerage',
+				balanceHistory: changedHistory,
+				estimatedHistoryUpdatedAt: updatedAt
+			}),
+			'plaid'
+		);
+		await publish([unchanged[0], changed, unchanged[2]], NOW + 3000);
+		expect(store.write).toHaveBeenCalledTimes(2);
+		expect((await readEmergencySnapshot(FIRST_TENANT))?.accounts[0].balanceHistory).toEqual(
+			changedHistory
+		);
+
+		await publish([unchanged[0], unchanged[2]], NOW + 4000);
+		expect(store.write).toHaveBeenCalledTimes(3);
+		expect((await readEmergencySnapshot(FIRST_TENANT))?.accounts).toEqual([]);
+	});
+
 	it('preserves the last complete snapshot if any encrypted row cannot be decoded', async () => {
 		const original = row(CARD_ID, cardPayload());
 		await publish([original]);
@@ -351,6 +414,25 @@ describe.sequential('independent financial snapshots', () => {
 		await expect(readEmergencySnapshot(FIRST_TENANT)).rejects.toMatchObject({
 			code: 'EMERGENCY_SNAPSHOT_INVALID'
 		});
+	});
+
+	it('still checks bookkeeping timestamps in stored snapshot integrity', async () => {
+		const original = row(CARD_ID, cardPayload());
+		await publish([original]);
+		const key = `snapshots/${tenantReference(FIRST_TENANT)}`;
+		const altered = structuredClone(store.objects.get(key)!) as {
+			value: { snapshot: { cards: Array<{ updatedAt: string }> } };
+			etag: string;
+		};
+		altered.value.snapshot.cards[0].updatedAt = new Date(NOW + 1000).toISOString();
+		store.objects.set(key, altered);
+		await expect(readEmergencySnapshot(FIRST_TENANT)).rejects.toMatchObject({
+			code: 'EMERGENCY_SNAPSHOT_INVALID'
+		});
+		await expect(publish([original], NOW + 2000)).rejects.toMatchObject({
+			code: 'EMERGENCY_SNAPSHOT_INVALID'
+		});
+		expect(store.write).toHaveBeenCalledTimes(1);
 	});
 
 	it('does not use storage when the independent backup is not configured', async () => {

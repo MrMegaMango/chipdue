@@ -178,6 +178,89 @@ describe.sequential('background emergency refresh', () => {
 		expect(retained).toHaveLength(1);
 	});
 
+	it('combines overlapping captures for one tenant into the newest snapshot', async () => {
+		const captures = Array.from({ length: 20 }, (_, index) => ({
+			rows: [{ ...rows(FIRST_TENANT)[0], updated_at: new Date(START + index).toISOString() }],
+			capturedAt: START + index
+		}));
+		await runAsTenant(FIRST_TENANT, () =>
+			Promise.all(
+				captures.map((capture) => refreshEmergencySnapshot(capture.rows, capture.capturedAt))
+			)
+		);
+		await Promise.all(retained);
+		expect(dependencies.read).not.toHaveBeenCalled();
+		expect(dependencies.publish).toHaveBeenCalledExactlyOnceWith(
+			captures.at(-1)!.rows,
+			captures.at(-1)!.capturedAt
+		);
+		expect(new Set(retained).size).toBe(1);
+	});
+
+	it('reads the final mutation after an in-flight save instead of reusing queued dashboard rows', async () => {
+		const firstSave = deferred<void>();
+		const original = rows(FIRST_TENANT);
+		dependencies.publish.mockReturnValueOnce(firstSave.promise);
+		await runAsTenant(FIRST_TENANT, () => refreshEmergencySnapshot(original, START));
+		await nextTurn();
+		try {
+			vi.setSystemTime(START + 5000);
+			await runAsTenant(FIRST_TENANT, async () => {
+				await refreshEmergencySnapshot();
+				await refreshEmergencySnapshot(original, START + 1000);
+			});
+			// The record was deleted while the first save was in flight.
+			dependencies.read.mockResolvedValue([]);
+			vi.setSystemTime(START + 6000);
+			firstSave.resolve();
+			await Promise.all(retained);
+			expect(dependencies.read).toHaveBeenCalledOnce();
+			expect(dependencies.publish).toHaveBeenCalledTimes(2);
+			expect(dependencies.publish).toHaveBeenLastCalledWith([], START + 6000);
+		} finally {
+			firstSave.resolve();
+			await Promise.all(retained);
+		}
+	});
+
+	it('continues with pending changes after a failed save and allows later refreshes', async () => {
+		const firstSave = deferred<void>();
+		const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+		dependencies.publish.mockReturnValueOnce(firstSave.promise);
+		await runAsTenant(FIRST_TENANT, () => refreshEmergencySnapshot(rows(FIRST_TENANT), START));
+		await nextTurn();
+		await runAsTenant(FIRST_TENANT, () => refreshEmergencySnapshot([], START + 1000));
+		firstSave.reject(new Error('synthetic-private-backup-error'));
+		await Promise.all(retained);
+		expect(dependencies.publish).toHaveBeenCalledTimes(2);
+		expect(dependencies.publish).toHaveBeenLastCalledWith([], START + 1000);
+		expect(logged).toHaveBeenCalledExactlyOnceWith(
+			'The emergency financial copy could not be refreshed.'
+		);
+		await runAsTenant(FIRST_TENANT, () => refreshEmergencySnapshot([], START + 2000));
+		await Promise.all(retained);
+		expect(dependencies.publish).toHaveBeenCalledTimes(3);
+		expect(dependencies.publish).toHaveBeenLastCalledWith([], START + 2000);
+	});
+
+	it('saves a refresh arriving as the previous worker finishes', async () => {
+		let finalRefresh: Promise<void> | undefined;
+		dependencies.publish.mockImplementationOnce(async () => {
+			queueMicrotask(() => {
+				queueMicrotask(() => {
+					finalRefresh = refreshEmergencySnapshot([], START + 1000);
+				});
+			});
+		});
+		await runAsTenant(FIRST_TENANT, () => refreshEmergencySnapshot(rows(FIRST_TENANT), START));
+		await nextTurn();
+		expect(finalRefresh).toBeDefined();
+		await finalRefresh;
+		await Promise.all(retained);
+		expect(dependencies.publish).toHaveBeenCalledTimes(2);
+		expect(dependencies.publish).toHaveBeenLastCalledWith([], START + 1000);
+	});
+
 	it('contains a background failure after the successful response without exposing error details', async () => {
 		const finishSave = deferred<void>();
 		dependencies.publish.mockReturnValue(finishSave.promise);
@@ -187,6 +270,18 @@ describe.sequential('background emergency refresh', () => {
 		expect(retained).toHaveLength(1);
 		finishSave.reject(new Error('synthetic-private-backup-error'));
 		await expect(retained[0]).resolves.toBeUndefined();
+		expect(logged).toHaveBeenCalledExactlyOnceWith(
+			'The emergency financial copy could not be refreshed.'
+		);
+	});
+
+	it('contains a missing tenant scope without reading or saving another tenant', async () => {
+		vi.stubEnv('NODE_ENV', 'production');
+		const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+		await expect(refreshEmergencySnapshot()).resolves.toBeUndefined();
+		expect(dependencies.read).not.toHaveBeenCalled();
+		expect(dependencies.publish).not.toHaveBeenCalled();
+		expect(retained).toHaveLength(0);
 		expect(logged).toHaveBeenCalledExactlyOnceWith(
 			'The emergency financial copy could not be refreshed.'
 		);

@@ -149,6 +149,22 @@ function contentHash(snapshot: EmergencySnapshot): string {
 		.digest('hex');
 }
 
+function comparableSnapshotContent(snapshot: EmergencySnapshot): string {
+	// These bookkeeping timestamps are not used by the saved-finances view.
+	// Keep them in the stored integrity hash, but do not upload for them alone.
+	return JSON.stringify({
+		...snapshot,
+		capturedAt: undefined,
+		cards: snapshot.cards.map((card) => ({ ...card, updatedAt: undefined })),
+		accounts: snapshot.accounts.map((account) => ({
+			...account,
+			updatedAt: undefined,
+			estimatedHistoryUpdatedAt: undefined
+		})),
+		bonuses: snapshot.bonuses.map((bonus) => ({ ...bonus, updatedAt: undefined }))
+	});
+}
+
 function validateStoredSnapshot(value: unknown, tenantId: string): StoredSnapshot {
 	if (!value || typeof value !== 'object') throw invalidSnapshot();
 	const stored = value as Partial<StoredSnapshot>;
@@ -252,7 +268,8 @@ export async function publishEmergencySnapshot(
 			const previous = validateStoredSnapshot(current.value, tenantId);
 			if (
 				capturedAt <= Date.parse(previous.snapshot.capturedAt) ||
-				previous.contentHash === value.contentHash
+				previous.contentHash === value.contentHash ||
+				comparableSnapshotContent(previous.snapshot) === comparableSnapshotContent(snapshot)
 			)
 				return;
 		}
