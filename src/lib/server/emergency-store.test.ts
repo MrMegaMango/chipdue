@@ -151,6 +151,24 @@ describe.sequential('encrypted independent object storage', () => {
 		expect(await readEmergencyObject(FIRST_KEY)).toEqual({ value: { balance: 3 }, etag: nextEtag });
 	});
 
+	it('preserves the storage ETag when reading a compressible snapshot for a conditional update', async () => {
+		const originalEtag = await writeEmergencyObject(FIRST_KEY, { balance: 1 });
+		blob.get.mockImplementationOnce(
+			async (path: string, options: { headers?: Record<string, string> }) => {
+				const saved = blob.objects.get(path)!;
+				// Blob's compressed HTTP response uses a weak ETag that PUT rejects.
+				const etag =
+					options.headers?.['accept-encoding'] === 'identity' ? saved.etag : `W/${saved.etag}`;
+				return response(saved.body, etag);
+			}
+		);
+		const saved = await readEmergencyObject(FIRST_KEY);
+		expect(saved?.etag).toBe(originalEtag);
+		const nextEtag = await writeEmergencyObject(FIRST_KEY, { balance: 2 }, saved!.etag);
+		expect(blob.put).toHaveBeenCalledTimes(2);
+		expect(await readEmergencyObject(FIRST_KEY)).toEqual({ value: { balance: 2 }, etag: nextEtag });
+	});
+
 	it('returns null for a missing object and supports deleting the same private key', async () => {
 		expect(await readEmergencyObject(FIRST_KEY)).toBeNull();
 		await writeEmergencyObject(FIRST_KEY, { value: 1 });

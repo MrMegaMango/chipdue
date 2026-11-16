@@ -47,6 +47,9 @@ export async function readEmergencyObject<T>(
 		const result = await get(path, {
 			access: 'private',
 			useCache: false,
+			// Compression replaces the storage ETag with a weak representation tag,
+			// which cannot satisfy the conditional write used by every update.
+			headers: { 'accept-encoding': 'identity' },
 			abortSignal: AbortSignal.timeout(TIMEOUT_MS)
 		});
 		if (!result) return null;
