@@ -453,6 +453,9 @@
 			return asset('brands/american-express.svg');
 		}
 		if (/\bone\s?pay\b/i.test(institution)) return asset('brands/onepay.svg');
+		if (/\bcapital\s+one\b/i.test(institution)) return asset('brands/capital-one.svg');
+		if (/\bpnc\b/i.test(institution)) return asset('brands/pnc.svg');
+		if (/\bpay\s?pal\b/i.test(institution)) return asset('brands/paypal.svg');
 		if (/\bvenmo\b/i.test(institution)) return asset('brands/venmo.svg');
 		if (/\bvio\s+bank\b/i.test(institution)) return asset('brands/vio-bank.svg');
 		if (/\bwells\s+fargo\b/i.test(institution)) return asset('brands/wells-fargo.svg');
