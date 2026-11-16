@@ -14,7 +14,10 @@ const netWorthChartSource = readFileSync(
 	new URL('../lib/components/NetWorthChart.svelte', import.meta.url),
 	'utf8'
 );
-const bonusesSource = readFileSync(new URL('./bonuses/+page.svelte', import.meta.url), 'utf8');
+const bonusesSource = readFileSync(
+	new URL('../lib/components/BonusWorkspace.svelte', import.meta.url),
+	'utf8'
+);
 const dashboardSource = readFileSync(new URL('./+page.svelte', import.meta.url), 'utf8');
 const etradeSource = readFileSync(new URL('./etrade/+page.svelte', import.meta.url), 'utf8');
 const headerSource = readFileSync(
@@ -297,9 +300,7 @@ describe('financial workspace navigation', () => {
 		expect(dashboardSource).toContain("if (currentSection === 'settings')");
 		expect(dashboardSource).toContain("if (currentSection === 'cards')");
 		expect(dashboardSource).toContain("resolve('/api/dashboard')}?includeActivity=1");
-		expect(bonusesSource).toContain(
-			'void loadLinkedAccountActivity(bonusResponse.bonuses, accountResponse.accounts);'
-		);
+		expect(bonusesSource).toContain('bonusResponse.bonuses.filter((bonus) => !bonus.trackingOnly)');
 		expect(bonusesSource).toContain('Loading posted activity…');
 	});
 

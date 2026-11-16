@@ -2,7 +2,8 @@
 	import { asset, resolve } from '$app/paths';
 	import ThemePicker from './ThemePicker.svelte';
 
-	type WorkspaceSection = 'overview' | 'cards' | 'accounts' | 'bonuses' | 'settings' | 'emergency';
+	type WorkspaceSection =
+		'overview' | 'cards' | 'accounts' | 'bonuses' | 'churns' | 'settings' | 'emergency';
 	type Props = {
 		current: WorkspaceSection;
 		mode: 'local' | 'cloud' | null;
@@ -15,12 +16,13 @@
 	const links: {
 		id: WorkspaceSection;
 		label: string;
-		href: '/' | '/cards' | '/accounts' | '/bonuses';
+		href: '/' | '/cards' | '/accounts' | '/bonuses' | '/churns';
 	}[] = [
 		{ id: 'overview', label: 'Overview', href: '/' },
 		{ id: 'cards', label: 'Cards', href: '/cards' },
 		{ id: 'accounts', label: 'Accounts', href: '/accounts' },
-		{ id: 'bonuses', label: 'Bonuses', href: '/bonuses' }
+		{ id: 'bonuses', label: 'Bonuses', href: '/bonuses' },
+		{ id: 'churns', label: 'Churns', href: '/churns' }
 	];
 </script>
 

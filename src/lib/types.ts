@@ -275,6 +275,8 @@ export interface AccountBonus {
 	spendTargetCents: number | null;
 	currency: string;
 	status: BonusStatus;
+	/** Historical record used only to plan repeat eligibility, not an ongoing bonus. */
+	trackingOnly?: boolean;
 	openedDate: string | null;
 	requirementDeadline: string | null;
 	expectedPayoutDate: string | null;

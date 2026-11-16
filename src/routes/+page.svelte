@@ -664,10 +664,12 @@
 			workspaceBonuses.length === 0
 	);
 	const activeWorkspaceBonuses = $derived(
-		workspaceBonuses.filter((bonus) =>
-			['planned', 'active', 'qualified', 'pending'].includes(
-				resolveBonusPayment(bonus, workspaceBonusTracking[bonus.id]).status
-			)
+		workspaceBonuses.filter(
+			(bonus) =>
+				!bonus.trackingOnly &&
+				['planned', 'active', 'qualified', 'pending'].includes(
+					resolveBonusPayment(bonus, workspaceBonusTracking[bonus.id]).status
+				)
 		)
 	);
 	const activeBonusValueCents = $derived(
@@ -1454,7 +1456,10 @@
 
 	function bonusesForCard(cardId: string): WorkspaceBonus[] {
 		return workspaceBonuses.filter(
-			(bonus) => bonus.cardId === cardId && !['closed', 'abandoned'].includes(bonus.status)
+			(bonus) =>
+				!bonus.trackingOnly &&
+				bonus.cardId === cardId &&
+				!['closed', 'abandoned'].includes(bonus.status)
 		);
 	}
 

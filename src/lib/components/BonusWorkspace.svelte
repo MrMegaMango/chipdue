@@ -1,0 +1,2086 @@
+<script module lang="ts">
+	import type { AccountBonus, FinancialAccount } from '$lib/types';
+
+	type AcceptedOfferContext = Pick<
+		AccountBonus,
+		'offerTemplateId' | 'accountId' | 'openedDate' | 'offerDateOverrideConfirmed'
+	>;
+
+	export function preservesDisconnectedOffer(
+		saved: AcceptedOfferContext | null | undefined,
+		selection: AcceptedOfferContext,
+		account: Pick<FinancialAccount, 'id'> | null
+	): boolean {
+		return Boolean(
+			saved?.offerTemplateId &&
+			saved.accountId &&
+			saved.openedDate &&
+			!account &&
+			saved.offerTemplateId === selection.offerTemplateId &&
+			saved.accountId === selection.accountId &&
+			saved.openedDate === selection.openedDate &&
+			saved.offerDateOverrideConfirmed === selection.offerDateOverrideConfirmed
+		);
+	}
+</script>
+
+<script lang="ts">
+	import { resolve } from '$app/paths';
+	import { onMount } from 'svelte';
+	import { resolveBonusPayment, type BonusChurnAutomationResult } from '$lib/bonus-churn-automatic';
+	import {
+		buildBonusOfferDraft,
+		buildBonusTracker,
+		getBonusOfferTemplate,
+		getCompatibleBonusOffers,
+		isOfferDateEligible,
+		resolveBonusOffer,
+		type BonusTracker
+	} from '$lib/bonus-offers';
+	import SyncedTime from '$lib/components/SyncedTime.svelte';
+	import BonusChurnPanel from '$lib/components/BonusChurnPanel.svelte';
+	import CardDowngradeTiming from '$lib/components/CardDowngradeTiming.svelte';
+	import WorkspaceHeader from '$lib/components/WorkspaceHeader.svelte';
+	import {
+		clearPrivateApiCache,
+		PrivateApiError,
+		rememberPrivateDataRevision,
+		reusePrivateApiGet,
+		revalidatePrivateApiGet
+	} from '$lib/private-api-cache';
+	import type {
+		BonusStatus,
+		Card,
+		FinancialAccountTransaction,
+		TransactionHistoryStatus
+	} from '$lib/types';
+	import '$lib/finance-pages.css';
+
+	let { view = 'bonuses' }: { view?: 'bonuses' | 'churns' } = $props();
+
+	type RuntimeMode = 'local' | 'cloud';
+	type SessionResponse = { mode: RuntimeMode; authenticated: boolean; dataRevision: string | null };
+	type AccountActivity = {
+		transactions: FinancialAccountTransaction[];
+		status: TransactionHistoryStatus;
+		lastSyncedAt: string | null;
+	};
+	type TransactionRefreshResponse = {
+		availability: 'refreshed' | 'unsupported';
+		syncedAt: string;
+		accountCount: number;
+		transactionCount: number;
+	};
+	type BonusForm = {
+		offerTemplateId: string;
+		offerDateOverrideConfirmed: boolean;
+		name: string;
+		institution: string;
+		accountId: string;
+		cardId: string;
+		reward: number | undefined;
+		spendTarget: number | undefined;
+		status: BonusStatus;
+		trackingOnly: boolean;
+		openedDate: string;
+		requirementDeadline: string;
+		expectedPayoutDate: string;
+		paidDate: string;
+		safeToCloseDate: string;
+		feeFreeDowngradeDate: string;
+		feeFreeDowngradeDateSource: 'issuer_confirmed' | 'estimated';
+		requirementsText: string;
+		notes: string;
+	};
+
+	const money = new Intl.NumberFormat('en-US', {
+		style: 'currency',
+		currency: 'USD',
+		maximumFractionDigits: 2
+	});
+	const fullDate = new Intl.DateTimeFormat('en-US', {
+		month: 'short',
+		day: 'numeric',
+		year: 'numeric'
+	});
+	const activeStatuses = new Set<BonusStatus>(['planned', 'active', 'qualified', 'pending']);
+
+	let mode = $state<RuntimeMode | null>(null);
+	let bonuses = $state<AccountBonus[]>([]);
+	let accounts = $state<FinancialAccount[]>([]);
+	let cards = $state<Card[]>([]);
+	let loading = $state(true);
+	let pageError = $state('');
+	let dialogOpen = $state(false);
+	let editingId = $state<string | null>(null);
+	let form = $state<BonusForm>(blankForm());
+	let formError = $state('');
+	let busy = $state(false);
+	let deletingId = $state<string | null>(null);
+	let requirementBusy = $state<string | null>(null);
+	let activityByAccount = $state<Record<string, AccountActivity>>({});
+	let activityLoadingByAccount = $state<Record<string, boolean>>({});
+	let activityErrors = $state<Record<string, string>>({});
+	let syncingAccountId = $state<string | null>(null);
+	let automaticTracking = $state<Record<string, BonusChurnAutomationResult>>({});
+	let automaticTrackingLoading = $state(false);
+	let automaticTrackingError = $state('');
+	let trackingGeneration = 0;
+	let sessionCheckInFlight = false;
+	let mounted = false;
+	let loggingOut = $state(false);
+	let toast = $state('');
+	let toastTimer: ReturnType<typeof setTimeout> | undefined;
+	let queryPrefillHandled = false;
+
+	const pipelineBonuses = $derived(bonuses.filter((bonus) => !bonus.trackingOnly));
+	const activeBonuses = $derived(
+		pipelineBonuses.filter((bonus) => activeStatuses.has(paymentFor(bonus).status))
+	);
+	const completedBonuses = $derived(
+		bonuses
+			.filter((bonus) => paymentFor(bonus).paid)
+			.toSorted((left, right) =>
+				(paymentFor(right).paidDate ?? '').localeCompare(paymentFor(left).paidDate ?? '')
+			)
+	);
+	const archivedBonuses = $derived(
+		pipelineBonuses.filter((bonus) => {
+			const payment = paymentFor(bonus);
+			return !payment.paid && !activeStatuses.has(payment.status);
+		})
+	);
+	const pendingValueCents = $derived(
+		activeBonuses.reduce((total, bonus) => total + (bonus.rewardCents ?? 0), 0)
+	);
+	const earnedValueCents = $derived(
+		bonuses.reduce((total, bonus) => {
+			const payment = paymentFor(bonus);
+			return total + (payment.paid ? (payment.amountCents ?? 0) : 0);
+		}, 0)
+	);
+	const upcomingBonuses = $derived(
+		activeBonuses
+			.filter((bonus) => bonus.requirementDeadline)
+			.toSorted((left, right) =>
+				(left.requirementDeadline ?? '').localeCompare(right.requirementDeadline ?? '')
+			)
+	);
+	const dueSoonCount = $derived(
+		upcomingBonuses.filter((bonus) => daysUntil(bonus.requirementDeadline) <= 30).length
+	);
+	const nextBonus = $derived(upcomingBonuses[0] ?? null);
+	const formAccount = $derived(accounts.find((account) => account.id === form.accountId) ?? null);
+	const institutionOffers = $derived(getCompatibleBonusOffers(formAccount, null));
+	const compatibleOffers = $derived(
+		getCompatibleBonusOffers(formAccount, form.openedDate || formAccount?.openedDate || null)
+	);
+	const selectedOffer = $derived(getBonusOfferTemplate(form.offerTemplateId || null));
+	const selectableOffers = $derived(
+		selectedOffer && !institutionOffers.some((offer) => offer.id === selectedOffer.id)
+			? [selectedOffer, ...institutionOffers]
+			: institutionOffers
+	);
+	const selectedOfferDateWarning = $derived(
+		selectedOffer && form.openedDate && !isOfferDateEligible(selectedOffer, form.openedDate)
+			? `This version was available ${selectedOffer.validFrom ? `from ${formatDate(selectedOffer.validFrom)} ` : ''}through ${formatDate(selectedOffer.validThrough)}.`
+			: ''
+	);
+
+	onMount(() => {
+		mounted = true;
+		void initialize();
+		window.addEventListener('focus', checkSavedData);
+		document.addEventListener('visibilitychange', checkSavedData);
+		return () => {
+			mounted = false;
+			trackingGeneration += 1;
+			window.removeEventListener('focus', checkSavedData);
+			document.removeEventListener('visibilitychange', checkSavedData);
+			if (toastTimer) clearTimeout(toastTimer);
+		};
+	});
+
+	async function checkSavedData(): Promise<void> {
+		if (!mounted || document.hidden || loading || sessionCheckInFlight) return;
+		sessionCheckInFlight = true;
+		try {
+			const session = await requestJson<SessionResponse>(resolve('/api/auth/session'));
+			if (!mounted) return;
+			if (!session.authenticated) {
+				clearPrivateApiCache();
+				window.location.assign(resolve('/'));
+			} else if (rememberPrivateDataRevision(session.dataRevision)) {
+				await initialize();
+			}
+		} catch {
+			// Keep the current view on a transient session-check failure.
+		} finally {
+			sessionCheckInFlight = false;
+		}
+	}
+
+	function blankForm(): BonusForm {
+		return {
+			offerTemplateId: '',
+			offerDateOverrideConfirmed: false,
+			name: '',
+			institution: '',
+			accountId: '',
+			cardId: '',
+			reward: undefined,
+			spendTarget: undefined,
+			status: 'active',
+			trackingOnly: false,
+			openedDate: '',
+			requirementDeadline: '',
+			expectedPayoutDate: '',
+			paidDate: '',
+			safeToCloseDate: '',
+			feeFreeDowngradeDate: '',
+			feeFreeDowngradeDateSource: 'estimated',
+			requirementsText: '',
+			notes: ''
+		};
+	}
+
+	async function initialize(): Promise<void> {
+		loading = true;
+		pageError = '';
+		try {
+			const session = await requestJson<SessionResponse>(resolve('/api/auth/session'));
+			if (!mounted) return;
+			mode = session.mode;
+			if (!session.authenticated) {
+				clearPrivateApiCache();
+				window.location.assign(resolve('/'));
+				return;
+			}
+			rememberPrivateDataRevision(session.dataRevision);
+			const [bonusResponse, accountResponse, cardResponse] = await Promise.all([
+				requestJson<{ bonuses: AccountBonus[] }>(resolve('/api/bonuses')),
+				requestJson<{ accounts: FinancialAccount[] }>(resolve('/api/accounts')),
+				requestJson<{ cards: Card[] }>(resolve('/api/cards'))
+			]);
+			bonuses = bonusResponse.bonuses;
+			accounts = accountResponse.accounts;
+			cards = cardResponse.cards;
+			void loadAutomaticTracking();
+			if (view === 'bonuses') {
+				void loadLinkedAccountActivity(
+					bonusResponse.bonuses.filter((bonus) => !bonus.trackingOnly),
+					accountResponse.accounts
+				);
+			}
+			if (!queryPrefillHandled) {
+				queryPrefillHandled = true;
+				const accountId = new URL(window.location.href).searchParams.get('accountId');
+				if (
+					view === 'bonuses' &&
+					accountId &&
+					accountResponse.accounts.some((account) => account.id === accountId)
+				) {
+					openAddForAccount(accountId);
+				}
+			}
+		} catch (error) {
+			pageError = readableError(error, 'Your bonuses could not be loaded.');
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function requestJson<T>(
+		url: string,
+		init?: RequestInit,
+		options: { memoryCache?: 'revalidate' } = {}
+	): Promise<T> {
+		const method = (init?.method ?? 'GET').toUpperCase();
+		const loadResponse = async (etag: string | null = null): Promise<Response> => {
+			const headers = new Headers(init?.headers);
+			if (init?.body && !headers.has('content-type'))
+				headers.set('content-type', 'application/json');
+			if (etag) headers.set('if-none-match', etag);
+			const response = await fetch(url, {
+				...init,
+				headers,
+				cache: 'no-store'
+			});
+			if (!response.ok && response.status !== 304) {
+				const payload = (await response.json().catch(() => null)) as {
+					error?: { message?: string };
+				} | null;
+				throw new PrivateApiError(
+					response.status,
+					payload?.error?.message || 'The request could not be completed.'
+				);
+			}
+			return response;
+		};
+		const load = async (): Promise<T> => {
+			const response = await loadResponse();
+			return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
+		};
+		try {
+			const payload =
+				method === 'GET' && options.memoryCache === 'revalidate'
+					? await revalidatePrivateApiGet<T>(url, loadResponse)
+					: method === 'GET' && init?.cache !== 'no-store'
+						? await reusePrivateApiGet(url, load)
+						: await load();
+			if (method !== 'GET') clearPrivateApiCache();
+			return payload;
+		} catch (error) {
+			if (
+				error instanceof PrivateApiError &&
+				error.status === 401 &&
+				(mounted || options.memoryCache !== 'revalidate')
+			) {
+				clearPrivateApiCache();
+				window.location.assign(resolve('/'));
+			}
+			throw error;
+		}
+	}
+
+	async function loadAutomaticTracking(): Promise<void> {
+		if (!mounted) return;
+		const generation = ++trackingGeneration;
+		automaticTrackingLoading = true;
+		try {
+			const response = await requestJson<{ tracking: Record<string, BonusChurnAutomationResult> }>(
+				resolve('/api/bonuses/tracking'),
+				{},
+				{ memoryCache: 'revalidate' }
+			);
+			if (generation !== trackingGeneration) return;
+			automaticTracking = response.tracking;
+			automaticTrackingError = '';
+		} catch (error) {
+			if (
+				generation !== trackingGeneration ||
+				(error instanceof DOMException && error.name === 'AbortError')
+			)
+				return;
+			automaticTrackingError =
+				'Activity could not be checked. Showing the last available result; tracking will retry automatically.';
+		} finally {
+			if (generation === trackingGeneration) automaticTrackingLoading = false;
+		}
+	}
+
+	function readableError(error: unknown, fallback: string): string {
+		return error instanceof Error && error.message ? error.message : fallback;
+	}
+
+	function cents(value: number | undefined): number | null {
+		return value === undefined || !Number.isFinite(value) ? null : Math.round(value * 100);
+	}
+
+	function formatMoney(value: number | null): string {
+		return value === null ? 'Value not entered' : money.format(value / 100);
+	}
+
+	function formatDate(value: string | null): string {
+		return value ? fullDate.format(new Date(`${value}T12:00:00`)) : 'Not entered';
+	}
+
+	function daysUntil(value: string | null): number {
+		if (!value) return Number.POSITIVE_INFINITY;
+		const today = new Date();
+		const start = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+		const target = new Date(`${value}T00:00:00Z`).getTime();
+		return Math.ceil((target - start) / 86_400_000);
+	}
+
+	function deadlineLabel(value: string | null): string {
+		const days = daysUntil(value);
+		if (!Number.isFinite(days)) return 'No requirement deadline';
+		if (days < 0) return `${Math.abs(days)}d overdue`;
+		if (days === 0) return 'Due today';
+		if (days === 1) return 'Due tomorrow';
+		return `${days}d remaining`;
+	}
+
+	function deadlineTone(value: string | null): 'good' | 'warn' | 'muted' {
+		const days = daysUntil(value);
+		if (!Number.isFinite(days)) return 'muted';
+		return days <= 30 ? 'warn' : 'good';
+	}
+
+	function statusLabel(status: BonusStatus): string {
+		return {
+			planned: 'Planned',
+			active: 'In progress',
+			qualified: 'Qualified',
+			pending: 'Payout pending',
+			paid: 'Paid',
+			closed: 'Closed',
+			abandoned: 'Abandoned'
+		}[status];
+	}
+
+	function statusTone(status: BonusStatus): 'good' | 'warn' | 'muted' {
+		if (status === 'paid' || status === 'qualified') return 'good';
+		if (status === 'active' || status === 'pending') return 'warn';
+		return 'muted';
+	}
+
+	function linkedAccount(bonus: AccountBonus): FinancialAccount | null {
+		return accounts.find((account) => account.id === bonus.accountId) ?? null;
+	}
+
+	function linkedCard(bonus: AccountBonus): Card | null {
+		return cards.find((card) => card.id === bonus.cardId) ?? null;
+	}
+
+	function paymentFor(bonus: AccountBonus) {
+		return resolveBonusPayment(bonus, automaticTracking[bonus.id]);
+	}
+
+	function trackerFor(bonus: AccountBonus): BonusTracker | null {
+		const account = linkedAccount(bonus);
+		return buildBonusTracker(
+			bonus,
+			account,
+			account ? (activityByAccount[account.id]?.transactions ?? []) : []
+		);
+	}
+
+	function targetTierFor(bonus: AccountBonus, tracker: BonusTracker) {
+		return (
+			tracker.offer.tiers.find((tier) => tier.rewardCents === bonus.rewardCents) ??
+			tracker.offer.tiers.at(-1) ??
+			null
+		);
+	}
+
+	function trackerSetupOffersFor(bonus: AccountBonus) {
+		const account = linkedAccount(bonus);
+		if (!account || resolveBonusOffer(bonus, account)) return [];
+		return getCompatibleBonusOffers(account, bonus.openedDate ?? account.openedDate);
+	}
+
+	async function loadAccountActivity(account: FinancialAccount): Promise<void> {
+		if (account.source !== 'connected' || !account.transactionHistoryEnabled) return;
+		activityLoadingByAccount = { ...activityLoadingByAccount, [account.id]: true };
+		try {
+			const activity = await requestJson<AccountActivity>(
+				resolve('/api/accounts/[id]/transactions', { id: account.id })
+			);
+			activityByAccount = { ...activityByAccount, [account.id]: activity };
+			activityErrors = { ...activityErrors, [account.id]: '' };
+		} catch (error) {
+			activityErrors = {
+				...activityErrors,
+				[account.id]: readableError(error, 'Linked account activity could not be loaded.')
+			};
+		} finally {
+			activityLoadingByAccount = { ...activityLoadingByAccount, [account.id]: false };
+		}
+	}
+
+	async function loadLinkedAccountActivity(
+		loadedBonuses: AccountBonus[],
+		loadedAccounts: FinancialAccount[]
+	): Promise<void> {
+		const linkedIds = new Set(loadedBonuses.map((bonus) => bonus.accountId).filter(Boolean));
+		await Promise.all(
+			loadedAccounts
+				.filter((account) => linkedIds.has(account.id))
+				.map((account) => loadAccountActivity(account))
+		);
+	}
+
+	async function checkLinkedAccount(bonus: AccountBonus): Promise<void> {
+		const account = linkedAccount(bonus);
+		if (!account?.connectionId || syncingAccountId) return;
+		const offer = resolveBonusOffer(bonus, account);
+		syncingAccountId = account.id;
+		activityErrors = { ...activityErrors, [account.id]: '' };
+		try {
+			const refresh = await requestJson<TransactionRefreshResponse>(
+				resolve('/api/connections/[id]/transactions/refresh', { id: account.connectionId }),
+				{ method: 'POST' }
+			);
+			const response = await requestJson<{ accounts: FinancialAccount[] }>(
+				resolve('/api/accounts')
+			);
+			accounts = response.accounts;
+			void loadAutomaticTracking();
+			const refreshed = response.accounts.find((candidate) => candidate.id === account.id);
+			if (refreshed) await loadAccountActivity(refreshed);
+			const institution = offer?.institution ?? 'Linked account';
+			if (refresh.availability === 'unsupported') {
+				activityErrors = {
+					...activityErrors,
+					[account.id]:
+						'Plaid on-demand refresh is not enabled. Showing its latest scheduled activity.'
+				};
+				showToast(`${institution} synced with Plaid’s latest scheduled activity.`);
+			} else {
+				showToast(`${institution} refreshed directly from the bank.`);
+			}
+		} catch (error) {
+			activityErrors = {
+				...activityErrors,
+				[account.id]: readableError(error, 'The linked account could not be checked right now.')
+			};
+		} finally {
+			syncingAccountId = null;
+		}
+	}
+
+	function completedCount(bonus: AccountBonus): number {
+		return bonus.requirements.filter((requirement) => requirement.completed).length;
+	}
+
+	function openAdd(): void {
+		editingId = null;
+		form = blankForm();
+		if (view === 'churns') {
+			form.trackingOnly = true;
+			form.status = 'planned';
+		}
+		formError = '';
+		dialogOpen = true;
+	}
+
+	function openAddForAccount(accountId: string): void {
+		openAdd();
+		const account = accounts.find((candidate) => candidate.id === accountId);
+		if (!account) return;
+		form.accountId = account.id;
+		form.institution = account.institution ?? '';
+		form.openedDate = account.openedDate ?? '';
+	}
+
+	function openEdit(bonus: AccountBonus): void {
+		editingId = bonus.id;
+		const account = linkedAccount(bonus);
+		form = {
+			offerTemplateId: bonus.offerTemplateId ?? resolveBonusOffer(bonus, account)?.id ?? '',
+			offerDateOverrideConfirmed: bonus.offerDateOverrideConfirmed,
+			name: bonus.name,
+			institution: bonus.institution ?? '',
+			accountId: bonus.accountId ?? '',
+			cardId: bonus.cardId ?? '',
+			reward: bonus.rewardCents === null ? undefined : bonus.rewardCents / 100,
+			spendTarget: bonus.spendTargetCents === null ? undefined : bonus.spendTargetCents / 100,
+			status: bonus.status,
+			trackingOnly: bonus.trackingOnly ?? false,
+			openedDate: bonus.openedDate ?? '',
+			requirementDeadline: bonus.requirementDeadline ?? '',
+			expectedPayoutDate: bonus.expectedPayoutDate ?? '',
+			paidDate: bonus.paidDate ?? '',
+			safeToCloseDate: bonus.safeToCloseDate ?? '',
+			feeFreeDowngradeDate: bonus.feeFreeDowngradeDate ?? '',
+			feeFreeDowngradeDateSource: bonus.feeFreeDowngradeDate
+				? (bonus.feeFreeDowngradeDateSource ?? 'issuer_confirmed')
+				: 'estimated',
+			requirementsText: bonus.requirements.map((requirement) => requirement.label).join('\n'),
+			notes: bonus.notes ?? ''
+		};
+		formError = '';
+		dialogOpen = true;
+	}
+
+	function handleAccountChange(): void {
+		const account = accounts.find((candidate) => candidate.id === form.accountId);
+		form.offerDateOverrideConfirmed = false;
+		if (!account) {
+			form.offerTemplateId = '';
+			return;
+		}
+		form.cardId = '';
+		form.institution = account.institution ?? form.institution;
+		if (!form.openedDate && account.openedDate) form.openedDate = account.openedDate;
+		if (
+			form.offerTemplateId &&
+			!getCompatibleBonusOffers(account, null).some((offer) => offer.id === form.offerTemplateId)
+		) {
+			form.offerTemplateId = '';
+		}
+	}
+
+	function applySelectedOffer(preserveTarget = false): void {
+		if (!form.offerTemplateId) return;
+		const offer = getBonusOfferTemplate(form.offerTemplateId);
+		const openedDate = form.openedDate || formAccount?.openedDate || '';
+		if (!offer || !openedDate) {
+			formError = 'Enter the offer start date before applying a verified offer.';
+			return;
+		}
+		const draft = buildBonusOfferDraft(offer, openedDate);
+		if (!draft) {
+			formError = 'The offer dates could not be calculated.';
+			return;
+		}
+		formError = '';
+		const reward =
+			preserveTarget &&
+			offer.tiers.some((tier) => tier.rewardCents === Math.round((form.reward ?? 0) * 100))
+				? form.reward
+				: draft.rewardCents / 100;
+		form = {
+			...form,
+			openedDate,
+			name: draft.name,
+			institution: draft.institution,
+			reward,
+			requirementDeadline: draft.requirementDeadline,
+			expectedPayoutDate: draft.expectedPayoutDate,
+			safeToCloseDate: draft.safeToCloseDate,
+			requirementsText: draft.requirements.join('\n'),
+			notes: draft.notes
+		};
+	}
+
+	function handleOfferChange(): void {
+		form.offerDateOverrideConfirmed = false;
+		if (form.offerTemplateId) applySelectedOffer();
+	}
+
+	function handleOpenedDateChange(): void {
+		if (selectedOffer && isOfferDateEligible(selectedOffer, form.openedDate)) {
+			form.offerDateOverrideConfirmed = false;
+		}
+		if (form.offerTemplateId) applySelectedOffer(true);
+	}
+
+	function handleCardChange(): void {
+		form.feeFreeDowngradeDate = '';
+		form.feeFreeDowngradeDateSource = 'estimated';
+		const card = cards.find((candidate) => candidate.id === form.cardId);
+		if (!card) return;
+		form.accountId = '';
+		form.offerTemplateId = '';
+		form.offerDateOverrideConfirmed = false;
+		form.institution = card.issuer ?? form.institution;
+	}
+
+	function closeDialog(): void {
+		if (busy) return;
+		dialogOpen = false;
+	}
+
+	function formRequirements(): { id?: string; label: string; completed: boolean }[] {
+		const existing = editingId ? bonuses.find((bonus) => bonus.id === editingId) : null;
+		return form.requirementsText
+			.split('\n')
+			.map((label) => label.trim())
+			.filter(Boolean)
+			.slice(0, 20)
+			.map((label) => {
+				const match = existing?.requirements.find((requirement) => requirement.label === label);
+				return { ...(match ? { id: match.id } : {}), label, completed: match?.completed ?? false };
+			});
+	}
+
+	async function saveBonus(event: SubmitEvent): Promise<void> {
+		event.preventDefault();
+		const saved = editingId ? bonuses.find((bonus) => bonus.id === editingId) : null;
+		if (form.offerTemplateId && !preservesDisconnectedOffer(saved, form, formAccount)) {
+			const offer = getBonusOfferTemplate(form.offerTemplateId);
+			if (!offer || !formAccount || !form.openedDate) {
+				formError = 'A verified offer needs a linked account and opening date.';
+				return;
+			}
+			if (
+				!getCompatibleBonusOffers(formAccount, null).some((candidate) => candidate.id === offer.id)
+			) {
+				formError = 'That offer version does not match this account.';
+				return;
+			}
+			if (!isOfferDateEligible(offer, form.openedDate) && !form.offerDateOverrideConfirmed) {
+				formError = 'Confirm that the bank applied this offer outside its published dates.';
+				return;
+			}
+		}
+		if (!form.name.trim()) {
+			formError = 'Give this bonus a name.';
+			return;
+		}
+		busy = true;
+		formError = '';
+		const payload = {
+			accountId: form.accountId || null,
+			cardId: form.cardId || null,
+			offerTemplateId: form.offerTemplateId || null,
+			offerDateOverrideConfirmed: Boolean(form.offerTemplateId) && form.offerDateOverrideConfirmed,
+			name: form.name.trim(),
+			institution: form.institution.trim() || null,
+			rewardCents: cents(form.reward),
+			spendTargetCents: cents(form.spendTarget),
+			currency: 'USD',
+			status: form.status,
+			trackingOnly: form.trackingOnly,
+			openedDate: form.openedDate || null,
+			requirementDeadline: form.requirementDeadline || null,
+			expectedPayoutDate: form.expectedPayoutDate || null,
+			paidDate: form.paidDate || null,
+			safeToCloseDate: form.safeToCloseDate || null,
+			feeFreeDowngradeDate: form.cardId ? form.feeFreeDowngradeDate || null : null,
+			feeFreeDowngradeDateSource: form.feeFreeDowngradeDateSource,
+			requirements: formRequirements(),
+			notes: form.notes.trim() || null
+		};
+		try {
+			if (editingId) {
+				await requestJson(resolve('/api/bonuses/[id]', { id: editingId }), {
+					method: 'PATCH',
+					body: JSON.stringify(payload)
+				});
+			} else {
+				await requestJson(resolve('/api/bonuses'), {
+					method: 'POST',
+					body: JSON.stringify(payload)
+				});
+			}
+			dialogOpen = false;
+			await reloadBonuses();
+			showToast(editingId ? 'Bonus updated.' : 'Bonus added.');
+		} catch (error) {
+			formError = readableError(error, 'The bonus could not be saved.');
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function reloadBonuses(): Promise<void> {
+		const response = await requestJson<{ bonuses: AccountBonus[] }>(resolve('/api/bonuses'));
+		bonuses = response.bonuses;
+		automaticTracking = {};
+		void loadAutomaticTracking();
+	}
+
+	async function toggleRequirement(bonus: AccountBonus, requirementId: string): Promise<void> {
+		requirementBusy = requirementId;
+		try {
+			await requestJson(resolve('/api/bonuses/[id]', { id: bonus.id }), {
+				method: 'PATCH',
+				body: JSON.stringify({
+					requirements: bonus.requirements.map((requirement) => ({
+						...requirement,
+						completed:
+							requirement.id === requirementId ? !requirement.completed : requirement.completed
+					}))
+				})
+			});
+			await reloadBonuses();
+		} catch (error) {
+			pageError = readableError(error, 'The requirement could not be updated.');
+		} finally {
+			requirementBusy = null;
+		}
+	}
+
+	async function deleteBonus(bonus: AccountBonus): Promise<void> {
+		if (!window.confirm(`Delete “${bonus.name}”? This removes its requirements and dates.`)) return;
+		deletingId = bonus.id;
+		try {
+			await requestJson(resolve('/api/bonuses/[id]', { id: bonus.id }), { method: 'DELETE' });
+			if (editingId === bonus.id) dialogOpen = false;
+			await reloadBonuses();
+			showToast('Bonus deleted.');
+		} catch (error) {
+			if (dialogOpen) formError = readableError(error, 'The bonus could not be deleted.');
+			else pageError = readableError(error, 'The bonus could not be deleted.');
+		} finally {
+			deletingId = null;
+		}
+	}
+
+	function showToast(message: string): void {
+		toast = message;
+		if (toastTimer) clearTimeout(toastTimer);
+		toastTimer = setTimeout(() => (toast = ''), 3_000);
+	}
+
+	async function logout(): Promise<void> {
+		loggingOut = true;
+		try {
+			await requestJson(resolve('/api/auth/logout'), { method: 'POST' });
+			window.location.assign(resolve('/'));
+		} catch (error) {
+			pageError = readableError(error, 'Could not log out.');
+			loggingOut = false;
+		}
+	}
+
+	function handleKeydown(event: KeyboardEvent): void {
+		if (event.key === 'Escape' && dialogOpen) closeDialog();
+	}
+</script>
+
+{#snippet bonusCards(groupBonuses: AccountBonus[])}
+	<div class="finance-grid bonus-grid">
+		{#each groupBonuses as bonus (bonus.id)}
+			{@const bonusAccount = linkedAccount(bonus)}
+			{@const payment = paymentFor(bonus)}
+			{@const tracker = trackerFor(bonus)}
+			{@const retentionReviewDate =
+				tracker?.offer.safeToCloseRule === 'qualification-plus-1-year-plus-1'
+					? tracker.safeToCloseDate
+					: null}
+			{@const targetTier = tracker ? targetTierFor(bonus, tracker) : null}
+			{@const amountToTargetCents =
+				tracker && targetTier && tracker.balanceCents !== null
+					? Math.max(0, targetTier.thresholdCents - tracker.balanceCents)
+					: null}
+			{@const trackerSetupOffers = trackerSetupOffersFor(bonus)}
+			<article class="finance-card bonus-card" class:has-tracker={tracker !== null}>
+				<header>
+					<div>
+						<h3>{bonus.name}</h3>
+						<p>
+							{linkedCard(bonus)?.nickname ??
+								bonusAccount?.nickname ??
+								bonus.institution ??
+								'No account linked'}
+						</p>
+					</div>
+					<span class="finance-pill {statusTone(payment.status)}">
+						{statusLabel(payment.status)}
+					</span>
+				</header>
+				{#if bonusAccount && (!tracker || payment.paid)}
+					<div
+						class="bonus-live-metrics"
+						aria-label={`${bonusAccount.nickname} balance and bonus value`}
+					>
+						<div class="bonus-account-balance">
+							<span>
+								{bonusAccount.source === 'connected'
+									? 'Current synced balance'
+									: 'Current manual balance'}
+							</span>
+							<strong>{formatMoney(bonusAccount.currentBalanceCents)}</strong>
+							<small>
+								{#if bonusAccount.source === 'connected'}
+									<SyncedTime value={bonusAccount.lastSyncedAt} fallback="Not synced yet" />
+								{:else}
+									Saved in ChipDue
+								{/if}
+							</small>
+						</div>
+						<div class="finance-card-value">
+							<span>{payment.paid ? 'Received' : 'Bonus value'}</span>
+							<strong>{formatMoney(payment.paid ? payment.amountCents : bonus.rewardCents)}</strong>
+						</div>
+					</div>
+				{:else}
+					<div class="finance-card-value">
+						<span>{payment.paid ? 'Received' : 'Bonus value'}</span>
+						<strong>{formatMoney(payment.paid ? payment.amountCents : bonus.rewardCents)}</strong>
+					</div>
+				{/if}
+
+				<div class="bonus-deadline">
+					{#if payment.paid}
+						<span class="finance-pill good">Bonus received</span>
+						<strong>{payment.paidDate ? formatDate(payment.paidDate) : 'Date not recorded'}</strong>
+					{:else}
+						<span class="finance-pill {deadlineTone(bonus.requirementDeadline)}">
+							{deadlineLabel(bonus.requirementDeadline)}
+						</span>
+						<strong>{formatDate(bonus.requirementDeadline)}</strong>
+					{/if}
+				</div>
+
+				{#if tracker && !payment.paid}
+					<section class="linked-tracker" aria-label={`${tracker.offer.institution} offer tracker`}>
+						<header class="tracker-heading">
+							<div>
+								<span>{tracker.offer.institution} offer tracker</span>
+								<strong>{tracker.offer.accountProduct}</strong>
+							</div>
+							<span class="finance-pill good">
+								{tracker.account.source === 'connected' ? 'Synced + verified' : 'Manual + verified'}
+							</span>
+						</header>
+
+						<div class="tracker-metrics" class:balance-only={tracker.offer.activityMode === 'none'}>
+							<div>
+								<span>
+									{tracker.account.source === 'connected'
+										? 'Current synced balance'
+										: 'Current manual balance'}
+								</span>
+								<strong>{formatMoney(tracker.balanceCents)}</strong>
+								<small>
+									{#if amountToTargetCents === 0}
+										Your {formatMoney(targetTier?.rewardCents ?? null)} target is reached in this snapshot
+									{:else if amountToTargetCents !== null}
+										{formatMoney(amountToTargetCents)} to your {formatMoney(
+											targetTier?.rewardCents ?? null
+										)} target
+									{:else}
+										Waiting for a synced balance
+									{/if}
+								</small>
+							</div>
+							{#if tracker.offer.activityMode !== 'none'}
+								<div>
+									<span>
+										{tracker.offer.activityMode === 'recent'
+											? 'Recent activity'
+											: 'Likely qualifying activity'}
+									</span>
+									<strong
+										>{activityLoadingByAccount[tracker.account.id]
+											? '—'
+											: tracker.offer.activityMode === 'recent'
+												? `${tracker.likelyQualifyingTransactions.length} posted`
+												: `${tracker.likelyQualifyingTransactions.length} / ${tracker.offer.transactionTarget}`}</strong
+									>
+									<small>
+										{#if activityLoadingByAccount[tracker.account.id]}
+											Loading posted activity…
+										{:else if tracker.account.source !== 'connected'}
+											Manual account — verify activity with {tracker.offer.institution}
+										{:else if tracker.account.transactionHistoryStatus === 'preparing'}
+											The provider is still preparing older activity
+										{:else if tracker.account.transactionHistoryEnabled}
+											Posted since {formatDate(bonus.openedDate)}
+										{:else}
+											Check now to load posted activity
+										{/if}
+									</small>
+								</div>
+							{/if}
+						</div>
+
+						<progress
+							class="balance-progress"
+							max={targetTier?.thresholdCents ?? tracker.offer.tiers.at(-1)?.thresholdCents ?? 1}
+							value={Math.max(0, tracker.balanceCents ?? 0)}
+							aria-label={`Balance progress toward the ${formatMoney(targetTier?.rewardCents ?? tracker.offer.rewardCents)} target`}
+						></progress>
+
+						<div
+							class="tier-rail"
+							class:single-tier={tracker.offer.tiers.length === 1}
+							aria-label={`${tracker.offer.institution} bonus tiers`}
+						>
+							{#each tracker.offer.tiers as tier (tier.thresholdCents)}
+								<div
+									class:reached={(tracker.balanceCents ?? 0) >= tier.thresholdCents}
+									class:target={targetTier?.thresholdCents === tier.thresholdCents}
+								>
+									<strong>Reward {formatMoney(tier.rewardCents)}</strong>
+									<span>
+										{tier.label}{targetTier?.thresholdCents === tier.thresholdCents
+											? ' · Your target'
+											: ''}
+									</span>
+								</div>
+							{/each}
+						</div>
+
+						<dl class="tracker-dates">
+							<div>
+								<dt>Fund by</dt>
+								<dd>{formatDate(tracker.fundingDeadline)}</dd>
+							</div>
+							<div>
+								<dt>{tracker.offer.qualificationLabel}</dt>
+								<dd>{formatDate(tracker.qualificationDeadline)}</dd>
+							</div>
+							<div>
+								<dt>Payout by</dt>
+								<dd>{formatDate(tracker.latestPayoutDate)}</dd>
+							</div>
+						</dl>
+
+						{#if tracker.offer.activityMode !== 'none' && tracker.likelyQualifyingTransactions.length > 0}
+							<ul
+								class="tracker-activity"
+								aria-label={tracker.offer.activityMode === 'recent'
+									? 'Recent posted activity'
+									: 'Likely qualifying posted activity'}
+							>
+								{#each tracker.likelyQualifyingTransactions.slice(0, 5) as transaction (transaction.id)}
+									<li>
+										<strong>{transaction.merchantName ?? transaction.name}</strong>
+										<span>{formatDate(transaction.date)}</span>
+									</li>
+								{/each}
+							</ul>
+						{/if}
+
+						{#if activityErrors[tracker.account.id]}
+							<p class="tracker-error" role="alert">{activityErrors[tracker.account.id]}</p>
+						{/if}
+						<div class="tracker-actions">
+							{#if tracker.account.connectionId}
+								<button
+									type="button"
+									disabled={syncingAccountId !== null ||
+										activityLoadingByAccount[tracker.account.id]}
+									onclick={() => checkLinkedAccount(bonus)}
+								>
+									{syncingAccountId === tracker.account.id
+										? `Refreshing ${tracker.offer.institution}…`
+										: `Check ${tracker.offer.institution} now`}
+								</button>
+								<small>
+									<SyncedTime
+										value={activityByAccount[tracker.account.id]?.lastSyncedAt ??
+											tracker.account.lastSyncedAt}
+										fallback="Not checked yet"
+									/>
+								</small>
+							{:else}
+								<small>
+									{tracker.offer.activityMode === 'none'
+										? 'Connect this account to a provider to update its balance automatically.'
+										: 'Connect this account to a provider to estimate posted activity.'}
+								</small>
+							{/if}
+						</div>
+						<p class="tracker-note">
+							{#if bonus.offerDateOverrideConfirmed}
+								<strong>Bank-confirmed enrollment date exception.</strong>
+							{/if}
+							Balances are snapshots and cannot prove new-money sources or uninterrupted minimums.
+							{tracker.offer.activityMode === 'none'
+								? 'This promotion is balance-based.'
+								: tracker.offer.activityMode === 'recent'
+									? tracker.account.source === 'connected'
+										? 'Recent activity comes from posted provider investment transactions.'
+										: 'Recent activity remains a manual check until the account is connected to a provider.'
+									: tracker.account.source === 'connected'
+										? 'Activity is a conservative estimate from posted provider transactions.'
+										: 'Activity remains a manual check until the account is connected to a provider.'}
+							{tracker.offer.activityNote}
+							<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- Provider terms are an external URL. -->
+							<a href={tracker.offer.sourceUrl} target="_blank" rel="noreferrer">Official terms</a>
+							· {tracker.offer.versionLabel} · verified {formatDate(
+								tracker.offer.sourceVerifiedAt
+							)}.
+						</p>
+					</section>
+				{:else if !payment.paid && trackerSetupOffers.length > 0}
+					<section class="tracker-setup" aria-label="Bonus tracker setup needed">
+						<div>
+							<span>Tracker setup needed</span>
+							<strong>
+								Choose the exact {bonusAccount?.institution ?? bonus.institution} offer you enrolled in.
+							</strong>
+							<small>
+								{trackerSetupOffers.length} verified {trackerSetupOffers.length === 1
+									? 'offer matches'
+									: 'offers match'} this account and opening date.
+							</small>
+						</div>
+						<button type="button" onclick={() => openEdit(bonus)}>Choose offer</button>
+					</section>
+				{/if}
+
+				{#if !payment.paid && bonus.requirements.length > 0}
+					<section class="requirement-list" aria-label={`Requirements for ${bonus.name}`}>
+						<div class="requirement-heading">
+							<span>Requirements</span>
+							<strong>{completedCount(bonus)}/{bonus.requirements.length}</strong>
+						</div>
+						{#each bonus.requirements as requirement (requirement.id)}
+							<label class:completed={requirement.completed}>
+								<input
+									type="checkbox"
+									checked={requirement.completed}
+									disabled={requirementBusy !== null}
+									onchange={() => toggleRequirement(bonus, requirement.id)}
+								/>
+								<span>{requirement.label}</span>
+							</label>
+						{/each}
+					</section>
+				{/if}
+
+				{#if bonus.cardId}
+					<CardDowngradeTiming {bonus} />
+				{/if}
+				<dl class="finance-details bonus-dates">
+					{#if payment.paid && !bonus.cardId}
+						<div>
+							<dt>Account status</dt>
+							<dd>
+								{bonusAccount?.status === 'active'
+									? 'Open'
+									: bonusAccount?.status === 'closed'
+										? 'Closed'
+										: bonusAccount?.status === 'planned'
+											? 'Planned'
+											: 'Not confirmed'}
+							</dd>
+						</div>
+					{:else if !payment.paid}
+						<div>
+							<dt>Expected payout</dt>
+							<dd>{formatDate(bonus.expectedPayoutDate)}</dd>
+						</div>
+					{/if}
+					{#if retentionReviewDate}
+						<div>
+							<dt>Review after asset retention</dt>
+							<dd>{formatDate(retentionReviewDate)}</dd>
+						</div>
+					{:else if payment.paid && bonusAccount?.status === 'active' && tracker?.offer.transactionRule === 'capital-one-business'}
+						<div>
+							<dt>Next step</dt>
+							<dd>Confirm closing fees</dd>
+						</div>
+					{:else if !payment.paid && !bonus.cardId && bonus.safeToCloseDate}
+						<div>
+							<dt>Closing date to review</dt>
+							<dd>{formatDate(bonus.safeToCloseDate)}</dd>
+						</div>
+					{/if}
+				</dl>
+				{#if payment.paid && (tracker || bonus.requirements.length > 0 || (!bonus.cardId && bonus.safeToCloseDate))}
+					<details class="paid-offer-details">
+						<summary>Offer details</summary>
+						{#if automaticTracking[bonus.id]?.dateSources.paidDate === 'transaction'}
+							<p class="tracker-note">Payout matched to posted account activity.</p>
+						{/if}
+						{#if tracker}
+							<p class="tracker-note">
+								{#if retentionReviewDate}
+									Keep qualifying assets through the offer’s retention period. Early withdrawals may
+									reverse the bonus.
+								{/if}
+								<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- Provider terms are an external URL. -->
+								<a href={tracker.offer.sourceUrl} target="_blank" rel="noreferrer">Official terms</a
+								>
+								· {tracker.offer.versionLabel} · verified {formatDate(
+									tracker.offer.sourceVerifiedAt
+								)}.
+							</p>
+						{/if}
+						{#if !bonus.cardId && bonus.safeToCloseDate && !retentionReviewDate}
+							<p class="tracker-note">
+								Closing date to review: {formatDate(bonus.safeToCloseDate)}
+							</p>
+						{/if}
+						{#if bonus.requirements.length > 0}
+							<ul>
+								{#each bonus.requirements as requirement (requirement.id)}
+									<li>{requirement.label}</li>
+								{/each}
+							</ul>
+						{/if}
+					</details>
+				{/if}
+				<footer>
+					<button type="button" onclick={() => openEdit(bonus)}>Edit</button>
+					<button class="delete" type="button" onclick={() => deleteBonus(bonus)}>
+						{deletingId === bonus.id ? 'Deleting…' : 'Delete'}
+					</button>
+				</footer>
+			</article>
+		{/each}
+	</div>
+{/snippet}
+
+<svelte:head>
+	<title>{view === 'churns' ? 'Churns' : 'Bonuses'} — ChipDue</title>
+	<meta
+		name="description"
+		content={view === 'churns'
+			? 'Track when you can apply for another account bonus.'
+			: 'Track account signup bonuses, requirements, payouts, and closing dates.'}
+	/>
+</svelte:head>
+
+<svelte:window onkeydown={handleKeydown} />
+
+<a class="skip-link" href="#bonuses-main">Skip to {view}</a>
+
+<div class="finance-shell">
+	<WorkspaceHeader current={view} {mode} {loggingOut} onlogout={logout} />
+
+	<main id="bonuses-main" class="finance-main">
+		<section class="finance-toolbar" aria-labelledby="bonuses-title">
+			<div>
+				<h1 id="bonuses-title">{view === 'churns' ? 'Churns' : 'Bonuses'}</h1>
+				<p>
+					{view === 'churns'
+						? 'When you can apply for another bonus, based on your previous accounts and offers.'
+						: 'Track current bonus requirements, deadlines, and payouts.'}
+				</p>
+			</div>
+			<button class="finance-button" type="button" onclick={openAdd}
+				>{view === 'churns' ? '+ Add past account' : '+ Add bonus'}</button
+			>
+		</section>
+
+		{#if view === 'bonuses'}
+			<section class="finance-summary" aria-label="Bonus summary">
+				<article>
+					<span>Active bonuses</span>
+					<strong>{loading ? '—' : activeBonuses.length}</strong>
+				</article>
+				<article>
+					<span>Potential value</span>
+					<strong>{loading ? '—' : formatMoney(pendingValueCents)}</strong>
+				</article>
+				<article>
+					<span>Earned value</span>
+					<strong>{loading ? '—' : formatMoney(earnedValueCents)}</strong>
+				</article>
+				<article>
+					<span>Next requirement</span>
+					<strong>{loading ? '—' : formatDate(nextBonus?.requirementDeadline ?? null)}</strong>
+				</article>
+			</section>
+		{/if}
+
+		{#if loading}
+			<div class="finance-loading" aria-busy="true">Loading your private bonus tracker…</div>
+		{:else if pageError}
+			<div class="finance-error" role="alert">
+				<h2>Bonuses are unavailable</h2>
+				<p>{pageError}</p>
+				<button class="finance-button secondary" type="button" onclick={initialize}
+					>Try again</button
+				>
+			</div>
+		{:else if view === 'churns'}
+			<BonusChurnPanel
+				{bonuses}
+				{accounts}
+				onedit={openEdit}
+				{cards}
+				tracking={automaticTracking}
+				loading={automaticTrackingLoading}
+				error={automaticTrackingError}
+				onupdated={(updated) => {
+					bonuses = bonuses.map((bonus) => (bonus.id === updated.id ? updated : bonus));
+					const next = { ...automaticTracking };
+					delete next[updated.id];
+					automaticTracking = next;
+					void loadAutomaticTracking();
+				}}
+			/>
+		{:else if pipelineBonuses.length === 0 && completedBonuses.length === 0}
+			<div class="finance-empty">
+				<h2>No bonuses yet</h2>
+				<p>
+					Link an account and choose the exact offer you enrolled in. ChipDue calculates its
+					deadlines and keeps the tracking rules fixed to that offer version.
+				</p>
+				<button class="finance-button" type="button" onclick={openAdd}>Add your first bonus</button>
+			</div>
+		{:else}
+			<section aria-labelledby="bonus-list-title">
+				<div class="finance-section-heading">
+					<div>
+						<h2 id="bonus-list-title">Bonus pipeline</h2>
+						<p>{dueSoonCount} with a requirement deadline in the next 30 days or overdue.</p>
+					</div>
+				</div>
+				{#if activeBonuses.length > 0}
+					{@render bonusCards(activeBonuses)}
+				{:else}
+					<p class="pipeline-empty">No active bonuses.</p>
+				{/if}
+			</section>
+			{#if completedBonuses.length > 0}
+				<details class="bonus-history">
+					<summary>
+						<span
+							>Completed bonuses <span class="history-count">{completedBonuses.length}</span></span
+						>
+						<strong>{formatMoney(earnedValueCents)} received</strong>
+					</summary>
+					{@render bonusCards(completedBonuses)}
+				</details>
+			{/if}
+			{#if archivedBonuses.length > 0}
+				<details class="bonus-history">
+					<summary>
+						<span
+							>Closed or abandoned <span class="history-count">{archivedBonuses.length}</span></span
+						>
+					</summary>
+					{@render bonusCards(archivedBonuses)}
+				</details>
+			{/if}
+		{/if}
+	</main>
+</div>
+
+{#if dialogOpen}
+	<div class="finance-dialog-layer" role="presentation">
+		<div
+			class="finance-dialog"
+			role="dialog"
+			tabindex="-1"
+			aria-modal="true"
+			aria-labelledby="bonus-dialog-title"
+		>
+			<header class="finance-dialog-header">
+				<div>
+					<h2 id="bonus-dialog-title">
+						{editingId ? 'Edit bonus' : form.trackingOnly ? 'Add past account' : 'Add bonus'}
+					</h2>
+					<p>
+						{form.trackingOnly
+							? 'Record the history used to estimate your next bonus date.'
+							: 'Confirm the exact offer; ChipDue will lock in that published version’s rules.'}
+					</p>
+				</div>
+				<button type="button" aria-label="Close" onclick={closeDialog}>×</button>
+			</header>
+			<form class="finance-form" onsubmit={saveBonus}>
+				{#if formError}<p class="finance-form-error" role="alert">{formError}</p>{/if}
+				<div class="finance-field">
+					<label for="bonus-tracking-purpose">Track in</label>
+					<select id="bonus-tracking-purpose" bind:value={form.trackingOnly}>
+						<option value={false}>Bonuses — progress and payouts</option>
+						<option value={true}>Churns only — future eligibility</option>
+					</select>
+				</div>
+				<div class="finance-form-grid">
+					<div class="finance-field">
+						<label for="bonus-name">Bonus name</label>
+						<input
+							id="bonus-name"
+							bind:value={form.name}
+							maxlength="80"
+							readonly={Boolean(form.offerTemplateId)}
+							required
+						/>
+					</div>
+					<div class="finance-field">
+						{#if selectedOffer && selectedOffer.tiers.length > 1}
+							<label for="bonus-target-tier">Target tier</label>
+							<select id="bonus-target-tier" bind:value={form.reward}>
+								{#each selectedOffer.tiers as tier (tier.rewardCents)}
+									<option value={tier.rewardCents / 100}>
+										{formatMoney(tier.rewardCents)} · {tier.label}
+									</option>
+								{/each}
+							</select>
+							<small>Sets the value you plan to earn; all offer tiers stay visible.</small>
+						{:else}
+							<label for="bonus-value">Bonus value</label>
+							<input
+								id="bonus-value"
+								type="number"
+								min="0"
+								step="0.01"
+								bind:value={form.reward}
+								readonly={Boolean(form.offerTemplateId)}
+								placeholder="500.00"
+							/>
+						{/if}
+					</div>
+					<div class="finance-field">
+						<label for="bonus-account">Linked account</label>
+						<select
+							id="bonus-account"
+							bind:value={form.accountId}
+							onchange={handleAccountChange}
+							disabled={Boolean(form.cardId)}
+						>
+							<option value="">No linked account</option>
+							{#if form.accountId && !formAccount}
+								<option value={form.accountId}>Saved account (no longer connected)</option>
+							{/if}
+							{#each accounts as account (account.id)}
+								<option value={account.id}>{account.nickname}</option>
+							{/each}
+						</select>
+					</div>
+					<div class="finance-field">
+						<label for="bonus-card">Linked credit card</label>
+						<select
+							id="bonus-card"
+							bind:value={form.cardId}
+							onchange={handleCardChange}
+							disabled={Boolean(form.accountId)}
+						>
+							<option value="">No linked card</option>
+							{#each cards as card (card.id)}
+								<option value={card.id}>{card.nickname}</option>
+							{/each}
+						</select>
+						<small>Link card bonuses here to track eligible spending on the Cards page.</small>
+					</div>
+					<div class="finance-field">
+						<label for="bonus-spend-target">Required card spend</label>
+						<input
+							id="bonus-spend-target"
+							type="number"
+							min="0"
+							step="0.01"
+							bind:value={form.spendTarget}
+							placeholder="1000.00"
+						/>
+					</div>
+					<div class="finance-field wide offer-picker">
+						<label for="bonus-offer">Verified offer</label>
+						<select
+							id="bonus-offer"
+							bind:value={form.offerTemplateId}
+							onchange={handleOfferChange}
+							disabled={!formAccount}
+						>
+							<option value="">Manual rules</option>
+							{#each selectableOffers as offer (offer.id)}
+								<option value={offer.id}>
+									{offer.name} · {offer.versionLabel}
+								</option>
+							{/each}
+						</select>
+						<small>
+							{#if !formAccount}
+								Link an account first to see matching offers.
+							{:else if compatibleOffers.length > 0}
+								Choose the exact offer you enrolled in. Your bank connection cannot confirm the
+								promotion code for you.
+							{:else if institutionOffers.length > 0}
+								Only past verified offer versions match this account. Select the exact one and
+								record the bank’s confirmation if it applies.
+							{:else}
+								No current verified offer matches this account and opening date. Use manual rules.
+							{/if}
+						</small>
+						{#if selectedOfferDateWarning}
+							<small class="offer-warning">{selectedOfferDateWarning}</small>
+							<label class="offer-exception">
+								<input type="checkbox" bind:checked={form.offerDateOverrideConfirmed} />
+								<span>
+									<strong>Bank-confirmed enrollment</strong>
+									<small>
+										The bank confirmed this exact offer applies despite the published dates.
+									</small>
+								</span>
+							</label>
+						{/if}
+					</div>
+					<div class="finance-field">
+						<label for="bonus-institution">Institution</label>
+						<input
+							id="bonus-institution"
+							bind:value={form.institution}
+							maxlength="80"
+							readonly={Boolean(form.offerTemplateId)}
+						/>
+					</div>
+					<div class="finance-field">
+						<label for="bonus-status">Status</label>
+						<select id="bonus-status" bind:value={form.status}>
+							<option value="planned">Planned</option>
+							<option value="active">In progress</option>
+							<option value="qualified">Qualified</option>
+							<option value="pending">Payout pending</option>
+							<option value="paid">Paid</option>
+							<option value="closed">Closed</option>
+							<option value="abandoned">Abandoned</option>
+						</select>
+					</div>
+					<div class="finance-field">
+						<label for="bonus-opened"
+							>{form.cardId
+								? 'Offer accepted / upgraded'
+								: (selectedOffer?.startDateLabel ?? 'Account opened')}</label
+						>
+						<input
+							id="bonus-opened"
+							type="date"
+							bind:value={form.openedDate}
+							onchange={handleOpenedDateChange}
+						/>
+						{#if selectedOffer?.startDateLabel === 'Offer enrolled'}
+							<small
+								>Use the promotion enrollment date, not the brokerage account opening date.</small
+							>
+						{/if}
+					</div>
+					<div class="finance-field">
+						<label for="bonus-deadline">Requirement deadline</label>
+						<input
+							id="bonus-deadline"
+							type="date"
+							bind:value={form.requirementDeadline}
+							readonly={Boolean(form.offerTemplateId)}
+						/>
+					</div>
+					<div class="finance-field">
+						<label for="bonus-payout">Expected payout</label>
+						<input
+							id="bonus-payout"
+							type="date"
+							bind:value={form.expectedPayoutDate}
+							readonly={Boolean(form.offerTemplateId)}
+						/>
+					</div>
+					<div class="finance-field">
+						<label for="bonus-paid">Paid date</label>
+						<input id="bonus-paid" type="date" bind:value={form.paidDate} />
+					</div>
+					<div class="finance-field">
+						<label for="bonus-close"
+							>{form.cardId ? 'Earliest downgrade (bonus hold)' : 'Closing date to review'}</label
+						>
+						<input
+							id="bonus-close"
+							type="date"
+							bind:value={form.safeToCloseDate}
+							readonly={Boolean(form.offerTemplateId)}
+						/>
+					</div>
+					{#if form.cardId}
+						<div class="finance-field">
+							<label for="bonus-fee-deadline">Downgrade by to avoid fee</label>
+							<input
+								id="bonus-fee-deadline"
+								type="date"
+								bind:value={form.feeFreeDowngradeDate}
+								aria-describedby="bonus-fee-help"
+							/>
+							<small id="bonus-fee-help"
+								>Save a deadline from your offer terms or issuer confirmation. The downgrade must
+								take effect by this date; a fee-refund deadline is different.</small
+							>
+						</div>
+						<div class="finance-field">
+							<label for="bonus-fee-source">Deadline basis</label>
+							<select id="bonus-fee-source" bind:value={form.feeFreeDowngradeDateSource}>
+								<option value="estimated">Estimated from offer terms</option>
+								<option value="issuer_confirmed">Confirmed by issuer</option>
+							</select>
+						</div>
+					{/if}
+					<div class="finance-field wide">
+						<label for="bonus-requirements">Requirements</label>
+						<textarea
+							id="bonus-requirements"
+							bind:value={form.requirementsText}
+							readonly={Boolean(form.offerTemplateId)}
+							placeholder="Receive two qualifying direct deposits&#10;Maintain the required balance for 90 days"
+						></textarea>
+						<small>One requirement per line, up to 20. Existing checkmarks are preserved.</small>
+					</div>
+					<div class="finance-field wide">
+						<label for="bonus-notes">Private notes</label>
+						<textarea id="bonus-notes" bind:value={form.notes} maxlength="2000"></textarea>
+					</div>
+				</div>
+				<div class="finance-form-actions">
+					{#if editingId}
+						<button
+							class="finance-button secondary"
+							type="button"
+							disabled={busy || Boolean(deletingId)}
+							onclick={() => {
+								const bonus = bonuses.find((candidate) => candidate.id === editingId);
+								if (bonus) void deleteBonus(bonus);
+							}}>Delete record</button
+						>
+					{/if}
+					<button class="finance-button secondary" type="button" onclick={closeDialog}
+						>Cancel</button
+					>
+					<button class="finance-button" type="submit" disabled={busy || Boolean(deletingId)}>
+						{busy
+							? 'Saving…'
+							: editingId
+								? 'Save changes'
+								: form.trackingOnly
+									? 'Add past account'
+									: 'Add bonus'}
+					</button>
+				</div>
+			</form>
+		</div>
+	</div>
+{/if}
+
+{#if toast}<div class="finance-toast" role="status">{toast}</div>{/if}
+
+<style>
+	.skip-link {
+		position: fixed;
+		top: 0.75rem;
+		left: 0.75rem;
+		z-index: 100;
+		padding: 0.65rem 0.9rem;
+		border-radius: 0.5rem;
+		color: var(--on-accent);
+		background: var(--accent-dark);
+		transform: translateY(-150%);
+	}
+
+	.skip-link:focus {
+		transform: translateY(0);
+	}
+
+	.pipeline-empty {
+		margin: 0;
+		padding: 1rem 0;
+		color: var(--muted);
+		font-size: 0.82rem;
+	}
+
+	.bonus-history {
+		margin-top: 1.5rem;
+		border-top: 1px solid var(--line);
+	}
+
+	.bonus-history > summary {
+		padding: 1rem 0;
+		color: var(--ink);
+		font-size: 0.9rem;
+		font-weight: 720;
+		cursor: pointer;
+	}
+
+	.bonus-history > summary:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 4px;
+		border-radius: 4px;
+	}
+
+	.history-count {
+		margin-left: 0.35rem;
+		color: var(--muted);
+		font-weight: 560;
+	}
+
+	.bonus-history > summary > strong {
+		display: inline-block;
+		margin-left: 1rem;
+		color: var(--positive);
+		font-size: 0.75rem;
+	}
+
+	.bonus-card {
+		min-height: 390px;
+	}
+
+	.bonus-card.has-tracker {
+		grid-column: span 2;
+	}
+
+	.bonus-live-metrics {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 1rem;
+		margin: 1.2rem 0 1rem;
+	}
+
+	.bonus-live-metrics > div {
+		min-width: 0;
+		margin: 0;
+		padding: 0.8rem;
+		border: 1px solid var(--line);
+		border-radius: 10px;
+		background: color-mix(in srgb, var(--paper) 62%, transparent);
+	}
+
+	.bonus-live-metrics span,
+	.bonus-live-metrics small {
+		display: block;
+		color: var(--faint);
+		font-size: 0.6rem;
+		font-weight: 680;
+	}
+
+	.bonus-live-metrics strong {
+		display: block;
+		margin-top: 0.32rem;
+		font-size: 1.45rem;
+		font-weight: 760;
+		letter-spacing: -0.05em;
+	}
+
+	.bonus-live-metrics small {
+		margin-top: 0.25rem;
+		font-weight: 560;
+	}
+
+	.bonus-deadline {
+		display: flex;
+		gap: 0.6rem;
+		align-items: center;
+		justify-content: space-between;
+		padding: 0.65rem 0;
+		border-top: 1px solid var(--line);
+		border-bottom: 1px solid var(--line);
+	}
+
+	.bonus-deadline > strong {
+		font-size: 0.68rem;
+	}
+
+	.linked-tracker {
+		display: grid;
+		gap: 0.75rem;
+		margin-top: 0.85rem;
+		padding: 0.9rem;
+		border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+		border-radius: 12px;
+		background: linear-gradient(
+			145deg,
+			color-mix(in srgb, var(--accent) 7.5%, transparent),
+			color-mix(in srgb, var(--paper) 82%, transparent)
+		);
+	}
+
+	.tracker-setup {
+		display: flex;
+		gap: 0.8rem;
+		align-items: center;
+		justify-content: space-between;
+		margin-top: 0.85rem;
+		padding: 0.8rem;
+		border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+		border-radius: 10px;
+		background: color-mix(in srgb, var(--accent) 6%, transparent);
+	}
+
+	.tracker-setup div {
+		display: grid;
+		gap: 0.18rem;
+	}
+
+	.tracker-setup span {
+		color: var(--accent-dark);
+		font-size: 0.58rem;
+		font-weight: 760;
+		letter-spacing: 0.045em;
+		text-transform: uppercase;
+	}
+
+	.tracker-setup strong {
+		font-size: 0.76rem;
+	}
+
+	.tracker-setup small {
+		color: var(--muted);
+		font-size: 0.59rem;
+	}
+
+	.tracker-setup button {
+		padding: 0.5rem 0.7rem;
+		border: 1px solid var(--accent);
+		border-radius: 7px;
+		color: var(--accent-dark);
+		font-size: 0.62rem;
+		font-weight: 740;
+		white-space: nowrap;
+		background: var(--paper);
+		cursor: pointer;
+	}
+
+	.tracker-heading,
+	.tracker-actions,
+	.tracker-activity li {
+		display: flex;
+		gap: 0.7rem;
+		align-items: center;
+		justify-content: space-between;
+	}
+
+	.tracker-heading > div {
+		display: grid;
+		gap: 0.16rem;
+	}
+
+	.tracker-heading > div > span,
+	.tracker-metrics span,
+	.tracker-dates dt {
+		color: var(--faint);
+		font-size: 0.58rem;
+		font-weight: 740;
+		letter-spacing: 0.045em;
+		text-transform: uppercase;
+	}
+
+	.tracker-heading > div > strong {
+		font-size: 0.82rem;
+	}
+
+	.tracker-metrics {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 0.55rem;
+	}
+
+	.tracker-metrics.balance-only {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.tracker-metrics > div {
+		display: grid;
+		gap: 0.18rem;
+		padding: 0.62rem;
+		border: 1px solid var(--line);
+		border-radius: 9px;
+		background: color-mix(in srgb, var(--paper) 70%, transparent);
+	}
+
+	.tracker-metrics strong {
+		font-size: 1rem;
+	}
+
+	.tracker-metrics small,
+	.tracker-actions small {
+		color: var(--muted);
+		font-size: 0.59rem;
+		line-height: 1.35;
+	}
+
+	.balance-progress {
+		width: 100%;
+		height: 8px;
+		border: 0;
+		border-radius: 999px;
+		overflow: hidden;
+		background: color-mix(in srgb, var(--accent) 12%, transparent);
+	}
+
+	.balance-progress::-webkit-progress-bar {
+		background: color-mix(in srgb, var(--accent) 12%, transparent);
+	}
+
+	.balance-progress::-webkit-progress-value,
+	.balance-progress::-moz-progress-bar {
+		border-radius: 999px;
+		background: var(--accent);
+	}
+
+	.tier-rail,
+	.tracker-dates {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 0.45rem;
+	}
+
+	.tier-rail.single-tier {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.tier-rail > div,
+	.tracker-dates > div {
+		display: grid;
+		gap: 0.14rem;
+		padding: 0.5rem;
+		border: 1px solid var(--line);
+		border-radius: 8px;
+		background: color-mix(in srgb, var(--paper) 58%, transparent);
+	}
+
+	.tier-rail > div.reached {
+		border-color: color-mix(in srgb, var(--positive) 35%, transparent);
+		background: color-mix(in srgb, var(--positive) 9%, transparent);
+	}
+
+	.tier-rail > div.target {
+		box-shadow: inset 0 0 0 1px var(--accent);
+	}
+
+	.tier-rail strong {
+		font-size: 0.72rem;
+	}
+
+	.tier-rail span,
+	.tracker-dates dd,
+	.tracker-activity li {
+		margin: 0;
+		color: var(--ink-soft);
+		font-size: 0.61rem;
+	}
+
+	.tracker-activity {
+		display: grid;
+		gap: 0.25rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	.tracker-activity li {
+		padding: 0.34rem 0.45rem;
+		border-radius: 7px;
+		background: color-mix(in srgb, var(--paper) 56%, transparent);
+	}
+
+	.tracker-activity li span {
+		color: var(--faint);
+		white-space: nowrap;
+	}
+
+	.tracker-actions button {
+		padding: 0.5rem 0.7rem;
+		border: 1px solid var(--accent);
+		border-radius: 7px;
+		color: var(--accent-dark);
+		font-size: 0.62rem;
+		font-weight: 740;
+		background: var(--paper);
+		cursor: pointer;
+	}
+
+	.tracker-actions button:disabled {
+		opacity: 0.55;
+		cursor: wait;
+	}
+
+	.tracker-error,
+	.tracker-note {
+		margin: 0;
+		font-size: 0.59rem;
+		line-height: 1.45;
+	}
+
+	.tracker-error {
+		color: var(--red);
+	}
+
+	.tracker-note {
+		color: var(--muted);
+	}
+
+	.tracker-note a {
+		color: var(--accent-dark);
+		font-weight: 740;
+	}
+
+	.offer-picker small {
+		display: block;
+		line-height: 1.45;
+	}
+
+	.offer-picker .offer-warning {
+		color: var(--red);
+	}
+
+	.offer-exception {
+		display: flex;
+		gap: 0.55rem;
+		align-items: flex-start;
+		margin-top: 0.45rem;
+		padding: 0.65rem;
+		border: 1px solid color-mix(in srgb, var(--red) 35%, var(--line));
+		border-radius: 8px;
+		background: color-mix(in srgb, var(--red) 5%, var(--paper));
+		text-transform: none;
+	}
+
+	.offer-exception input {
+		width: auto;
+		margin-top: 0.15rem;
+	}
+
+	.offer-exception span {
+		display: grid;
+		gap: 0.12rem;
+	}
+
+	.offer-exception strong {
+		font-size: 0.7rem;
+	}
+
+	.requirement-list {
+		display: grid;
+		gap: 0.35rem;
+		margin-top: 0.8rem;
+	}
+
+	.requirement-heading {
+		display: flex;
+		justify-content: space-between;
+		margin-bottom: 0.15rem;
+		color: var(--faint);
+		font-size: 0.6rem;
+		font-weight: 720;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+	}
+
+	.requirement-list label {
+		display: flex;
+		gap: 0.48rem;
+		align-items: flex-start;
+		padding: 0.36rem 0.42rem;
+		border-radius: 7px;
+		color: var(--ink-soft);
+		font-size: 0.68rem;
+		line-height: 1.35;
+		background: var(--paper-soft);
+		cursor: pointer;
+	}
+
+	.requirement-list label.completed {
+		color: var(--faint);
+		text-decoration: line-through;
+	}
+
+	.requirement-list input {
+		margin: 0.08rem 0 0;
+		accent-color: var(--positive);
+	}
+
+	.bonus-dates {
+		margin-top: 0.85rem;
+	}
+
+	.paid-offer-details {
+		margin-top: 0.8rem;
+		color: var(--muted);
+		font-size: 0.65rem;
+		line-height: 1.5;
+	}
+
+	.paid-offer-details summary {
+		color: var(--ink-soft);
+		font-weight: 680;
+		cursor: pointer;
+	}
+
+	.paid-offer-details p,
+	.paid-offer-details ul {
+		margin-top: 0.5rem;
+	}
+
+	.paid-offer-details ul {
+		padding-left: 1.2rem;
+	}
+
+	@media (max-width: 1040px) {
+		.bonus-grid {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+	}
+
+	@media (max-width: 620px) {
+		.bonus-grid {
+			grid-template-columns: 1fr;
+		}
+
+		.bonus-live-metrics {
+			grid-template-columns: 1fr;
+		}
+
+		.bonus-card.has-tracker {
+			grid-column: span 1;
+		}
+
+		.tracker-metrics,
+		.tier-rail,
+		.tracker-dates {
+			grid-template-columns: 1fr;
+		}
+
+		.tracker-actions,
+		.tracker-setup {
+			align-items: flex-start;
+			flex-direction: column;
+		}
+	}
+</style>

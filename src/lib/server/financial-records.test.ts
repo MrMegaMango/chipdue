@@ -394,6 +394,36 @@ describe.sequential('encrypted financial records', () => {
 		expect((await getBonus(bonus.id)).churn).toBeNull();
 	});
 
+	it('keeps a historical churn reminder separate without inventing payout or closure dates', async () => {
+		const bonus = await createBonus(
+			createBonusSchema.parse({
+				name: 'Historical checking reminder',
+				status: 'planned',
+				trackingOnly: true,
+				openedDate: '2025-02-10',
+				churn: { mode: 'manual', manualEligibleDate: '2027-03-01' }
+			})
+		);
+		const historicalState = {
+			status: 'planned',
+			trackingOnly: true,
+			paidDate: null,
+			churn: { closedDate: null, manualEligibleDate: '2027-03-01' }
+		};
+
+		closeDatabaseForTests();
+		resetCryptoStateForTests();
+		expect(await getBonus(bonus.id)).toMatchObject(historicalState);
+		expect(await listBonuses()).toMatchObject([historicalState]);
+		expect(await updateBonus(bonus.id, { notes: 'Estimate based on saved history' })).toMatchObject(
+			historicalState
+		);
+		expect(await updateBonus(bonus.id, { trackingOnly: false })).toMatchObject({
+			...historicalState,
+			trackingOnly: false
+		});
+	});
+
 	it('normalizes older bonus payloads without repeat tracking and can update them', async () => {
 		const bonus = await createBonus(createBonusSchema.parse({ name: 'Legacy bonus' }));
 		const database = getDatabase();
@@ -402,13 +432,18 @@ describe.sequential('encrypted financial records', () => {
 		};
 		const legacyPayload = decryptJson<Record<string, unknown>>(row.payload_enc, `card:${bonus.id}`);
 		delete legacyPayload.churn;
+		delete legacyPayload.trackingOnly;
 		database
 			.prepare('UPDATE cards SET payload_enc = ? WHERE id = ?')
 			.run(encryptJson(legacyPayload, `card:${bonus.id}`), bonus.id);
 
 		expect((await getBonus(bonus.id)).churn).toBeNull();
+		expect((await getBonus(bonus.id)).trackingOnly).toBe(false);
 		expect((await listBonuses())[0].churn).toBeNull();
-		expect((await updateBonus(bonus.id, { status: 'paid' })).churn).toBeNull();
+		expect(await updateBonus(bonus.id, { status: 'paid' })).toMatchObject({
+			churn: null,
+			trackingOnly: false
+		});
 		const configured = await updateBonus(bonus.id, {
 			churn: createBonusSchema.parse({ name: 'Unused', churn: { mode: 'manual' } }).churn
 		});

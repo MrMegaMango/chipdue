@@ -98,8 +98,19 @@ describe('repeat bonus tracking validation', () => {
 
 	it('defaults new bonuses to no tracking and preserves omission on updates', () => {
 		expect(createBonusSchema.parse({ name: 'Bonus' }).churn).toBeNull();
+		expect(createBonusSchema.parse({ name: 'Bonus' }).trackingOnly).toBe(false);
 		expect(updateBonusSchema.parse({ status: 'paid' })).not.toHaveProperty('churn');
+		expect(updateBonusSchema.parse({ status: 'paid' })).not.toHaveProperty('trackingOnly');
 		expect(updateBonusSchema.parse({ churn: null })).toEqual({ churn: null });
+	});
+
+	it('requires an explicit boolean to change whether a bonus is only a churn reminder', () => {
+		expect(
+			createBonusSchema.parse({ name: 'Historical reminder', trackingOnly: true })
+		).toMatchObject({ trackingOnly: true });
+		expect(updateBonusSchema.parse({ trackingOnly: false })).toEqual({ trackingOnly: false });
+		expect(updateBonusSchema.safeParse({ trackingOnly: 'false' }).success).toBe(false);
+		expect(updateBonusSchema.safeParse({ trackingOnly: null }).success).toBe(false);
 	});
 
 	it('accepts multiple waiting periods without requiring their dates yet', () => {

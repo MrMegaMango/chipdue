@@ -202,6 +202,7 @@ const bonusPayloadSchema = z.object({
 	spendTargetCents: nullableCentsSchema.optional().default(null),
 	currency: z.string(),
 	status: bonusStatusSchema,
+	trackingOnly: z.boolean().optional().default(false),
 	openedDate: dateSchema,
 	requirementDeadline: dateSchema,
 	expectedPayoutDate: dateSchema,
@@ -555,6 +556,7 @@ function rowToBonus(row: PrivateRecordRow, payload: BonusPayload): AccountBonus 
 		spendTargetCents: payload.spendTargetCents,
 		currency: payload.currency,
 		status: payload.status,
+		trackingOnly: payload.trackingOnly,
 		openedDate: payload.openedDate,
 		requirementDeadline: payload.requirementDeadline,
 		expectedPayoutDate: payload.expectedPayoutDate,
@@ -1312,6 +1314,7 @@ export async function updateBonus(id: string, changes: UpdateBonusData): Promise
 			changes.spendTargetCents === undefined ? existing.spendTargetCents : changes.spendTargetCents,
 		currency: changes.currency ?? existing.currency,
 		status: changes.status ?? existing.status,
+		trackingOnly: changes.trackingOnly ?? existing.trackingOnly ?? false,
 		openedDate: changes.openedDate === undefined ? existing.openedDate : changes.openedDate,
 		requirementDeadline:
 			changes.requirementDeadline === undefined

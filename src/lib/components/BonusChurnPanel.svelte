@@ -24,6 +24,7 @@
 	let {
 		bonuses,
 		onupdated,
+		onedit,
 		tracking = {},
 		loading = false,
 		error: trackingError = '',
@@ -32,6 +33,7 @@
 	}: {
 		bonuses: AccountBonus[];
 		onupdated: (bonus: AccountBonus) => void;
+		onedit: (bonus: AccountBonus) => void;
 		tracking?: Record<string, BonusChurnAutomationResult>;
 		loading?: boolean;
 		error?: string;
@@ -367,7 +369,6 @@
 <section class="churn-panel" aria-labelledby="churn-title">
 	<div class="churn-heading">
 		<div>
-			<p class="finance-kicker">Plan your next round</p>
 			<h2 id="churn-title">When can I earn it again?</h2>
 			<p>Repeat-bonus timing from your accounts, saved offers, and posted activity.</p>
 		</div>
@@ -381,6 +382,9 @@
 	{#if trackingError}<p class="churn-error" role="status">
 			{trackingError}
 		</p>{/if}
+	{#if rows.length === 0}
+		<p class="churn-loading">Add a past account to track when you can earn its bonus again.</p>
+	{/if}
 	<div class="churn-rows">
 		{#each rows as { bonus, result } (bonus.id)}
 			<div class="churn-row" class:ready={result.tracker.status === 'ready'}>
@@ -505,6 +509,18 @@
 					Activity checked {checkedLabel(editingResult.checkedAt)}
 				</p>{/if}
 		</div>
+	{/if}
+	{#if editing}
+		<button
+			class="finance-button secondary"
+			type="button"
+			disabled={busy}
+			onclick={() => {
+				const bonus = editing;
+				close();
+				if (bonus) onedit(bonus);
+			}}>Edit bonus record</button
+		>
 	{/if}
 	<details class="churn-corrections" bind:open={correctionsOpen}>
 		<summary>Correct dates or override rule</summary>
