@@ -151,17 +151,27 @@ function contentHash(snapshot: EmergencySnapshot): string {
 
 function comparableSnapshotContent(snapshot: EmergencySnapshot): string {
 	// These bookkeeping timestamps are not used by the saved-finances view.
-	// Keep them in the stored integrity hash, but do not upload for them alone.
+	// Compare records by identity so tied display ordering does not cause uploads.
+	// The stored snapshot and its integrity hash keep their original values and order.
 	return JSON.stringify({
 		...snapshot,
 		capturedAt: undefined,
-		cards: snapshot.cards.map((card) => ({ ...card, updatedAt: undefined })),
-		accounts: snapshot.accounts.map((account) => ({
-			...account,
-			updatedAt: undefined,
-			estimatedHistoryUpdatedAt: undefined
-		})),
-		bonuses: snapshot.bonuses.map((bonus) => ({ ...bonus, updatedAt: undefined }))
+		cards: snapshot.cards
+			.map((card) => ({ ...card, updatedAt: undefined }))
+			.sort((left, right) => left.id.localeCompare(right.id)),
+		accounts: snapshot.accounts
+			.map((account) => ({
+				...account,
+				updatedAt: undefined,
+				estimatedHistoryUpdatedAt: undefined
+			}))
+			.sort((left, right) => left.id.localeCompare(right.id)),
+		bonuses: snapshot.bonuses
+			.map((bonus) => ({ ...bonus, updatedAt: undefined }))
+			.sort((left, right) => left.id.localeCompare(right.id)),
+		activity: snapshot.activity.toSorted(
+			(left, right) => left.kind.localeCompare(right.kind) || left.id.localeCompare(right.id)
+		)
 	});
 }
 

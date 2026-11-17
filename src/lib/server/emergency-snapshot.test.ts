@@ -256,6 +256,74 @@ describe.sequential('independent financial snapshots', () => {
 		);
 	});
 
+	it('ignores tied display-order changes while retaining financial edits, sync times, and removals', async () => {
+		const secondCardId = '84d723ca-119b-4e1b-8a13-e69bd445908b';
+		const secondAccountId = 'bc19068d-4c97-4d7e-b8ae-620ed70a9b3e';
+		const secondBonusId = 'f5325e54-4396-4e1f-bb21-21ec338b393e';
+		const history = transactionHistory(1);
+		const original = [
+			{
+				...row(secondCardId, cardPayload({ last4: '4321', transactionHistory: history }), 'plaid'),
+				external_account_ref: Buffer.alloc(32, 8).toString('base64url')
+			},
+			row(CARD_ID, cardPayload({ transactionHistory: history }), 'plaid'),
+			row(secondAccountId, accountPayload({ transactionHistory: history }), 'plaid'),
+			row(ACCOUNT_ID, accountPayload({ transactionHistory: history }), 'plaid'),
+			row(secondBonusId, { ...bonusPayload(), name: 'Another bonus' }),
+			row(BONUS_ID, bonusPayload())
+		];
+		await publish(original);
+		const firstSnapshot = await readEmergencySnapshot(FIRST_TENANT);
+		expect(firstSnapshot?.cards.map(({ id }) => id)).toEqual([secondCardId, CARD_ID]);
+		expect(firstSnapshot?.accounts.map(({ id }) => id)).toEqual([secondAccountId, ACCOUNT_ID]);
+		expect(firstSnapshot?.bonuses.map(({ id }) => id)).toEqual([secondBonusId, BONUS_ID]);
+		expect(firstSnapshot?.activity.map(({ id }) => id)).toEqual([
+			secondCardId,
+			CARD_ID,
+			secondAccountId,
+			ACCOUNT_ID
+		]);
+
+		const reordered = original.toReversed();
+		await publish(reordered, NOW + 1000);
+		expect(store.write).toHaveBeenCalledTimes(1);
+		expect(await readEmergencySnapshot(FIRST_TENANT)).toEqual(firstSnapshot);
+
+		const changed = reordered.map((record) =>
+			record.id === CARD_ID
+				? row(
+						CARD_ID,
+						cardPayload({ currentBalanceCents: 29000, transactionHistory: history }),
+						'plaid'
+					)
+				: record
+		);
+		await publish(changed, NOW + 2000);
+		expect(store.write).toHaveBeenCalledTimes(2);
+		const changedSnapshot = await readEmergencySnapshot(FIRST_TENANT);
+		expect(changedSnapshot?.cards.map(({ id }) => id)).toEqual([CARD_ID, secondCardId]);
+		expect(changedSnapshot?.cards[0].currentBalanceCents).toBe(29000);
+
+		const syncedAt = new Date(NOW + 3000).toISOString();
+		const synced = changed.map((record) =>
+			record.id === CARD_ID ? { ...record, last_synced_at: syncedAt } : record
+		);
+		await publish(synced, NOW + 4000);
+		expect(store.write).toHaveBeenCalledTimes(3);
+		const syncedSnapshot = await readEmergencySnapshot(FIRST_TENANT);
+		expect(syncedSnapshot?.cards[0].lastSyncedAt).toBe(syncedAt);
+		expect(syncedSnapshot?.activity.find(({ id }) => id === CARD_ID)?.lastSyncedAt).toBe(syncedAt);
+
+		await publish(
+			synced.filter(({ id }) => id !== secondAccountId),
+			NOW + 5000
+		);
+		expect(store.write).toHaveBeenCalledTimes(4);
+		const finalSnapshot = await readEmergencySnapshot(FIRST_TENANT);
+		expect(finalSnapshot?.accounts.map(({ id }) => id)).toEqual([ACCOUNT_ID]);
+		expect(finalSnapshot?.activity.some(({ id }) => id === secondAccountId)).toBe(false);
+	});
+
 	it('skips bookkeeping-only changes while saving changed investment history and removals', async () => {
 		const history = [
 			{
