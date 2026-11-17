@@ -22,6 +22,7 @@ import { currentTenantId, isTenantId, tenantReference } from './tenant';
 
 const MAX_SNAPSHOT_BYTES = 3_000_000;
 const MAX_PUBLISH_ATTEMPTS = 3;
+const MIN_SNAPSHOT_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const nullableText = z.string().nullable();
 const nullableAmount = z.number().finite().nullable();
 const historyStatus = z.enum(['unknown', 'preparing', 'current', 'historical_complete']);
@@ -276,8 +277,9 @@ export async function publishEmergencySnapshot(
 		const current = await readEmergencyObject<unknown>(key);
 		if (current) {
 			const previous = validateStoredSnapshot(current.value, tenantId);
+			// Recheck the persisted capture after conflicts so every instance shares the limit.
 			if (
-				capturedAt <= Date.parse(previous.snapshot.capturedAt) ||
+				capturedAt - Date.parse(previous.snapshot.capturedAt) < MIN_SNAPSHOT_INTERVAL_MS ||
 				previous.contentHash === value.contentHash ||
 				comparableSnapshotContent(previous.snapshot) === comparableSnapshotContent(snapshot)
 			)

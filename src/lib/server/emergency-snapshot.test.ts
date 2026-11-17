@@ -25,6 +25,7 @@ const CARD_ID = '30000000-0000-4000-8000-000000000003';
 const ACCOUNT_ID = '40000000-0000-4000-8000-000000000004';
 const BONUS_ID = '50000000-0000-4000-8000-000000000005';
 const NOW = Date.parse('2026-10-25T18:00:00.000Z');
+const DAY_MS = 24 * 60 * 60 * 1000;
 const SYNCED_AT = '2026-10-25T17:00:00.000Z';
 
 function row(
@@ -171,7 +172,7 @@ describe.sequential('independent financial snapshots', () => {
 
 	afterEach(() => vi.unstubAllEnvs());
 
-	it('backs up public financial views and only the latest 100 transactions per card or account', async () => {
+	it('saves the first public financial copy immediately with only the latest 100 transactions per account', async () => {
 		const history = transactionHistory();
 		await publish([
 			row(
@@ -215,6 +216,48 @@ describe.sequential('independent financial snapshots', () => {
 		}
 	});
 
+	it('waits 24 hours between captures, including edits and removals, then saves the latest data', async () => {
+		await publish([
+			row(CARD_ID, cardPayload()),
+			row(ACCOUNT_ID, accountPayload()),
+			row(BONUS_ID, bonusPayload())
+		]);
+		const firstSnapshot = await readEmergencySnapshot(FIRST_TENANT);
+		const changed = [row(CARD_ID, cardPayload({ currentBalanceCents: 29000 }))];
+		await publish(changed, NOW + 1000);
+		await publish(changed, NOW + DAY_MS - 1);
+		expect(store.write).toHaveBeenCalledTimes(1);
+		expect(await readEmergencySnapshot(FIRST_TENANT)).toEqual(firstSnapshot);
+
+		await publish([row(CARD_ID, cardPayload({ currentBalanceCents: 31000 }))], NOW + DAY_MS);
+		expect(store.write).toHaveBeenCalledTimes(2);
+		expect(await readEmergencySnapshot(FIRST_TENANT)).toMatchObject({
+			capturedAt: new Date(NOW + DAY_MS).toISOString(),
+			cards: [{ id: CARD_ID, currentBalanceCents: 31000 }],
+			accounts: [],
+			bonuses: []
+		});
+		await publish([row(CARD_ID, cardPayload({ currentBalanceCents: 33000 }))], NOW + DAY_MS + 1);
+		expect(store.write).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not consume the interval when an eligible upload fails', async () => {
+		await publish([row(CARD_ID, cardPayload())]);
+		store.write.mockRejectedValueOnce(new Error('Synthetic storage failure'));
+		await expect(
+			publish([row(CARD_ID, cardPayload({ currentBalanceCents: 29000 }))], NOW + DAY_MS)
+		).rejects.toThrow('Synthetic storage failure');
+		expect((await readEmergencySnapshot(FIRST_TENANT))?.capturedAt).toBe(
+			new Date(NOW).toISOString()
+		);
+		await publish([row(CARD_ID, cardPayload({ currentBalanceCents: 31000 }))], NOW + DAY_MS + 1);
+		expect(store.write).toHaveBeenCalledTimes(3);
+		expect(await readEmergencySnapshot(FIRST_TENANT)).toMatchObject({
+			capturedAt: new Date(NOW + DAY_MS + 1).toISOString(),
+			cards: [{ currentBalanceCents: 31000 }]
+		});
+	});
+
 	it('keeps tenants separate and rejects a snapshot substituted under another tenant key', async () => {
 		const rows = [
 			row(CARD_ID, cardPayload()),
@@ -241,14 +284,14 @@ describe.sequential('independent financial snapshots', () => {
 	it('does not write unchanged reads, but preserves a newer successful sync timestamp', async () => {
 		const original = row(CARD_ID, cardPayload(), 'plaid');
 		await publish([original]);
-		await publish([original], NOW + 1000);
+		await publish([original], NOW + DAY_MS);
 		expect(store.write).toHaveBeenCalledTimes(1);
 		expect((await readEmergencySnapshot(FIRST_TENANT))?.capturedAt).toBe(
 			new Date(NOW).toISOString()
 		);
 		await publish(
 			[{ ...original, last_synced_at: new Date(NOW + 2000).toISOString() }],
-			NOW + 3000
+			NOW + DAY_MS + 3000
 		);
 		expect(store.write).toHaveBeenCalledTimes(2);
 		expect((await readEmergencySnapshot(FIRST_TENANT))?.cards[0].lastSyncedAt).toBe(
@@ -285,7 +328,7 @@ describe.sequential('independent financial snapshots', () => {
 		]);
 
 		const reordered = original.toReversed();
-		await publish(reordered, NOW + 1000);
+		await publish(reordered, NOW + DAY_MS);
 		expect(store.write).toHaveBeenCalledTimes(1);
 		expect(await readEmergencySnapshot(FIRST_TENANT)).toEqual(firstSnapshot);
 
@@ -298,17 +341,17 @@ describe.sequential('independent financial snapshots', () => {
 					)
 				: record
 		);
-		await publish(changed, NOW + 2000);
+		await publish(changed, NOW + DAY_MS + 2000);
 		expect(store.write).toHaveBeenCalledTimes(2);
 		const changedSnapshot = await readEmergencySnapshot(FIRST_TENANT);
 		expect(changedSnapshot?.cards.map(({ id }) => id)).toEqual([CARD_ID, secondCardId]);
 		expect(changedSnapshot?.cards[0].currentBalanceCents).toBe(29000);
 
-		const syncedAt = new Date(NOW + 3000).toISOString();
+		const syncedAt = new Date(NOW + 2 * DAY_MS + 3000).toISOString();
 		const synced = changed.map((record) =>
 			record.id === CARD_ID ? { ...record, last_synced_at: syncedAt } : record
 		);
-		await publish(synced, NOW + 4000);
+		await publish(synced, NOW + 2 * DAY_MS + 4000);
 		expect(store.write).toHaveBeenCalledTimes(3);
 		const syncedSnapshot = await readEmergencySnapshot(FIRST_TENANT);
 		expect(syncedSnapshot?.cards[0].lastSyncedAt).toBe(syncedAt);
@@ -316,7 +359,7 @@ describe.sequential('independent financial snapshots', () => {
 
 		await publish(
 			synced.filter(({ id }) => id !== secondAccountId),
-			NOW + 5000
+			NOW + 3 * DAY_MS + 5000
 		);
 		expect(store.write).toHaveBeenCalledTimes(4);
 		const finalSnapshot = await readEmergencySnapshot(FIRST_TENANT);
@@ -362,7 +405,7 @@ describe.sequential('independent financial snapshots', () => {
 			...record,
 			updated_at: updatedAt
 		}));
-		await publish(unchanged, NOW + 2000);
+		await publish(unchanged, NOW + DAY_MS);
 		expect(store.write).toHaveBeenCalledTimes(1);
 		expect(await readEmergencySnapshot(FIRST_TENANT)).toEqual(firstSnapshot);
 
@@ -376,13 +419,13 @@ describe.sequential('independent financial snapshots', () => {
 			}),
 			'plaid'
 		);
-		await publish([unchanged[0], changed, unchanged[2]], NOW + 3000);
+		await publish([unchanged[0], changed, unchanged[2]], NOW + DAY_MS + 3000);
 		expect(store.write).toHaveBeenCalledTimes(2);
 		expect((await readEmergencySnapshot(FIRST_TENANT))?.accounts[0].balanceHistory).toEqual(
 			changedHistory
 		);
 
-		await publish([unchanged[0], unchanged[2]], NOW + 4000);
+		await publish([unchanged[0], unchanged[2]], NOW + 2 * DAY_MS + 4000);
 		expect(store.write).toHaveBeenCalledTimes(3);
 		expect((await readEmergencySnapshot(FIRST_TENANT))?.accounts).toEqual([]);
 	});
@@ -414,14 +457,38 @@ describe.sequential('independent financial snapshots', () => {
 	it('never replaces a newer capture, including after a concurrent CAS conflict', async () => {
 		await publish([row(CARD_ID, cardPayload())]);
 		store.write.mockImplementationOnce(async () => {
-			await publish([row(CARD_ID, cardPayload({ currentBalanceCents: 30000 }))], NOW + 3000);
+			await publish(
+				[row(CARD_ID, cardPayload({ currentBalanceCents: 30000 }))],
+				NOW + DAY_MS + 3000
+			);
 			throw new AppError('EMERGENCY_CONFLICT', 'The emergency record changed.', 409);
 		});
-		await publish([row(CARD_ID, cardPayload({ currentBalanceCents: 20000 }))], NOW + 2000);
-		await publish([row(CARD_ID, cardPayload({ currentBalanceCents: 10000 }))], NOW + 3000);
+		await publish([row(CARD_ID, cardPayload({ currentBalanceCents: 20000 }))], NOW + DAY_MS + 2000);
+		await publish([row(CARD_ID, cardPayload({ currentBalanceCents: 10000 }))], NOW + DAY_MS + 3000);
 		expect(store.write).toHaveBeenCalledTimes(3);
 		expect(await readEmergencySnapshot(FIRST_TENANT)).toMatchObject({
-			capturedAt: new Date(NOW + 3000).toISOString(),
+			capturedAt: new Date(NOW + DAY_MS + 3000).toISOString(),
+			cards: [{ currentBalanceCents: 30000 }]
+		});
+	});
+
+	it('rechecks the persisted interval when a different instance wins a CAS race', async () => {
+		await publish([row(CARD_ID, cardPayload())]);
+		vi.resetModules();
+		const otherInstance = await import('./emergency-snapshot');
+		const otherTenant = await import('./tenant');
+		const winner = [row(CARD_ID, cardPayload({ currentBalanceCents: 30000 }))];
+		store.write.mockImplementationOnce(async () => {
+			await otherTenant.runAsTenant(FIRST_TENANT, () =>
+				otherInstance.publishEmergencySnapshot(winner, NOW + DAY_MS)
+			);
+			throw new AppError('EMERGENCY_CONFLICT', 'The emergency record changed.', 409);
+		});
+		// This capture is newer than the winner, but still inside its 24-hour window.
+		await publish([row(CARD_ID, cardPayload({ currentBalanceCents: 20000 }))], NOW + DAY_MS + 1000);
+		expect(store.write).toHaveBeenCalledTimes(3);
+		expect(await readEmergencySnapshot(FIRST_TENANT)).toMatchObject({
+			capturedAt: new Date(NOW + DAY_MS).toISOString(),
 			cards: [{ currentBalanceCents: 30000 }]
 		});
 	});
@@ -432,7 +499,7 @@ describe.sequential('independent financial snapshots', () => {
 			new AppError('EMERGENCY_CONFLICT', 'The emergency record changed.', 409)
 		);
 		await expect(
-			publish([row(CARD_ID, cardPayload({ currentBalanceCents: 1 }))], NOW + 1000)
+			publish([row(CARD_ID, cardPayload({ currentBalanceCents: 1 }))], NOW + DAY_MS)
 		).rejects.toMatchObject({ code: 'EMERGENCY_CONFLICT' });
 		expect(store.write).toHaveBeenCalledTimes(4);
 		expect((await readEmergencySnapshot(FIRST_TENANT))?.cards[0].currentBalanceCents).toBe(28000);
@@ -441,12 +508,12 @@ describe.sequential('independent financial snapshots', () => {
 	it('does not resurrect a deleted record when an older capture finishes late', async () => {
 		await publish([row(CARD_ID, cardPayload())]);
 		store.write.mockImplementationOnce(async () => {
-			await publish([], NOW + 3000);
+			await publish([], NOW + DAY_MS + 3000);
 			throw new AppError('EMERGENCY_CONFLICT', 'The emergency record changed.', 409);
 		});
-		await publish([row(CARD_ID, cardPayload({ currentBalanceCents: 20000 }))], NOW + 2000);
+		await publish([row(CARD_ID, cardPayload({ currentBalanceCents: 20000 }))], NOW + DAY_MS + 2000);
 		expect(await readEmergencySnapshot(FIRST_TENANT)).toMatchObject({
-			capturedAt: new Date(NOW + 3000).toISOString(),
+			capturedAt: new Date(NOW + DAY_MS + 3000).toISOString(),
 			cards: [],
 			accounts: [],
 			bonuses: [],

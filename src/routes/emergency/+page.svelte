@@ -245,6 +245,7 @@
 			{:else}
 				<p>Open your last saved copy when the live dashboard is unavailable.</p>
 			{/if}
+			<p>New copies are saved at most once every 24 hours.</p>
 		</div>
 
 		{#if error}<p class="error" role="alert">{error}</p>{/if}
