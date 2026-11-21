@@ -284,6 +284,7 @@ describe.sequential('Plaid transaction history', () => {
 	});
 
 	afterEach(() => {
+		vi.useRealTimers();
 		closeDatabaseForTests();
 		resetCryptoStateForTests();
 		resetPlaidClientForTests();
@@ -2072,6 +2073,8 @@ describe.sequential('Plaid transaction history', () => {
 	});
 
 	it('imports encrypted brokerage trades from Plaid investment activity', async () => {
+		vi.useFakeTimers({ toFake: ['Date'] });
+		vi.setSystemTime(new Date('2026-08-29T12:00:00.000Z'));
 		const itemId = await savePlaidItem(
 			'provider-item-investment-history',
 			'test-access-value',
@@ -2162,6 +2165,13 @@ describe.sequential('Plaid transaction history', () => {
 			transactionHistoryStatus: 'historical_complete'
 		});
 		const activity = await listFinancialAccountTransactions(brokerage.id);
+		expect(activity).toMatchObject({
+			coverageStartDate: '2024-08-29',
+			historySyncedAt: '2026-08-29T12:00:00.000Z'
+		});
+		expect((await listFinancialAccountTransactions(brokerage.id, 1)).coverageStartDate).toBe(
+			'2026-08-27'
+		);
 		expect(activity.transactions).toMatchObject([
 			{
 				name: 'Buy Example Equity',
@@ -2187,6 +2197,27 @@ describe.sequential('Plaid transaction history', () => {
 		);
 		expect(encryptedRows).not.toContain('Buy Example Equity');
 		expect(encryptedRows).not.toContain('EXMPL');
+
+		vi.setSystemTime(new Date('2026-08-30T12:00:00.000Z'));
+		plaidMocks.investmentsTransactionsGet.mockRejectedValueOnce({
+			response: { data: { error_code: 'PRODUCT_NOT_READY' } }
+		});
+		await syncPlaidItem(itemId);
+		expect(await listFinancialAccountTransactions(brokerage.id)).toMatchObject({
+			lastSyncedAt: '2026-08-30T12:00:00.000Z',
+			historySyncedAt: activity.historySyncedAt,
+			coverageStartDate: activity.coverageStartDate
+		});
+
+		plaidMocks.investmentsTransactionsGet.mockResolvedValueOnce({
+			data: { investment_transactions: [], securities: [], total_investment_transactions: 5 }
+		});
+		await syncPlaidItem(itemId);
+		expect(await listFinancialAccountTransactions(brokerage.id)).toMatchObject({
+			historySyncedAt: '2026-08-30T12:00:00.000Z',
+			coverageStartDate: null,
+			status: 'current'
+		});
 	});
 
 	it('keeps the cards available while Plaid prepares the first transaction sync', async () => {

@@ -3,6 +3,10 @@ import {
 	type BonusChurnActivity,
 	type BonusChurnAutomationResult
 } from '#lib/bonus-churn-automatic.ts';
+import { getBonusChurnToday } from '#lib/bonus-churn.ts';
+import { buildBonusOfferDraft, resolveBonusOffer } from '#lib/bonus-offers.ts';
+import { calculateEtradeFunding } from '#lib/etrade-funding.ts';
+import type { AccountBonus, FinancialAccount } from '#lib/types.ts';
 import { cardsFromRows, cardTransactionsFromRow } from './cards';
 import {
 	bonusesFromRows,
@@ -15,6 +19,45 @@ import { listRecordRows } from './record-rows';
 // maintain this data; viewing or polling tracking must not request a bank refresh.
 const HISTORY_LIMIT = 10_000;
 
+type History = Pick<BonusChurnActivity, 'transactions' | 'activityState' | 'lastSyncedAt'> & {
+	coverageStartDate?: string | null;
+	historySyncedAt?: string | null;
+};
+
+function fundingFor(
+	bonus: AccountBonus,
+	account: FinancialAccount | null,
+	history: History,
+	today: string
+) {
+	const offer = resolveBonusOffer(bonus, account);
+	if (offer?.activityMode !== 'funding' || !account || !bonus.openedDate) return {};
+	const start = bonus.openedDate;
+	const deadline =
+		bonus.requirementDeadline ?? buildBonusOfferDraft(offer, start)?.requirementDeadline;
+	const asOf = history.historySyncedAt ?? null;
+	const syncedDay = asOf ? getBonusChurnToday(new Date(asOf)) : null;
+	const incomplete =
+		history.activityState !== 'available' ||
+		!history.coverageStartDate ||
+		history.coverageStartDate > start;
+	if (
+		incomplete ||
+		!deadline ||
+		!syncedDay ||
+		syncedDay < start ||
+		today < start ||
+		account.currency !== bonus.currency
+	) {
+		return { funding: null, fundingSyncedAt: asOf };
+	}
+	const through = [today, syncedDay, deadline].sort()[0];
+	return {
+		funding: calculateEtradeFunding(history.transactions, start, through, bonus.currency),
+		fundingSyncedAt: asOf
+	};
+}
+
 export async function listAutomaticBonusTracking(): Promise<
 	Record<string, BonusChurnAutomationResult>
 > {
@@ -25,8 +68,8 @@ export async function listAutomaticBonusTracking(): Promise<
 	const rowsById = new Map(rows.map((row) => [row.id, row]));
 	const accountsById = new Map(accounts.map((account) => [account.id, account]));
 	const cardsById = new Map(cards.map((card) => [card.id, card]));
-	type History = Pick<BonusChurnActivity, 'transactions' | 'activityState' | 'lastSyncedAt'>;
 	const histories = new Map<string, Promise<History>>();
+	const today = getBonusChurnToday();
 
 	const resolved = await Promise.all(
 		bonuses.map(async (bonus) => {
@@ -50,12 +93,11 @@ export async function listAutomaticBonusTracking(): Promise<
 								? financialAccountTransactionsFromRow(row, HISTORY_LIMIT)
 								: cardTransactionsFromRow(row, HISTORY_LIMIT);
 							return {
-								transactions: result.transactions,
+								...result,
 								activityState:
 									result.status === 'current' || result.status === 'historical_complete'
 										? 'available'
-										: 'unavailable',
-								lastSyncedAt: result.lastSyncedAt
+										: 'unavailable'
 							};
 						} catch {
 							return { transactions: [], activityState: 'unavailable', lastSyncedAt: null };
@@ -82,7 +124,13 @@ export async function listAutomaticBonusTracking(): Promise<
 						)
 					: null;
 			const claimedTransactionId = result.payoutTransactionId ?? savedPayment?.payoutTransactionId;
-			return { bonus, activity, result, claimedTransactionId };
+			return {
+				bonus,
+				activity,
+				result,
+				claimedTransactionId,
+				funding: fundingFor(bonus, account, history, today)
+			};
 		})
 	);
 	// A single posted credit cannot establish payment for two different saved offers.
@@ -93,11 +141,14 @@ export async function listAutomaticBonusTracking(): Promise<
 		}
 	}
 	return Object.fromEntries(
-		resolved.map(({ bonus, activity, result }) => [
+		resolved.map(({ bonus, activity, result, funding }) => [
 			bonus.id,
-			result.payoutTransactionId && (claimed.get(result.payoutTransactionId) ?? 0) > 1
-				? resolveAutomaticBonusChurn(bonus, { ...activity, payoutAmbiguous: true })
-				: result
+			{
+				...(result.payoutTransactionId && (claimed.get(result.payoutTransactionId) ?? 0) > 1
+					? resolveAutomaticBonusChurn(bonus, { ...activity, payoutAmbiguous: true })
+					: result),
+				...funding
+			}
 		])
 	);
 }

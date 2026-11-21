@@ -696,6 +696,7 @@ async function fetchInvestmentTransactionHistory(
 	const startDate = start.toISOString().slice(0, 10);
 	const transactions: InvestmentTransaction[] = [];
 	const securities = new Map<string, Security>();
+	let allPagesReceived = false;
 
 	for (let offset = 0; offset < MAX_STORED_INVESTMENT_TRANSACTIONS_PER_ACCOUNT; offset += 500) {
 		const response = await client.investmentsTransactionsGet({
@@ -708,34 +709,56 @@ async function fetchInvestmentTransactionHistory(
 		for (const security of response.data.securities ?? []) {
 			securities.set(security.security_id, security);
 		}
-		if (transactions.length >= response.data.total_investment_transactions) break;
+		if (transactions.length >= response.data.total_investment_transactions) {
+			allPagesReceived = true;
+			break;
+		}
+		if (response.data.investment_transactions.length < 500) break;
 	}
 
 	const byAccountId = new Map<string, StoredFinancialTransaction[]>();
+	const incompleteAccounts = new Set<string>();
+	const seenIds = new Set<string>();
 	for (const transaction of transactions) {
 		const accountId = safeText(transaction.account_id, 256);
 		const snapshot = investmentTransactionSnapshot(
 			transaction,
 			transaction.security_id ? securities.get(transaction.security_id) : undefined
 		);
-		if (!accountId || !snapshot) continue;
+		if (!accountId) {
+			allPagesReceived = false;
+			continue;
+		}
+		if (!snapshot) {
+			incompleteAccounts.add(accountId);
+			continue;
+		}
+		if (seenIds.has(snapshot.transactionId)) {
+			// A changing result set may repeat one row while skipping another account's row.
+			allPagesReceived = false;
+			continue;
+		}
+		seenIds.add(snapshot.transactionId);
 		const accountTransactions = byAccountId.get(accountId) ?? [];
 		if (accountTransactions.length < MAX_STORED_INVESTMENT_TRANSACTIONS_PER_ACCOUNT) {
 			accountTransactions.push(snapshot);
 			byAccountId.set(accountId, accountTransactions);
-		}
+		} else incompleteAccounts.add(accountId);
 	}
 
 	return new Map(
 		accountIds.map((accountId) => {
 			const reference = providerAccountReference('plaid', accountId, 'account');
+			const complete = allPagesReceived && !incompleteAccounts.has(accountId);
 			return [
 				accountId,
 				{
 					enabled: true,
 					accountReference: reference,
 					cursor: null,
-					status: 'historical_complete',
+					status: complete ? 'historical_complete' : 'current',
+					coverageStartDate: complete ? startDate : null,
+					historySyncedAt: end.toISOString(),
 					transactions: (byAccountId.get(accountId) ?? []).sort((left, right) =>
 						right.date.localeCompare(left.date)
 					)

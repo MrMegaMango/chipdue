@@ -124,6 +124,8 @@ export interface StoredTransactionHistory {
 	accountReference?: string;
 	cursor: string | null;
 	status: TransactionHistoryStatus;
+	coverageStartDate?: string | null;
+	historySyncedAt?: string;
 	transactions: StoredFinancialTransaction[];
 }
 

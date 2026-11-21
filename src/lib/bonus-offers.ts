@@ -1,4 +1,5 @@
 import type { AccountBonus, FinancialAccount, FinancialAccountTransaction } from '#lib/types.ts';
+import type { EtradeFunding } from './etrade-funding.ts';
 
 export type BonusTransactionRule =
 	| 'balance-only'
@@ -7,7 +8,7 @@ export type BonusTransactionRule =
 	| 'wells-fargo-business'
 	| 'us-bank-business';
 
-export type BonusActivityMode = 'none' | 'qualifying' | 'recent';
+export type BonusActivityMode = 'none' | 'qualifying' | 'recent' | 'funding';
 
 export interface BonusOfferTier {
 	thresholdCents: number;
@@ -65,6 +66,7 @@ export interface BonusTracker {
 	offer: BonusOfferTemplate;
 	account: FinancialAccount;
 	balanceCents: number | null;
+	funding: EtradeFunding | null;
 	currentTier: BonusOfferTier | null;
 	nextTier: BonusOfferTier | null;
 	amountToNextTierCents: number | null;
@@ -414,7 +416,7 @@ export const BONUS_OFFER_CATALOG: BonusOfferTemplate[] = [
 		qualificationDay: 61,
 		transactionTarget: 0,
 		transactionRule: 'recent-posted',
-		activityMode: 'recent',
+		activityMode: 'funding',
 		qualificationLabel: 'Funding period ends',
 		payoutRule: 'qualification-plus-7-business-days',
 		safeToCloseRule: 'qualification-plus-1-year-plus-1',
@@ -422,7 +424,7 @@ export const BONUS_OFFER_CATALOG: BonusOfferTemplate[] = [
 		notes:
 			'This targeted offer applies to an existing E*TRADE self-directed, non-retirement brokerage account. Eligible deposits are new cash or securities transferred from outside E*TRADE and Morgan Stanley within 60 days of enrollment, aggregated across eligible linked brokerage accounts. Bank, retirement, advisory, futures, Morgan Stanley AAA, business, and other excluded accounts do not count. Qualifying assets must remain at E*TRADE for 12 months after the funding period, except for trading losses; removing deposits or cash can reduce or forfeit the reward. The original recipient requirement and other limitations still apply.',
 		activityNote:
-			'Recent posted investment activity is shown for review only. Confirm external funding and the 12-month asset hold directly with E*TRADE; synced activity cannot prove the source of assets or continuous retention.'
+			'ChipDue estimates net new funding from posted transfers. E*TRADE determines eligibility, including the source of funds and the 12-month holding period.'
 	}
 ];
 
@@ -654,7 +656,8 @@ export function resolveBonusOffer(
 export function buildBonusTracker(
 	bonus: AccountBonus,
 	account: FinancialAccount | null,
-	transactions: FinancialAccountTransaction[]
+	transactions: FinancialAccountTransaction[] | null,
+	fundingSummary: EtradeFunding | null = null
 ): BonusTracker | null {
 	if (!account || !bonus.openedDate) return null;
 	const offer = resolveBonusOffer(bonus, account);
@@ -662,14 +665,17 @@ export function buildBonusTracker(
 	const draft = buildBonusOfferDraft(offer, bonus.openedDate);
 	if (!draft) return null;
 	const balanceCents = account.currentBalanceCents;
+	const funding = offer.activityMode === 'funding' ? fundingSummary : null;
+	const progressCents =
+		offer.activityMode === 'funding' ? (funding?.netCents ?? null) : balanceCents;
 	const currentTier =
-		balanceCents === null
+		progressCents === null
 			? null
-			: (offer.tiers.filter((tier) => balanceCents >= tier.thresholdCents).at(-1) ?? null);
+			: (offer.tiers.filter((tier) => progressCents >= tier.thresholdCents).at(-1) ?? null);
 	const nextTier =
-		balanceCents === null
+		progressCents === null
 			? offer.tiers[0]
-			: (offer.tiers.find((tier) => balanceCents < tier.thresholdCents) ?? null);
+			: (offer.tiers.find((tier) => progressCents < tier.thresholdCents) ?? null);
 	const qualificationDeadline = bonus.requirementDeadline ?? draft.requirementDeadline;
 	const classifier =
 		offer.transactionRule === 'balance-only'
@@ -685,18 +691,24 @@ export function buildBonusTracker(
 		offer,
 		account,
 		balanceCents,
+		funding,
 		currentTier,
 		nextTier,
 		amountToNextTierCents:
-			nextTier && balanceCents !== null
-				? Math.max(0, nextTier.thresholdCents - balanceCents)
-				: (nextTier?.thresholdCents ?? null),
+			nextTier && progressCents !== null
+				? Math.max(0, nextTier.thresholdCents - progressCents)
+				: offer.activityMode === 'funding'
+					? null
+					: (nextTier?.thresholdCents ?? null),
 		fundingDeadline: dayOfOffer(bonus.openedDate, offer.fundingDay),
 		qualificationDeadline,
 		latestPayoutDate: bonus.expectedPayoutDate ?? draft.expectedPayoutDate,
 		safeToCloseDate: bonus.safeToCloseDate ?? draft.safeToCloseDate,
-		likelyQualifyingTransactions: transactions.filter((transaction) =>
-			classifier(transaction, bonus.openedDate!, qualificationDeadline)
-		)
+		likelyQualifyingTransactions:
+			offer.activityMode === 'funding'
+				? []
+				: (transactions ?? []).filter((transaction) =>
+						classifier(transaction, bonus.openedDate!, qualificationDeadline)
+					)
 	};
 }

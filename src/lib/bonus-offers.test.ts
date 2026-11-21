@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AccountBonus, FinancialAccount, FinancialAccountTransaction } from '#lib/types.ts';
+import { calculateEtradeFunding } from './etrade-funding';
 import {
 	buildBonusOfferDraft,
 	buildBonusTracker,
@@ -259,7 +260,7 @@ describe('versioned bonus offer catalog', () => {
 		});
 	});
 
-	it('tracks the targeted E*TRADE brokerage offer with recent posted activity', () => {
+	it('tracks the targeted E*TRADE brokerage tier from funding instead of the account balance', () => {
 		const etradeAccount: FinancialAccount = {
 			...account,
 			institution: 'E*TRADE',
@@ -306,31 +307,144 @@ describe('versioned bonus offer catalog', () => {
 			expectedPayoutDate: draft!.expectedPayoutDate,
 			safeToCloseDate: draft!.safeToCloseDate
 		};
-		const tracker = buildBonusTracker(etradeBonus, etradeAccount, [
+		const transactions = [
 			transaction({
-				name: 'Cash contribution',
+				name: 'ACH deposit',
 				merchantName: null,
 				amountCents: -10_000_000,
 				date: '2026-08-20',
-				categoryPrimary: 'INVESTMENT'
+				categoryPrimary: 'INVESTMENT',
+				categoryDetailed: 'transfer: transfer'
 			}),
 			transaction({ name: 'Security purchase', date: '2026-11-02' }),
 			transaction({ name: 'Before enrollment', date: '2026-08-18' }),
 			transaction({ name: 'Pending trade', pending: true })
-		]);
+		];
+		expect(buildBonusTracker(etradeBonus, etradeAccount, transactions)).toMatchObject({
+			currentTier: null,
+			funding: null,
+			amountToNextTierCents: null
+		});
+		const tracker = buildBonusTracker(
+			etradeBonus,
+			etradeAccount,
+			null,
+			calculateEtradeFunding(transactions, '2026-08-19', '2026-10-18', 'USD')
+		);
 		expect(tracker).toMatchObject({
 			currentTier: { thresholdCents: 10_000_000, rewardCents: 62_500 },
 			nextTier: { thresholdCents: 20_000_000, rewardCents: 100_000 },
+			amountToNextTierCents: 10_000_000,
+			funding: { netCents: 10_000_000 },
 			fundingDeadline: '2026-10-18',
 			latestPayoutDate: '2026-10-27',
 			safeToCloseDate: '2027-10-19',
-			offer: { activityMode: 'recent', startDateLabel: 'Offer enrolled' }
+			offer: { activityMode: 'funding', startDateLabel: 'Offer enrolled' }
 		});
-		expect(tracker?.likelyQualifyingTransactions).toHaveLength(2);
+		expect(tracker?.likelyQualifyingTransactions).toHaveLength(0);
 	});
 });
 
 describe('conservative posted-activity classifiers', () => {
+	it('nets distinct posted E*TRADE transfers within the inclusive funding window', () => {
+		const transfer = transaction({
+			name: 'ACH DEPOSIT REFID: example;',
+			date: '2026-08-19',
+			amountCents: -4_000,
+			categoryPrimary: 'INVESTMENT',
+			categoryDetailed: 'transfer: transfer'
+		});
+		const withdrawal = transaction({
+			...transfer,
+			id: 'withdraw',
+			name: 'ACH WITHDRAWL REFID: sample;',
+			date: '2026-10-18',
+			amountCents: 400
+		});
+		const feed = [
+			{ ...transfer, pending: true },
+			transfer,
+			transfer,
+			{ ...transfer, id: 'another-posted-transfer' },
+			withdrawal,
+			{ ...transfer, id: 'before', date: '2026-08-18' },
+			{ ...transfer, id: 'after', date: '2026-10-19' },
+			{ ...transfer, id: 'pending', pending: true },
+			{ ...transfer, id: 'scheduled', name: 'ACH deposit scheduled' },
+			{
+				...transfer,
+				id: 'promotion',
+				name: 'Customer Promotion',
+				categoryDetailed: 'cash: deposit'
+			},
+			{ ...transfer, id: 'buy', name: 'ACATS Corp', categoryDetailed: 'buy: buy' },
+			{ ...transfer, id: 'dividend', name: 'ETF dividend', categoryDetailed: 'cash: dividend' },
+			{ ...transfer, id: 'fee', name: 'Outgoing wire fee' },
+			{ ...transfer, id: 'affiliate', name: 'ACH from Morgan Stanley' },
+			{ ...transfer, id: 'internal', name: 'E*TRADE internal deposit' },
+			{ ...transfer, id: 'sweep', name: 'MSPBNA', categoryDetailed: 'cash: deposit' },
+			{
+				...transfer,
+				id: 'sweep-security',
+				investmentDetails: {
+					type: 'cash',
+					subtype: 'deposit',
+					tickerSymbol: 'QACDS',
+					securityName: 'Cash sweep',
+					feesCents: null,
+					quantity: 0,
+					priceMicros: 0
+				}
+			},
+			{
+				...transfer,
+				id: 'dividend-as-deposit',
+				name: 'ETF',
+				investmentDetails: {
+					type: 'cash',
+					subtype: 'deposit',
+					tickerSymbol: 'ETF',
+					securityName: 'Example ETF',
+					feesCents: null,
+					quantity: 0,
+					priceMicros: 0
+				}
+			}
+		];
+		expect(calculateEtradeFunding(feed, '2026-08-19', '2026-10-18', 'USD')).toEqual({
+			depositsCents: 8_000,
+			withdrawalsCents: 400,
+			netCents: 7_600,
+			reviewCount: 0
+		});
+		expect(calculateEtradeFunding([withdrawal], '2026-08-19', '2026-10-18', 'USD').netCents).toBe(
+			-400
+		);
+	});
+
+	it('leaves ambiguous counterparties, unvalued securities and foreign currencies for review', () => {
+		const feed = [
+			transaction({ name: 'TRANSFER FROM XXXXXX', amountCents: -100 }),
+			transaction({ name: 'TRANSFER TO XXXXXX', amountCents: 100 }),
+			transaction({ name: 'INCOMING ACATS', amountCents: 0 }),
+			transaction({ name: 'Incoming wire', currency: 'EUR', amountCents: -300 }),
+			transaction({ name: 'Internal transfer to checking', amountCents: 50 }),
+			transaction({ name: 'Incoming ACATS transfer', amountCents: -600 }),
+			transaction({
+				name: 'ACH deposit returned',
+				categoryPrimary: 'INVESTMENT',
+				categoryDetailed: 'cash: adjustment',
+				amountCents: 200
+			})
+		];
+		expect(calculateEtradeFunding(feed, '2026-08-19', '2026-10-18', 'USD')).toEqual({
+			depositsCents: 600,
+			withdrawalsCents: 200,
+			netCents: 400,
+			reviewCount: 5
+		});
+	});
+
 	it('shows any non-pending activity posted since the offer start date', () => {
 		expect(
 			[

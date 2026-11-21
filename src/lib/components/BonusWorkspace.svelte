@@ -69,10 +69,7 @@
 		lastSyncedAt: string | null;
 	};
 	type TransactionRefreshResponse = {
-		availability: 'refreshed' | 'unsupported';
-		syncedAt: string;
-		accountCount: number;
-		transactionCount: number;
+		availability?: 'refreshed' | 'unsupported';
 	};
 	type BonusForm = {
 		offerTemplateId: string;
@@ -472,7 +469,8 @@
 		return buildBonusTracker(
 			bonus,
 			account,
-			account ? (activityByAccount[account.id]?.transactions ?? []) : []
+			account ? (activityByAccount[account.id]?.transactions ?? []) : [],
+			automaticTracking[bonus.id]?.funding ?? null
 		);
 	}
 
@@ -513,7 +511,12 @@
 		loadedBonuses: AccountBonus[],
 		loadedAccounts: FinancialAccount[]
 	): Promise<void> {
-		const linkedIds = new Set(loadedBonuses.map((bonus) => bonus.accountId).filter(Boolean));
+		const linkedIds = new Set(
+			loadedBonuses
+				.filter((bonus) => getBonusOfferTemplate(bonus.offerTemplateId)?.activityMode !== 'funding')
+				.map((bonus) => bonus.accountId)
+				.filter(Boolean)
+		);
 		await Promise.all(
 			loadedAccounts
 				.filter((account) => linkedIds.has(account.id))
@@ -528,14 +531,22 @@
 		syncingAccountId = account.id;
 		activityErrors = { ...activityErrors, [account.id]: '' };
 		try {
+			const funding = offer?.activityMode === 'funding';
 			const refresh = await requestJson<TransactionRefreshResponse>(
-				resolve('/api/connections/[id]/transactions/refresh', { id: account.connectionId }),
+				funding
+					? resolve('/api/connections/[id]/sync', { id: account.connectionId })
+					: resolve('/api/connections/[id]/transactions/refresh', { id: account.connectionId }),
 				{ method: 'POST' }
 			);
 			const response = await requestJson<{ accounts: FinancialAccount[] }>(
 				resolve('/api/accounts')
 			);
 			accounts = response.accounts;
+			if (funding) {
+				await loadAutomaticTracking();
+				if (!automaticTrackingError) showToast('E*TRADE funding activity checked.');
+				return;
+			}
 			void loadAutomaticTracking();
 			const refreshed = response.accounts.find((candidate) => candidate.id === account.id);
 			if (refreshed) await loadAccountActivity(refreshed);
@@ -856,6 +867,12 @@
 					? tracker.safeToCloseDate
 					: null}
 			{@const targetTier = tracker ? targetTierFor(bonus, tracker) : null}
+			{@const tracksFunding = tracker?.offer.activityMode === 'funding'}
+			{@const showFunding = tracksFunding && !payment.paid}
+			{@const displayName =
+				showFunding && targetTier && bonus.name === tracker?.offer.name
+					? `E*TRADE ${formatMoney(targetTier.rewardCents)} brokerage bonus`
+					: bonus.name}
 			{@const amountToTargetCents =
 				tracker && targetTier && tracker.balanceCents !== null
 					? Math.max(0, targetTier.thresholdCents - tracker.balanceCents)
@@ -879,7 +896,7 @@
 						{/if}
 					</span>
 					<div class="bonus-title">
-						<h3>{bonus.name}</h3>
+						<h3>{displayName}</h3>
 						<p>
 							{bonusCard?.nickname ??
 								bonusAccount?.nickname ??
@@ -916,26 +933,111 @@
 							<strong>{formatMoney(payment.paid ? payment.amountCents : bonus.rewardCents)}</strong>
 						</div>
 					</div>
-				{:else}
+				{:else if !showFunding}
 					<div class="finance-card-value">
 						<span>{payment.paid ? 'Received' : 'Bonus value'}</span>
 						<strong>{formatMoney(payment.paid ? payment.amountCents : bonus.rewardCents)}</strong>
 					</div>
 				{/if}
 
-				<div class="bonus-deadline">
-					{#if payment.paid}
-						<span class="finance-pill good">Bonus received</span>
-						<strong>{payment.paidDate ? formatDate(payment.paidDate) : 'Date not recorded'}</strong>
-					{:else}
-						<span class="finance-pill {deadlineTone(bonus.requirementDeadline)}">
-							{deadlineLabel(bonus.requirementDeadline)}
-						</span>
-						<strong>{formatDate(bonus.requirementDeadline)}</strong>
-					{/if}
-				</div>
-
-				{#if tracker && !payment.paid}
+				{#if !showFunding}
+					<div class="bonus-deadline">
+						{#if payment.paid}
+							<span class="finance-pill good">Bonus received</span>
+							<strong
+								>{payment.paidDate ? formatDate(payment.paidDate) : 'Date not recorded'}</strong
+							>
+						{:else}
+							<span class="finance-pill {deadlineTone(bonus.requirementDeadline)}">
+								{deadlineLabel(bonus.requirementDeadline)}
+							</span>
+							<strong>{formatDate(bonus.requirementDeadline)}</strong>
+						{/if}
+					</div>
+				{/if}
+				{#if tracker && showFunding && targetTier}
+					{@const funding = tracker.funding}
+					<section class="linked-tracker funding-tracker" aria-label="E*TRADE funding progress">
+						<header class="tracker-heading">
+							<div>
+								<span>Net new money</span>
+								<strong>
+									{funding ? formatMoney(funding.netCents) : '—'}
+									<small>of {formatMoney(targetTier.thresholdCents)}</small>
+								</strong>
+							</div>
+							<div class="funding-deadline">
+								<span>Fund by</span>
+								<time datetime={tracker.fundingDeadline ?? undefined}
+									>{formatDate(tracker.fundingDeadline)}</time
+								>
+							</div>
+						</header>
+						{#if funding}
+							<progress
+								class="balance-progress"
+								max={targetTier.thresholdCents}
+								value={Math.max(0, funding.netCents)}
+								aria-label="Net new money toward the funding target"
+								aria-valuetext={`${formatMoney(funding.netCents)} of ${formatMoney(targetTier.thresholdCents)}`}
+							></progress>
+							<p class="funding-status">
+								{#if funding.netCents < targetTier.thresholdCents}
+									<strong>{formatMoney(targetTier.thresholdCents - funding.netCents)} to go</strong>
+								{:else if funding.reviewCount}
+									<strong>Review outstanding transfers to confirm the target</strong>
+								{:else}
+									<strong>Funding target reached in posted activity</strong>
+								{/if}
+								<span
+									>· {formatMoney(funding.depositsCents)} in · {formatMoney(
+										funding.withdrawalsCents
+									)} out</span
+								>
+							</p>
+							{#if funding.reviewCount}
+								<p class="tracker-note">
+									{funding.reviewCount}
+									{funding.reviewCount === 1 ? 'transfer needs' : 'transfers need'} review before inclusion.
+								</p>
+							{/if}
+						{:else}
+							<p class="funding-status" role="status">
+								{automaticTrackingLoading
+									? 'Checking posted transfers…'
+									: 'Funding history unavailable.'}
+							</p>
+						{/if}
+						<p class="tracker-note">
+							Based on posted transfers in this brokerage since {formatDate(bonus.openedDate)}.
+						</p>
+						{#if activityErrors[tracker.account.id] || automaticTrackingError}
+							<p class="tracker-error" role="alert">
+								{activityErrors[tracker.account.id] || automaticTrackingError}
+							</p>
+						{/if}
+						<div class="tracker-actions">
+							{#if tracker.account.connectionId}
+								<button
+									type="button"
+									disabled={syncingAccountId !== null}
+									onclick={() => checkLinkedAccount(bonus)}
+									>{syncingAccountId === tracker.account.id
+										? 'Checking transfers…'
+										: 'Check transfers'}</button
+								>
+								<small
+									><SyncedTime
+										value={automaticTracking[bonus.id]?.fundingSyncedAt}
+										fallback="No funding sync yet"
+									/></small
+								>
+							{:else}
+								<small>Connect this brokerage to track posted transfers.</small>
+							{/if}
+						</div>
+					</section>
+				{:else if tracker && !payment.paid}
 					<section class="linked-tracker" aria-label={`${tracker.offer.institution} offer tracker`}>
 						<header class="tracker-heading">
 							<div>
@@ -1126,23 +1228,40 @@
 				{/if}
 
 				{#if !payment.paid && bonus.requirements.length > 0}
-					<section class="requirement-list" aria-label={`Requirements for ${bonus.name}`}>
-						<div class="requirement-heading">
-							<span>Requirements</span>
-							<strong>{completedCount(bonus)}/{bonus.requirements.length}</strong>
-						</div>
-						{#each bonus.requirements as requirement (requirement.id)}
-							<label class:completed={requirement.completed}>
-								<input
-									type="checkbox"
-									checked={requirement.completed}
-									disabled={requirementBusy !== null}
-									onchange={() => toggleRequirement(bonus, requirement.id)}
-								/>
-								<span>{requirement.label}</span>
-							</label>
-						{/each}
-					</section>
+					{#snippet requirements()}
+						<section class="requirement-list" aria-label={`Requirements for ${bonus.name}`}>
+							<div class="requirement-heading">
+								<span>Requirements</span>
+								<strong>{completedCount(bonus)}/{bonus.requirements.length}</strong>
+							</div>
+							{#each bonus.requirements as requirement (requirement.id)}
+								<label class:completed={requirement.completed}>
+									<input
+										type="checkbox"
+										checked={requirement.completed}
+										disabled={requirementBusy !== null}
+										onchange={() => toggleRequirement(bonus, requirement.id)}
+									/>
+									<span>{requirement.label}</span>
+								</label>
+							{/each}
+						</section>
+					{/snippet}
+					{#if showFunding && tracker}
+						<details class="paid-offer-details">
+							<summary
+								>Offer requirements · {completedCount(bonus)}/{bonus.requirements.length}</summary
+							>
+							{@render requirements()}
+							<p class="tracker-note">
+								<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- Provider terms are an external URL. -->
+								<a href={tracker.offer.sourceUrl} target="_blank" rel="noreferrer">Official terms</a
+								>
+							</p>
+						</details>
+					{:else}
+						{@render requirements()}
+					{/if}
 				{/if}
 
 				{#if bonus.cardId}
@@ -1410,7 +1529,7 @@
 									</option>
 								{/each}
 							</select>
-							<small>Sets the value you plan to earn; all offer tiers stay visible.</small>
+							<small>Sets the reward and deposit amount to track.</small>
 						{:else}
 							<label for="bonus-value">Bonus value</label>
 							<input
@@ -1901,6 +2020,32 @@
 
 	.tracker-heading > div > strong {
 		font-size: 0.82rem;
+	}
+
+	.funding-tracker .tracker-heading strong {
+		font-size: clamp(1.3rem, 3vw, 1.85rem);
+		font-variant-numeric: tabular-nums;
+	}
+
+	.funding-tracker .tracker-heading small,
+	.funding-status,
+	.funding-deadline time {
+		font-size: 0.72rem;
+	}
+
+	.funding-status {
+		margin: 0;
+	}
+
+	.funding-status span,
+	.funding-tracker .tracker-heading small {
+		color: var(--muted);
+		font-weight: 500;
+	}
+
+	.funding-deadline {
+		flex-shrink: 0;
+		text-align: right;
 	}
 
 	.tracker-metrics {

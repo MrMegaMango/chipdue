@@ -151,6 +151,8 @@ const storedTransactionHistorySchema = z.object({
 		.optional(),
 	cursor: z.string().max(256).nullable(),
 	status: transactionHistoryStatusSchema,
+	coverageStartDate: dateSchema.optional(),
+	historySyncedAt: z.iso.datetime().optional(),
 	transactions: z.array(storedTransactionSchema).max(10_000)
 });
 
@@ -896,6 +898,7 @@ function mergeTransactionHistory(
 		transactions.set(transaction.transactionId, transaction);
 	return {
 		...target,
+		...(transactions.size > 10_000 ? { coverageStartDate: null } : {}),
 		accountReference: target.accountReference ?? targetAccountReference ?? source.accountReference,
 		status:
 			TRANSACTION_STATUS_RANK[source.status] > TRANSACTION_STATUS_RANK[target.status]
@@ -986,7 +989,9 @@ export async function consolidateConnectedFinancialAccountsBeforeDisconnect(
 		const targetTransactionCount = target.payload.transactionHistory?.transactions.length ?? 0;
 		const mergedTransactionCount = transactionHistory?.transactions.length ?? 0;
 		const transactionStatusChanged =
-			transactionHistory?.status !== target.payload.transactionHistory?.status;
+			transactionHistory?.status !== target.payload.transactionHistory?.status ||
+			transactionHistory?.coverageStartDate !==
+				target.payload.transactionHistory?.coverageStartDate;
 		if (
 			balanceHistory.length === target.account.balanceHistory.length &&
 			mergedTransactionCount === targetTransactionCount &&
@@ -1178,6 +1183,8 @@ export async function listFinancialAccountTransactions(
 	transactions: FinancialAccountTransaction[];
 	status: TransactionHistoryStatus;
 	lastSyncedAt: string | null;
+	coverageStartDate?: string | null;
+	historySyncedAt?: string | null;
 }> {
 	if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10_000) {
 		throw new AppError('INVALID_REQUEST', 'The request is invalid.', 400);
@@ -1194,6 +1201,8 @@ export function financialAccountTransactionsFromRow(
 	transactions: FinancialAccountTransaction[];
 	status: TransactionHistoryStatus;
 	lastSyncedAt: string | null;
+	coverageStartDate?: string | null;
+	historySyncedAt?: string | null;
 } {
 	if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10_000) {
 		throw new AppError('INVALID_REQUEST', 'The request is invalid.', 400);
@@ -1238,9 +1247,23 @@ export function financialAccountTransactionsFromRow(
 		}))
 		.sort(
 			(left, right) => right.date.localeCompare(left.date) || left.name.localeCompare(right.name)
-		)
-		.slice(0, limit);
-	return { transactions, status: history.status, lastSyncedAt: row.last_synced_at };
+		);
+	let coverageStartDate = history.coverageStartDate ?? null;
+	const firstOmittedDate = transactions[limit]?.date;
+	if (coverageStartDate && firstOmittedDate && firstOmittedDate >= coverageStartDate) {
+		// Rows are sorted newest first. The day of the first omitted row may be only partially shown.
+		const nextDay = new Date(firstOmittedDate + 'T00:00:00Z');
+		nextDay.setUTCDate(nextDay.getUTCDate() + 1);
+		coverageStartDate = nextDay.toISOString().slice(0, 10);
+	}
+	return {
+		transactions: transactions.slice(0, limit),
+		status: history.status,
+		lastSyncedAt: row.last_synced_at,
+		...(payload.accountType === 'brokerage'
+			? { coverageStartDate, historySyncedAt: history.historySyncedAt ?? null }
+			: {})
+	};
 }
 
 export async function listBonuses(): Promise<AccountBonus[]> {

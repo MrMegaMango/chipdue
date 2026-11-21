@@ -327,6 +327,97 @@ describe.sequential('automatic bonus tracking from encrypted stored history', ()
 		expect(await getBonus(bonus.id)).toEqual(bonus);
 	});
 
+	it('tracks net new brokerage funding from full synced activity across updates', async () => {
+		const connectionId = await savePlaidItem('synthetic-broker', 'synthetic-token', 'E*TRADE');
+		const brokerage: ConnectedFinancialAccountSnapshot = {
+			accountId: 'synthetic-brokerage',
+			nickname: 'Individual Brokerage',
+			institution: 'E*TRADE',
+			institutionLogoBase64: null,
+			accountType: 'brokerage',
+			last4: null,
+			currency: 'USD',
+			currentBalanceCents: 5_000_000,
+			costBasisCents: null,
+			holdings: []
+		};
+		async function sync(transactions: StoredFinancialTransaction[], start: string | null) {
+			await replaceConnectedFinancialAccounts(
+				'plaid',
+				connectionId,
+				[
+					{
+						...brokerage,
+						transactionHistory: {
+							enabled: true,
+							cursor: null,
+							status: 'historical_complete',
+							historySyncedAt: NOW,
+							coverageStartDate: start,
+							transactions
+						}
+					}
+				],
+				NOW
+			);
+		}
+		await sync([], null);
+		const [account] = await listFinancialAccounts();
+		const bonus = await createBonus(
+			createBonusSchema.parse({
+				accountId: account.id,
+				offerTemplateId: 'etrade-targeted-existing-brokerage-2026-08-19',
+				offerDateOverrideConfirmed: true,
+				name: 'Synthetic brokerage offer',
+				rewardCents: 25_000,
+				openedDate: '2026-09-01',
+				status: 'active'
+			})
+		);
+		const read = async () => (await listAutomaticBonusTracking())[bonus.id];
+		expect((await read()).funding).toBeNull();
+		await sync([], '2026-08-01');
+		expect((await read()).funding?.netCents).toBe(0);
+
+		const transfer = (id: string, date: string, amountCents: number): StoredFinancialTransaction =>
+			payout({
+				transactionId: id,
+				date,
+				amountCents,
+				name: amountCents < 0 ? 'ACH DEPOSIT REFID:123' : 'ACH WITHDRAWL REFID:456',
+				categoryPrimary: 'INVESTMENT',
+				categoryDetailed: 'cash: transfer',
+				investmentDetails: {
+					type: 'cash',
+					subtype: 'transfer',
+					securityName: null,
+					tickerSymbol: null,
+					quantity: 0,
+					priceMicros: 0,
+					feesCents: null
+				}
+			});
+		const rows = [
+			transfer('earlier', '2026-08-31', -1_500_000),
+			transfer('in', '2026-09-01', -1_000_000),
+			transfer('out', '2026-09-02', 100_000),
+			...Array.from({ length: 501 }, (_, i) => ordinaryExpense(i))
+		];
+		await sync(rows, '2026-08-01');
+		const result = await read();
+		expect(result.funding).toEqual({
+			netCents: 900_000,
+			depositsCents: 1_000_000,
+			withdrawalsCents: 100_000,
+			reviewCount: 0
+		});
+		expect(result.fundingSyncedAt).toBe(NOW);
+		expect(JSON.stringify(result)).not.toContain('ACH DEPOSIT');
+		expect(await getBonus(bonus.id)).toEqual(bonus);
+		await sync(rows, '2026-09-02');
+		expect((await read()).funding).toBeNull();
+	});
+
 	it('uses the next stored sync automatically while leaving the saved bonus untouched', async () => {
 		const { accountId, sync } = await connectedBusiness('resync', [payout({ pending: true })]);
 		const bonus = await wellsBonus(accountId);

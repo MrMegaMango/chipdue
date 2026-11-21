@@ -15,6 +15,7 @@ import {
 	type BonusChurnTracker
 } from './bonus-churn';
 import { getBonusOfferTemplate, resolveBonusOffer, type BonusOfferTemplate } from './bonus-offers';
+import type { EtradeFunding } from './etrade-funding';
 
 export type BonusChurnActivity = {
 	account: FinancialAccount | null;
@@ -27,6 +28,8 @@ export type BonusChurnActivity = {
 
 export type BonusChurnAutomationResult = {
 	bonusId: string;
+	funding?: EtradeFunding | null;
+	fundingSyncedAt?: string | null;
 	tracker: BonusChurnTracker;
 	effectiveRule: BonusChurn | null;
 	ruleSource: 'automatic' | 'saved' | 'unmatched';
