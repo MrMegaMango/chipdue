@@ -15,7 +15,7 @@ const TRANSFER = /\b(?:DEPOSIT|WITHDRAWAL|WITHDRAWL|TRANSFER|CONTRIBUTION)\b/;
 const AFFILIATED = /\b(?:E ?TRADE|MORGAN STANLEY|MSPBNA)\b/;
 const INTERNAL = /\b(?:INTERNAL|JOURNAL(?:ED)?|BETWEEN (?:MY |YOUR )?ACCOUNTS)\b/;
 const NON_FUNDING =
-	/\b(?:SWEEP|DIVIDEND|INTEREST|PROMO(?:TION(?:AL)?)?|BONUS|REWARD|REINVESTMENT|CAPITAL GAIN|FEE|MICRODEPOSIT|ACCTVERIFY)\b/;
+	/\b(?:SWEEP|DIVIDENDS?|INTEREST|PROMO(?:TION(?:AL)?)?|BONUS|REWARDS?|REINVESTMENT|CAPITAL GAINS?|FEES?|MICRODEPOSITS?|ACCTVERIFY)\b/;
 const UNPOSTED = /\b(?:REQUEST(?:ED)?|SCHEDULED|PENDING|FAILED|REJECTED|CANCELLED|CANCELED)\b/;
 
 function fundingMovement(transaction: FinancialAccountTransaction): 'count' | 'review' | null {
@@ -46,8 +46,8 @@ function fundingMovement(transaction: FinancialAccountTransaction): 'count' | 'r
 	}
 	const namedTransfer = TRANSFER.test(name);
 	if (!externalRail && !namedTransfer) {
+		if (type === 'transfer') return 'review';
 		// A cash credit labeled only with its security is commonly an ETF distribution.
-		if (type === 'transfer' && subtype === 'transfer') return 'review';
 		if (details?.tickerSymbol || details?.securityName || !FUNDING_SUBTYPE.test(subtype ?? ''))
 			return null;
 	}
